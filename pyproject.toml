@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "GradingWebUI"
+version = "0.0.1"
+description = "A Website for grading paper-based exams"
+# readme = "README.md"
+requires-python = ">=3.12"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Sam Ogden", email = "samuel.s.ogden@gmail.com"},
+]
+keywords = ["education", "quiz", "canvas", "lms", "assessment", "teaching", "exam", "testing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "Topic :: Education :: Testing",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "python-dotenv==1.0.1",
+    "PyYAML==6.0.1",
+    "requests==2.32.2",
+    "pandas",
+    "fuzzywuzzy",
+    "python-Levenshtein>=0.21.0",
+    "pymupdf",
+    "scikit-learn",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-multipart>=0.0.6",
+    "pillow>=10.0.0",
+    "pyzbar>=0.1.9",
+    "opencv-python>=4.8.0",
+    "openai",
+    "anthropic",
+    "ollama>=0.6.0",
+    "QuizGenerator>=0.4.2",
+    "bcrypt>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.3",
+    "httpx>=0.25.2",
+]
+
+[project.urls]
+# Homepage = "https://github.com/OtterDen-Lab/Autograder"
+# Documentation = "https://github.com/OtterDen-Lab/Autograder/tree/main/documentation"
+# Repository = "https://github.com/OtterDen-Lab/Autograder"
+# "Bug Tracker" = "https://github.com/OtterDen-Lab/Autograder/issues"
+
+[project.scripts]
+# grade-assignments = "Autograder.grade_assignments:main"
+
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grading_web_ui"]
+
+[tool.hatch.metadata]
+allow-direct-references = true

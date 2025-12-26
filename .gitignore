@@ -1,0 +1,15 @@
+__pycache__/
+exam.pdf
+out/
+.idea/
+.DS_Store
+*.zip
+.env
+docker/**/.env
+output.csv
+imgs/
+debug.tex
+.claude
+*.log
+records/
+dist/
