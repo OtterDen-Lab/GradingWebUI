@@ -433,7 +433,7 @@ See [docs/architecture.md](docs/architecture.md) for detailed technical document
 
 - Check port 8765 is not in use: `lsof -i :8765`
 - Verify Python version: `python --version` (3.8+)
-- Check dependencies: `pip install -r requirements.txt`
+- Check dependencies: `pip install -e .`
 
 ### Database errors
 

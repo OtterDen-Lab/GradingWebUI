@@ -51,10 +51,10 @@ dev = [
 ]
 
 [project.urls]
-# Homepage = "https://github.com/OtterDen-Lab/Autograder"
-# Documentation = "https://github.com/OtterDen-Lab/Autograder/tree/main/documentation"
-# Repository = "https://github.com/OtterDen-Lab/Autograder"
-# "Bug Tracker" = "https://github.com/OtterDen-Lab/Autograder/issues"
+Homepage = "https://github.com/OtterDen-Lab/GradingWebUI"
+Documentation = "https://github.com/OtterDen-Lab/GradingWebUI/tree/main/documentation"
+Repository = "https://github.com/OtterDen-Lab/GradingWebUI"
+"Bug Tracker" = "https://github.com/OtterDen-Lab/GradingWebUI/issues"
 
 [project.scripts]
 # grade-assignments = "Autograder.grade_assignments:main"

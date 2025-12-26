@@ -1,5 +1,7 @@
 # Web Grading Interface - Deployment Roadmap
 
+**Status Note:** This roadmap reflects early planning and is likely outdated. Use as historical context only.
+
 **Document Version:** 1.0
 **Last Updated:** 2025-10-14
 **Status:** Planning Phase

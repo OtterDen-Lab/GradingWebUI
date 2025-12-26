@@ -80,4 +80,4 @@ This project is licensed under the GPL-3.0-or-later license. See the LICENSE fil
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or pull request on [GitHub](https://github.com/OtterDen-Lab/Autograder).
+Contributions are welcome! Please open an issue or pull request on [GitHub](https://github.com/OtterDen-Lab/GradingWebUI).
