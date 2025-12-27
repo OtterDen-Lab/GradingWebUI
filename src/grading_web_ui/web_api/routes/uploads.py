@@ -24,7 +24,7 @@ from ..domain.problem import Problem
 
 import logging
 import asyncio
-from ..services.exam_processor import ExamProcessor
+from ..services.exam_processor import ExamProcessor, PRESCAN_DPI_STEPS
 from ..services.qr_scanner import QRScanner
 from grading_web_ui.lms_interface.canvas_interface import CanvasInterface
 from ..repositories import SessionRepository, SubmissionRepository, ProblemMetadataRepository, ProblemRepository
@@ -1106,12 +1106,63 @@ async def process_exam_splits(
       session_repo.update_status(session_id, SessionStatus.READY, "No new exams to split")
       return
 
+    def estimate_regions_per_exam(sample_path: Path) -> int:
+      try:
+        import fitz
+        doc = fitz.open(str(sample_path))
+        total_pages = doc.page_count
+        doc.close()
+      except Exception:
+        return 1
+
+      linear_splits = []
+      for page_num in range(total_pages):
+        page_height = 1.0
+        if manual_split_points and page_num in manual_split_points:
+          for pct in manual_split_points.get(page_num, []):
+            y_pos = pct * page_height
+            if abs(y_pos - page_height) < 0.001 and page_num < total_pages - 1:
+              linear_splits.append((page_num + 1, 0.0))
+            else:
+              linear_splits.append((page_num, y_pos))
+
+      linear_splits.sort(key=lambda x: (x[0], x[1]))
+      unique_splits = []
+      for split in linear_splits:
+        if not unique_splits or split != unique_splits[-1]:
+          unique_splits.append(split)
+      linear_splits = unique_splits
+
+      if not linear_splits:
+        linear_splits = [(0, 0.0), (total_pages - 1, 1.0)]
+
+      if linear_splits[0] != (0, 0.0):
+        linear_splits.insert(0, (0, 0.0))
+      if linear_splits[-1] != (total_pages - 1, 1.0):
+        linear_splits.append((total_pages - 1, 1.0))
+
+      if last_page_blank and total_pages > 0:
+        last_page_num = total_pages - 1
+        linear_splits = [(page, y) for page, y in linear_splits
+                         if page < last_page_num]
+        if total_pages > 1 and linear_splits:
+          expected_end = (last_page_num - 1, 1.0)
+          if linear_splits[-1] != expected_end:
+            linear_splits.append(expected_end)
+
+      regions = max(0, len(linear_splits) - 1)
+      if skip_first_region and regions > 0:
+        regions -= 1
+
+      return max(1, regions)
+
     base_total = session.total_exams
     base_processed = session.processed_exams
     base_matched = session.matched_exams
 
     main_loop = asyncio.get_event_loop()
-    total_steps = len(file_paths_to_process) * 5
+    regions_per_exam = estimate_regions_per_exam(file_paths_to_process[0])
+    total_steps = len(file_paths_to_process) * (1 + regions_per_exam * len(PRESCAN_DPI_STEPS))
     current_step = {"count": 0}
 
     def update_progress(processed, matched, message):

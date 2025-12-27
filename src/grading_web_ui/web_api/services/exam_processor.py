@@ -29,6 +29,7 @@ from .qr_scanner import QRScanner
 from ..dtos import SubmissionDTO, ProblemDTO
 
 log = logging.getLogger(__name__)
+PRESCAN_DPI_STEPS = [150, 300, 600]
 
 NAME_SIMILARITY_THRESHOLD = 97  # Percentage threshold for fuzzy matching (exact match required)
 
@@ -172,11 +173,20 @@ class ExamProcessor:
         suggested_match, match_confidence = self._find_suggested_match(approximate_name, unmatched_students)
       
       # Extract problems from PDF
+      def report_prescan(message: str) -> None:
+        self._report_progress(
+          progress_callback,
+          index,
+          len(matched_submissions),
+          f"Exam {index + 1}/{len(input_files)}: {message}"
+        )
+
       pdf_data, problems = self.redact_and_extract_regions(
         pdf_path,
         consensus_break_points,
         skip_first_region,
-        last_page_blank
+        last_page_blank,
+        message_callback=report_prescan
       )
       
       # Build submission dict
@@ -603,7 +613,8 @@ class ExamProcessor:
       pdf_path: Path,
       split_points: Dict[int, List[int]],
       skip_first_region: bool = True,
-      last_page_blank: bool = False) -> Tuple[str, List[ProblemDTO]]:
+      last_page_blank: bool = False,
+      message_callback: Optional[callable] = None) -> Tuple[str, List[ProblemDTO]]:
     """
         Redact names and extract problem regions using manual split points.
         Returns PDF data once and region metadata for each problem.
@@ -748,6 +759,7 @@ class ExamProcessor:
         f"Pre-scanning {len(linear_splits) - 1 - start_index} problem regions for QR codes from unredacted PDF..."
       )
       problem_number_prescan = 1
+      total_prescan = len(linear_splits) - 1 - start_index
 
       for i in range(start_index, len(linear_splits) - 1):
         start_page, start_y = linear_splits[i]
@@ -762,7 +774,14 @@ class ExamProcessor:
         # Use progressive DPI: start low (fast), increase only if needed
         # Since PDF is vector, higher DPI doesn't lose quality, just takes more time
         qr_data = None
-        for dpi in [150, 300, 600, 900]:
+        for dpi in PRESCAN_DPI_STEPS:
+          log.info(
+            f"Pre-scan problem {problem_number_prescan}/{total_prescan} at {dpi} DPI"
+          )
+          if message_callback:
+            message_callback(
+              f"Pre-scan problem {problem_number_prescan}/{total_prescan} at {dpi} DPI"
+            )
           problem_image_base64, _ = self._extract_cross_page_region(
             pdf_document_original,
             start_page,
@@ -777,6 +796,10 @@ class ExamProcessor:
             if dpi > 150:
               log.info(
                 f"QR code found at {dpi} DPI (after trying lower resolutions)")
+            elif message_callback:
+              message_callback(
+                f"QR code found at {dpi} DPI for problem {problem_number_prescan}/{total_prescan}"
+              )
             break  # Found it, no need to try higher DPI
         if qr_data:
           log.info(f"Pre-scan: Problem {problem_number_prescan}: "

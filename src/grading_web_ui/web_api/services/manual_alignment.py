@@ -74,6 +74,23 @@ class ManualAlignmentService:
         progress_callback(page_num + 1, max_pages,
                           f"Creating composites ({page_num + 1}/{max_pages})")
 
+      anchor_question = None
+      if qr_positions_by_file:
+        common_questions = None
+        for pdf_path in input_files:
+          page_positions = qr_positions_by_file.get(pdf_path, {}).get(
+            page_num, [])
+          questions = {pos.get("question_number") for pos in page_positions
+                       if pos.get("question_number") is not None}
+          if not questions:
+            continue
+          if common_questions is None:
+            common_questions = questions
+          else:
+            common_questions = common_questions & questions
+        if common_questions:
+          anchor_question = min(common_questions)
+
       page_entries = []
 
       # Collect all images for this page number
@@ -95,55 +112,109 @@ class ManualAlignmentService:
             if img.mode != 'RGB':
               img = img.convert('RGB')
 
-            original_size = img.size
-
-            # Resize to target dimensions if different
+            # Resize to target dimensions first (keeps scale consistent)
             if target_dimensions and img.size != target_dimensions:
               log.debug(
                 f"Resizing {pdf_path.name} page {page_num} from {img.size} to {target_dimensions}"
               )
               img = img.resize(target_dimensions, Image.Resampling.LANCZOS)
 
-            anchor = None
+            original_size = img.size
+            rotated_size = original_size
+            rotate_angle = 0.0
+            page_positions = []
+
             if qr_positions_by_file:
               page_positions = qr_positions_by_file.get(pdf_path, {}).get(
                 page_num, [])
-              if page_positions:
-                width_scale = 1.0
-                height_scale = 1.0
-                if target_dimensions and original_size[0] and original_size[1]:
-                  width_scale = target_dimensions[0] / original_size[0]
-                  height_scale = target_dimensions[1] / original_size[1]
 
-                anchor_pos = None
-                candidates = [pos for pos in page_positions
-                              if pos.get("question_number") is not None]
-                if candidates:
-                  anchor_pos = max(
-                    candidates,
-                    key=lambda pos: pos.get("question_number", 0)
-                  )
-                else:
-                  anchor_pos = max(page_positions, key=lambda pos: (
-                    pos.get("y", 0), pos.get("x", 0)
-                  ))
+            if anchor_question is not None and page_positions:
+              angles = [pos.get("angle", 0.0) for pos in page_positions]
+              angles = [angle for angle in angles if angle is not None]
+              if angles:
+                angles_sorted = sorted(angles)
+                page_angle = angles_sorted[len(angles_sorted) // 2]
+                if abs(page_angle) >= 1.0:
+                  rotate_angle = page_angle
 
+            if rotate_angle:
+              img = img.rotate(rotate_angle, expand=True, fillcolor='white')
+              rotated_size = img.size
+
+            anchor = None
+            anchor_size = None
+            if rotate_angle and anchor_question is not None and page_positions:
+              try:
+                from .qr_scanner import QRScanner
+                qr_scanner = QRScanner()
+                if qr_scanner.available:
+                  scan_result = qr_scanner._scan_image_step_up(img)
+                  if scan_result and scan_result["qr_codes"]:
+                    qr_codes = scan_result["qr_codes"]
+                    candidates = [
+                      code for code in qr_codes
+                      if code.get("question_number") == anchor_question
+                    ]
+                    if candidates:
+                      anchor_code = candidates[0]
+                    else:
+                      anchor_code = None
+
+                    if anchor_code:
+                      rect = anchor_code["rect"]
+                      scale = scan_result["scale_to_base"]
+                      anchor = (
+                        (rect.top + rect.height) * scale,
+                        (rect.left + rect.width) * scale
+                      )
+                      anchor_size = max(rect.height, rect.width) * scale
+              except Exception as exc:
+                log.debug("QR rescan after rotation failed: %s", exc)
+
+            if anchor is None and anchor_question is not None and page_positions:
+              width_scale = 1.0
+              height_scale = 1.0
+              anchor_pos = None
+              candidates = [pos for pos in page_positions
+                            if pos.get("question_number") == anchor_question]
+              if candidates:
+                anchor_pos = candidates[0]
+
+              if anchor_pos:
                 x_pos = anchor_pos.get("x")
                 y_pos = anchor_pos.get("y")
                 width_pos = anchor_pos.get("width")
                 height_pos = anchor_pos.get("height")
                 if x_pos is not None and y_pos is not None:
                   if width_pos is not None and height_pos is not None:
-                    y_anchor = (y_pos + height_pos) * height_scale
-                    x_anchor = (x_pos + width_pos) * width_scale
+                    base_x = x_pos + width_pos
+                    base_y = y_pos + height_pos
                   else:
-                    y_anchor = y_pos * height_scale
-                    x_anchor = x_pos * width_scale
+                    base_x = x_pos
+                    base_y = y_pos
+
+                  if rotate_angle:
+                    cx, cy = original_size[0] / 2.0, original_size[1] / 2.0
+                    theta = math.radians(rotate_angle)
+                    dx = base_x - cx
+                    dy = base_y - cy
+                    rotated_x = (dx * math.cos(theta) - dy * math.sin(theta)) + cx
+                    rotated_y = (dx * math.sin(theta) + dy * math.cos(theta)) + cy
+                    cx2, cy2 = rotated_size[0] / 2.0, rotated_size[1] / 2.0
+                    base_x = rotated_x + (cx2 - cx)
+                    base_y = rotated_y + (cy2 - cy)
+
+                  x_anchor = base_x * width_scale
+                  y_anchor = base_y * height_scale
                   anchor = (y_anchor, x_anchor)
+                  if width_pos is not None and height_pos is not None:
+                    anchor_size = max(width_pos, height_pos) * max(width_scale,
+                                                                  height_scale)
 
             page_entries.append({
               "image": img,
-              "anchor": anchor
+              "anchor": anchor,
+              "anchor_size": anchor_size
             })
 
           doc.close()
@@ -155,6 +226,25 @@ class ManualAlignmentService:
       if not page_entries:
         log.warning(f"No images found for page {page_num}")
         continue
+
+      max_width = max(entry["image"].size[0] for entry in page_entries)
+      max_height = max(entry["image"].size[1] for entry in page_entries)
+
+      for entry in page_entries:
+        img = entry["image"]
+        width, height = img.size
+        if width == max_width and height == max_height:
+          continue
+        pad_left = (max_width - width) // 2
+        pad_top = (max_height - height) // 2
+        padded = Image.new('RGB', (max_width, max_height), color='white')
+        padded.paste(img, (pad_left, pad_top))
+        entry["image"] = padded
+        if entry["anchor"]:
+          entry["anchor"] = (
+            entry["anchor"][0] + pad_top,
+            entry["anchor"][1] + pad_left
+          )
 
       base_width, base_height = page_entries[0]["image"].size
       offsets = []
@@ -171,20 +261,34 @@ class ManualAlignmentService:
             dx = 0
           shifts.append((dx, dy))
 
-        min_dx = min(dx for dx, _ in shifts)
-        min_dy = min(dy for _, dy in shifts)
-        max_dx = max(dx for dx, _ in shifts)
-        max_dy = max(dy for _, dy in shifts)
+        anchor_sizes = [entry["anchor_size"] for entry in page_entries
+                        if entry["anchor_size"]]
+        cap = max(anchor_sizes) if anchor_sizes else None
+        if cap is not None:
+          too_large = any(
+            abs(dx) > cap or abs(dy) > cap for dx, dy in shifts)
+          if too_large:
+            log.info(
+              f"Skipping alignment on page {page_num + 1}: shift exceeds cap"
+            )
+            offsets = [(0, 0) for _ in page_entries]
+            output_size = (base_width, base_height)
+            shifts = None
+        if shifts is not None:
+          min_dx = min(dx for dx, _ in shifts)
+          min_dy = min(dy for _, dy in shifts)
+          max_dx = max(dx for dx, _ in shifts)
+          max_dy = max(dy for _, dy in shifts)
 
-        output_width = int(math.ceil(base_width + (max_dx - min_dx)))
-        output_height = int(math.ceil(base_height + (max_dy - min_dy)))
-        output_size = (max(output_width, base_width),
-                       max(output_height, base_height))
+          output_width = int(math.ceil(base_width + (max_dx - min_dx)))
+          output_height = int(math.ceil(base_height + (max_dy - min_dy)))
+          output_size = (max(output_width, base_width),
+                         max(output_height, base_height))
 
-        offsets = [
-          (int(math.floor(dx - min_dx)), int(math.floor(dy - min_dy)))
-          for dx, dy in shifts
-        ]
+          offsets = [
+            (int(math.floor(dx - min_dx)), int(math.floor(dy - min_dy)))
+            for dx, dy in shifts
+          ]
       else:
         output_size = (base_width, base_height)
         offsets = [(0, 0) for _ in page_entries]

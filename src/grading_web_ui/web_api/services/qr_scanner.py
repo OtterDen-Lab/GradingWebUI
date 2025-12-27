@@ -9,6 +9,7 @@ This service scans QR codes from exam problem images and extracts:
 import base64
 import json
 import logging
+import math
 from typing import Optional, Dict, List
 from pathlib import Path
 from PIL import Image
@@ -43,6 +44,17 @@ class QRScanner:
     if not qr_codes:
       return []
 
+    def estimate_angle(polygon_points) -> float:
+      if not polygon_points or len(polygon_points) < 2:
+        return 0.0
+      points = [(getattr(p, "x", p[0]), getattr(p, "y", p[1]))
+                for p in polygon_points]
+      points_sorted = sorted(points, key=lambda pt: (pt[1], pt[0]))
+      p1, p2 = points_sorted[0], points_sorted[1]
+      if p2[0] < p1[0]:
+        p1, p2 = p2, p1
+      return math.degrees(math.atan2(p2[1] - p1[1], p2[0] - p1[0]))
+
     results = []
     for qr in qr_codes:
       try:
@@ -57,11 +69,13 @@ class QRScanner:
         continue
 
       rect = qr.rect
+      angle = estimate_angle(qr.polygon) if hasattr(qr, "polygon") else 0.0
       results.append({
         "question_number": int(question_number),
         "max_points": float(max_points),
         "encrypted_data": qr_json.get('s'),
-        "rect": rect
+        "rect": rect,
+        "angle": angle
       })
 
     return results
@@ -79,7 +93,7 @@ class QRScanner:
           - qr_codes (list of decoded QR dicts with rects)
     """
     if dpi_steps is None:
-      dpi_steps = [150, 300, 600, 900]
+      dpi_steps = [150, 300, 600]
 
     for dpi in dpi_steps:
       scaled = image
@@ -312,7 +326,7 @@ class QRScanner:
     results: Dict[int, List[Dict]] = {}
 
     if dpi_steps is None:
-      dpi_steps = [150, 300, 600, 900]
+      dpi_steps = [150, 300, 600]
 
     try:
       pdf_document = fitz.open(str(pdf_path))
@@ -363,7 +377,8 @@ class QRScanner:
             "x": rect.left * scale,
             "y": rect.top * scale,
             "width": rect.width * scale,
-            "height": rect.height * scale
+            "height": rect.height * scale,
+            "angle": qr_code.get("angle", 0.0)
           })
 
         if page_results:
