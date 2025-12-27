@@ -428,8 +428,16 @@ async def prepare_alignment(
           index - 1,
           total_files
         )
+        def page_progress(page_index: int, page_total: int, message: str) -> None:
+          send_progress(
+            f"Scanning QR codes ({index}/{total_files}) page {page_index}/{page_total}: {pdf_path.name}",
+            (index - 1) * page_total + page_index,
+            total_files * page_total
+          )
+
         qr_positions[pdf_path] = qr_scanner.scan_qr_positions_from_pdf(
-          pdf_path
+          pdf_path,
+          progress_callback=page_progress
         )
         send_progress(
           f"Scanning QR positions ({index}/{total_files}): {pdf_path.name}",

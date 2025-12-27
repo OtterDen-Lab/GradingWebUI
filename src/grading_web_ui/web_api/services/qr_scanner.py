@@ -279,7 +279,9 @@ class QRScanner:
       return None
 
   def scan_qr_positions_from_pdf(self, pdf_path: Path,
-                                 dpi_steps: Optional[List[int]] = None) -> Dict[int, List[Dict]]:
+                                 dpi_steps: Optional[List[int]] = None,
+                                 progress_callback: Optional[callable] = None
+                                 ) -> Dict[int, List[Dict]]:
     """
         Scan QR codes from each page in a PDF and return their positions.
 
@@ -314,7 +316,8 @@ class QRScanner:
 
     try:
       pdf_document = fitz.open(str(pdf_path))
-      for page_number in range(pdf_document.page_count):
+      total_pages = pdf_document.page_count
+      for page_number in range(total_pages):
         page = pdf_document[page_number]
         pix = page.get_pixmap(dpi=150)
         img_bytes = pix.tobytes("png")
@@ -326,8 +329,14 @@ class QRScanner:
           "QR scan start: %s page %s/%s",
           pdf_path.name,
           page_number + 1,
-          pdf_document.page_count
+          total_pages
         )
+        if progress_callback:
+          progress_callback(
+            page_number + 1,
+            total_pages,
+            f"Scanning QR codes ({page_number + 1}/{total_pages}) in {pdf_path.name}"
+          )
 
         scan_result = self._scan_image_step_up(
           image,
@@ -340,7 +349,7 @@ class QRScanner:
             "QR scan: %s page %s/%s no codes found",
             pdf_path.name,
             page_number + 1,
-            pdf_document.page_count
+            total_pages
           )
           continue
 
@@ -362,7 +371,7 @@ class QRScanner:
             "QR scan: %s page %s/%s found %s code(s)",
             pdf_path.name,
             page_number + 1,
-            pdf_document.page_count,
+            total_pages,
             len(page_results)
           )
           results[page_number] = page_results
