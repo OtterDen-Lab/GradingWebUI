@@ -392,25 +392,60 @@ async def prepare_alignment(
 
   qr_positions_by_file = None
   qr_scanner = QRScanner()
-  if qr_scanner.available:
-    qr_positions_by_file = {}
-    total_files = len(file_paths)
-    for index, pdf_path in enumerate(file_paths, start=1):
-      log.info(
-        "Scanning QR positions (%s/%s): %s",
-        index,
-        total_files,
-        pdf_path.name
-      )
-      qr_positions_by_file[pdf_path] = qr_scanner.scan_qr_positions_from_pdf(
-        pdf_path
-      )
+  stream_id = sse.make_stream_id("upload", session_id)
+  if not sse.get_stream(stream_id):
+    sse.create_stream(stream_id)
+  main_loop = asyncio.get_event_loop()
 
-  alignment_service = ManualAlignmentService()
-  composites, dimensions = alignment_service.create_composite_images(
-    file_paths,
-    qr_positions_by_file=qr_positions_by_file
-  )
+  def send_progress(message: str, processed: int, total: int) -> None:
+    asyncio.run_coroutine_threadsafe(
+      sse.send_event(stream_id, "progress", {
+        "total": total,
+        "processed": processed,
+        "matched": 0,
+        "progress": int((processed / total) * 100) if total else 0,
+        "current_step": processed,
+        "total_steps": total,
+        "message": message
+      }),
+      main_loop
+    )
+
+  def build_alignment_assets():
+    qr_positions = None
+    if qr_scanner.available:
+      qr_positions = {}
+      total_files = len(file_paths)
+      for index, pdf_path in enumerate(file_paths, start=1):
+        log.info(
+          "Scanning QR positions (%s/%s): %s",
+          index,
+          total_files,
+          pdf_path.name
+        )
+        send_progress(
+          f"Scanning QR positions ({index}/{total_files}): {pdf_path.name}",
+          index - 1,
+          total_files
+        )
+        qr_positions[pdf_path] = qr_scanner.scan_qr_positions_from_pdf(
+          pdf_path
+        )
+        send_progress(
+          f"Scanning QR positions ({index}/{total_files}): {pdf_path.name}",
+          index,
+          total_files
+        )
+    else:
+      send_progress("Preparing alignment images...", 0, 1)
+
+    alignment_service = ManualAlignmentService()
+    return alignment_service.create_composite_images(
+      file_paths,
+      qr_positions_by_file=qr_positions
+    )
+
+  composites, dimensions = await asyncio.to_thread(build_alignment_assets)
 
   composite_dimensions = {
     str(page_num): [dims[0], dims[1]]

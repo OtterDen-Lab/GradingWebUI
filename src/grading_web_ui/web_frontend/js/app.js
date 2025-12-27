@@ -1135,6 +1135,9 @@ async function prepareAlignment() {
     if (!currentSession) return;
 
     try {
+        listenForStatusUpdates();
+        document.getElementById('upload-status').textContent = 'Preparing alignment...';
+
         navigateToSection('upload-section');
         const response = await fetch(`${API_BASE}/uploads/${currentSession.id}/prepare-alignment`, {
             method: 'POST'
@@ -1143,6 +1146,11 @@ async function prepareAlignment() {
 
         if (!response.ok) {
             throw new Error(result.detail || 'Failed to prepare alignment');
+        }
+
+        if (uploadEventSource) {
+            uploadEventSource.close();
+            uploadEventSource = null;
         }
 
         const sessionResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}`);
@@ -1159,6 +1167,10 @@ async function prepareAlignment() {
     } catch (error) {
         console.error('Failed to prepare alignment:', error);
         alert(`Failed to prepare alignment: ${error.message}`);
+        if (uploadEventSource) {
+            uploadEventSource.close();
+            uploadEventSource = null;
+        }
     }
 }
 
