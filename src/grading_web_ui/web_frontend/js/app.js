@@ -1588,40 +1588,85 @@ function calculateProblemCount(splitPoints, skipFirstRegion, lastPageBlank) {
     // 3. Each consecutive pair of splits defines one region
     // 4. If skip_first_region=True, skip the first pair
 
-    // Count total split points provided by user
-    let totalSplits = 0;
-    for (const pageNum in splitPoints) {
-        totalSplits += splitPoints[pageNum].length;
-    }
-
     console.log('Problem count calculation:');
-    console.log('  User splits:', totalSplits);
     console.log('  Split points by page:', splitPoints);
     console.log('  Skip first region:', skipFirstRegion);
+    console.log('  Last page blank:', lastPageBlank);
 
-    // Backend always adds start (0,0) and end splits, so:
-    // linear_splits.length = user_splits + 2 (start and end)
-    // regions = linear_splits.length - 1
-    // problems = regions - (1 if skip_first_region else 0)
-
-    let linearSplitsCount = totalSplits + 2; // Add implicit start and end
-    let regions = linearSplitsCount - 1;
-
-    console.log('  Linear splits count:', linearSplitsCount);
-    console.log('  Regions:', regions);
-
-    // Subtract first region if skipping header
-    let problems = regions;
-    if (skipFirstRegion) {
-        problems -= 1;
+    if (!compositeData || !compositeData.page_dimensions) {
+        console.warn('Missing composite dimensions; using fallback estimate.');
+        let totalSplits = 0;
+        for (const pageNum in splitPoints) {
+            totalSplits += splitPoints[pageNum].length;
+        }
+        let linearSplitsCount = totalSplits + 2;
+        let regions = linearSplitsCount - 1;
+        let problems = skipFirstRegion ? regions - 1 : regions;
+        return Math.max(1, problems);
     }
 
-    console.log('  Final problems:', problems);
+    const pageNums = Object.keys(compositeData.page_dimensions)
+        .map(n => parseInt(n, 10))
+        .sort((a, b) => a - b);
+    const lastPageNum = pageNums.length ? pageNums[pageNums.length - 1] : 0;
 
-    // Note: lastPageBlank is handled in backend after problem extraction
-    // so we don't adjust the count here
+    // Build linear splits like the backend.
+    let linearSplits = [];
+    const boundaryTolerance = 1.0;
 
-    return Math.max(1, problems); // At least 1 problem
+    for (const pageNum of pageNums) {
+        const pageHeight = compositeData.page_dimensions[pageNum].height;
+        const points = splitPoints[pageNum] || [];
+        const sorted = [...points].sort((a, b) => a - b);
+        for (const yPos of sorted) {
+            if (Math.abs(yPos - pageHeight) < boundaryTolerance && pageNum < lastPageNum) {
+                linearSplits.push([pageNum + 1, 0]);
+            } else {
+                linearSplits.push([pageNum, yPos]);
+            }
+        }
+    }
+
+    linearSplits.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+    const uniqueSplits = [];
+    for (const split of linearSplits) {
+        const last = uniqueSplits[uniqueSplits.length - 1];
+        if (!last || last[0] !== split[0] || last[1] !== split[1]) {
+            uniqueSplits.push(split);
+        }
+    }
+    linearSplits = uniqueSplits;
+
+    if (!linearSplits.length || linearSplits[0][0] !== 0 || linearSplits[0][1] !== 0) {
+        linearSplits.unshift([0, 0]);
+    }
+    const lastPageHeight = compositeData.page_dimensions[lastPageNum].height;
+    const lastSplit = [lastPageNum, lastPageHeight];
+    const tail = linearSplits[linearSplits.length - 1];
+    if (!tail || tail[0] !== lastSplit[0] || tail[1] !== lastSplit[1]) {
+        linearSplits.push(lastSplit);
+    }
+
+    if (lastPageBlank && lastPageNum > 0) {
+        linearSplits = linearSplits.filter(([page]) => page < lastPageNum);
+        const secondToLast = lastPageNum - 1;
+        const secondHeight = compositeData.page_dimensions[secondToLast].height;
+        const expectedEnd = [secondToLast, secondHeight];
+        const last = linearSplits[linearSplits.length - 1];
+        if (!last || last[0] !== expectedEnd[0] || last[1] !== expectedEnd[1]) {
+            linearSplits.push(expectedEnd);
+        }
+    }
+
+    let regions = Math.max(0, linearSplits.length - 1);
+    if (skipFirstRegion && regions > 0) {
+        regions -= 1;
+    }
+
+    console.log('  Linear splits:', linearSplits);
+    console.log('  Regions:', regions);
+
+    return Math.max(1, regions);
 }
 
 async function submitAlignment() {
