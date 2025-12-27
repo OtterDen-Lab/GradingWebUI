@@ -322,6 +322,13 @@ class QRScanner:
         if image.mode != 'RGB':
           image = image.convert('RGB')
 
+        log.debug(
+          "QR scan start: %s page %s/%s",
+          pdf_path.name,
+          page_number + 1,
+          pdf_document.page_count
+        )
+
         scan_result = self._scan_image_step_up(
           image,
           dpi_steps=dpi_steps,
@@ -329,6 +336,12 @@ class QRScanner:
         )
 
         if not scan_result:
+          log.info(
+            "QR scan: %s page %s/%s no codes found",
+            pdf_path.name,
+            page_number + 1,
+            pdf_document.page_count
+          )
           continue
 
         scale = scan_result["scale_to_base"]
@@ -345,6 +358,13 @@ class QRScanner:
           })
 
         if page_results:
+          log.debug(
+            "QR scan: %s page %s/%s found %s code(s)",
+            pdf_path.name,
+            page_number + 1,
+            pdf_document.page_count,
+            len(page_results)
+          )
           results[page_number] = page_results
     except Exception as e:
       log.error(f"Error scanning QR positions from PDF: {e}", exc_info=True)

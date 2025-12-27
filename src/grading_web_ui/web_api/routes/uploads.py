@@ -394,7 +394,14 @@ async def prepare_alignment(
   qr_scanner = QRScanner()
   if qr_scanner.available:
     qr_positions_by_file = {}
-    for pdf_path in file_paths:
+    total_files = len(file_paths)
+    for index, pdf_path in enumerate(file_paths, start=1):
+      log.info(
+        "Scanning QR positions (%s/%s): %s",
+        index,
+        total_files,
+        pdf_path.name
+      )
       qr_positions_by_file[pdf_path] = qr_scanner.scan_qr_positions_from_pdf(
         pdf_path
       )
