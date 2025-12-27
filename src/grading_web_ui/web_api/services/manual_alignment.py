@@ -1,7 +1,7 @@
 """
 Manual alignment service - creates composite images and handles user-defined split points
 """
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import math
 from pathlib import Path
 import logging
@@ -16,6 +16,242 @@ log = logging.getLogger(__name__)
 
 class ManualAlignmentService:
   """Service for manual alignment of exam split points"""
+
+  def suggest_split_points_from_composites(
+      self,
+      composites: Dict[int, str],
+      qr_positions_by_file: Optional[Dict[Path, Dict[int, List[Dict]]]] = None,
+      transforms_by_file: Optional[Dict[Path, Dict[int, Dict]]] = None
+  ) -> Dict[int, List[int]]:
+    """
+    Suggest split points by detecting horizontal lines above QR codes.
+    Returns page_number -> list of y positions (pixels).
+    """
+    if not composites:
+      return {}
+
+    suggested: Dict[int, List[int]] = {}
+    min_qr_count = 3
+
+    for page_num, image_base64 in composites.items():
+      try:
+        img_bytes = base64.b64decode(image_base64)
+        img = Image.open(io.BytesIO(img_bytes))
+        if img.mode != 'RGB':
+          img = img.convert('RGB')
+      except Exception as exc:
+        log.debug("Failed to decode composite page %s: %s", page_num + 1, exc)
+        continue
+
+      qr_candidates: Dict[Optional[int], List[Tuple[float, float, float, float]]] = {}
+      if qr_positions_by_file and transforms_by_file:
+        for pdf_path, page_positions in qr_positions_by_file.items():
+          positions = page_positions.get(page_num, [])
+          if not positions:
+            continue
+          transform = transforms_by_file.get(pdf_path, {}).get(page_num)
+          if not transform:
+            continue
+          for pos in positions:
+            x_pos = pos.get("x")
+            y_pos = pos.get("y")
+            width_pos = pos.get("width")
+            height_pos = pos.get("height")
+            if x_pos is None or y_pos is None:
+              continue
+            if width_pos is None or height_pos is None:
+              continue
+            question_number = pos.get("question_number")
+            mapped = self._map_rect_to_composite(
+              x_pos,
+              y_pos,
+              width_pos,
+              height_pos,
+              transform
+            )
+            if mapped:
+              qr_candidates.setdefault(question_number, []).append(mapped)
+      else:
+        try:
+          from .qr_scanner import QRScanner
+          qr_scanner = QRScanner()
+        except Exception:
+          qr_scanner = None
+
+        if qr_scanner and qr_scanner.available:
+          scan_result = qr_scanner._scan_image_step_up(img)
+          if scan_result and scan_result.get("qr_codes"):
+            scale = scan_result.get("scale_to_base", 1.0)
+            for code in scan_result["qr_codes"]:
+              rect = code["rect"]
+              question_number = code.get("question_number")
+              qr_candidates.setdefault(question_number, []).append(
+                (
+                  rect.top * scale,
+                  rect.left * scale,
+                  (rect.top + rect.height) * scale,
+                  (rect.left + rect.width) * scale
+                )
+              )
+
+      if not qr_candidates:
+        continue
+
+      gray = np.array(img.convert('L'))
+      height, width = gray.shape
+      max_search = int(min(height * 0.25, 300))
+      min_gap = int(max(5, height * 0.005))
+
+      for question_number, rects in qr_candidates.items():
+        if len(rects) < min_qr_count:
+          continue
+        line_candidates: List[float] = []
+        for qr_top, qr_left, qr_bottom, qr_right in rects:
+          qr_height = max(1.0, qr_bottom - qr_top)
+          qr_width = max(1.0, qr_right - qr_left)
+          x_start = max(0, int(qr_left - (2.0 * qr_width)))
+          x_end = min(width, int(qr_right + (0.2 * qr_width)))
+          y_start = int(max(0, qr_top - (2.0 * qr_height)))
+          y_end = int(max(0, qr_top - (0.15 * qr_height)))
+          line_y = self._find_horizontal_line_above(
+            gray,
+            qr_top,
+            max_search=max_search,
+            min_gap=min_gap,
+            x_start=x_start,
+            x_end=x_end,
+            y_start=y_start,
+            y_end=y_end
+          )
+          if line_y is not None:
+            line_candidates.append(line_y)
+        if not line_candidates:
+          continue
+        line_y = max(line_candidates)
+        if page_num != 0 and line_y < int(height * 0.08):
+          split_y = 0
+        else:
+          split_y = int(round(line_y))
+        suggested.setdefault(page_num, []).append(split_y)
+
+      if page_num in suggested:
+        cleaned = []
+        for y in sorted(suggested[page_num]):
+          if not cleaned or abs(y - cleaned[-1]) > 3:
+            cleaned.append(y)
+        suggested[page_num] = cleaned
+
+    return suggested
+
+  @staticmethod
+  def _map_point_to_composite(
+      x: float,
+      y: float,
+      transform: Dict
+  ) -> Optional[Tuple[float, float]]:
+    target_width = transform.get("target_width")
+    target_height = transform.get("target_height")
+    source_width = transform.get("source_width")
+    source_height = transform.get("source_height")
+    if not target_width or not target_height:
+      return None
+    if source_width and source_height:
+      x *= target_width / source_width
+      y *= target_height / source_height
+
+    rotation_deg = transform.get("rotation_deg", 0.0)
+    base_width = target_width
+    base_height = target_height
+    rotated_width = transform.get("rotated_width", base_width)
+    rotated_height = transform.get("rotated_height", base_height)
+
+    if rotation_deg:
+      cx, cy = base_width / 2.0, base_height / 2.0
+      theta = math.radians(rotation_deg)
+      dx = x - cx
+      dy = y - cy
+      x = (dx * math.cos(theta) - dy * math.sin(theta)) + cx
+      y = (dx * math.sin(theta) + dy * math.cos(theta)) + cy
+      cx2, cy2 = rotated_width / 2.0, rotated_height / 2.0
+      x += (cx2 - cx)
+      y += (cy2 - cy)
+
+    pad_left = transform.get("pad_left", 0)
+    pad_top = transform.get("pad_top", 0)
+    offset_x = transform.get("offset_x", 0)
+    offset_y = transform.get("offset_y", 0)
+    return (y + pad_top + offset_y, x + pad_left + offset_x)
+
+  @staticmethod
+  def _find_horizontal_line_above(
+      gray: np.ndarray,
+      qr_top: float,
+      max_search: int,
+      min_gap: int,
+      dark_threshold: int = 80,
+      ratio_threshold: float = 0.15,
+      x_start: Optional[int] = None,
+      x_end: Optional[int] = None,
+      y_start: Optional[int] = None,
+      y_end: Optional[int] = None
+  ) -> Optional[float]:
+    height, width = gray.shape
+    search_end = int(max(0, qr_top - min_gap))
+    search_start = int(max(0, qr_top - max_search))
+    if y_start is not None:
+      search_start = max(search_start, y_start)
+    if y_end is not None:
+      search_end = min(search_end, y_end)
+    if search_end <= search_start:
+      return None
+
+    x0 = max(0, x_start) if x_start is not None else 0
+    x1 = min(width, x_end) if x_end is not None else width
+    if x1 <= x0:
+      return None
+    band = gray[search_start:search_end, x0:x1]
+    if band.size == 0:
+      return None
+
+    row_dark_ratio = (band < dark_threshold).mean(axis=1)
+    if row_dark_ratio.size == 0:
+      return None
+    max_ratio = float(row_dark_ratio.max())
+    dynamic_threshold = max(ratio_threshold, max_ratio * 0.6)
+    for idx in range(len(row_dark_ratio) - 1, -1, -1):
+      if row_dark_ratio[idx] >= dynamic_threshold:
+        return float(search_start + idx)
+
+    return None
+
+  @staticmethod
+  def _map_rect_to_composite(
+      x: float,
+      y: float,
+      width: float,
+      height: float,
+      transform: Dict
+  ) -> Optional[Tuple[float, float, float, float]]:
+    corners = [
+      (x, y),
+      (x + width, y),
+      (x, y + height),
+      (x + width, y + height)
+    ]
+    mapped = []
+    for corner_x, corner_y in corners:
+      mapped_point = ManualAlignmentService._map_point_to_composite(
+        corner_x,
+        corner_y,
+        transform
+      )
+      if mapped_point:
+        mapped.append(mapped_point)
+    if not mapped:
+      return None
+    ys = [p[0] for p in mapped]
+    xs = [p[1] for p in mapped]
+    return min(ys), min(xs), max(ys), max(xs)
 
   def create_composite_images(
       self,
@@ -256,7 +492,11 @@ class ManualAlignmentService:
               "rotation_deg": rotate_angle,
               "pdf_path": pdf_path,
               "target_width": target_dimensions[0] if target_dimensions else img.size[0],
-              "target_height": target_dimensions[1] if target_dimensions else img.size[1]
+              "target_height": target_dimensions[1] if target_dimensions else img.size[1],
+              "source_width": pre_resize_width,
+              "source_height": pre_resize_height,
+              "rotated_width": rotated_size[0],
+              "rotated_height": rotated_size[1]
             })
 
           doc.close()
@@ -391,7 +631,11 @@ class ManualAlignmentService:
           "canvas_width": entry.get("canvas_width", base_width),
           "canvas_height": entry.get("canvas_height", base_height),
           "target_width": entry.get("target_width", base_width),
-          "target_height": entry.get("target_height", base_height)
+          "target_height": entry.get("target_height", base_height),
+          "source_width": entry.get("source_width", base_width),
+          "source_height": entry.get("source_height", base_height),
+          "rotated_width": entry.get("rotated_width", base_width),
+          "rotated_height": entry.get("rotated_height", base_height)
         }
 
       # Create composite by averaging all images

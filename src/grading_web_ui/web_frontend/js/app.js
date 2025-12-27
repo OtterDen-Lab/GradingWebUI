@@ -1250,7 +1250,7 @@ function showAlignmentInterface(composites, pageDimensions, numExams, suggestedS
                 Questions can span multiple pages. Use the checkboxes between pages to explicitly break questions at page boundaries when needed.
             </p>
             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-top: 10px;">
-                <input type="checkbox" id="break-all-boundaries-checkbox">
+                <input type="checkbox" id="break-all-boundaries-checkbox" checked>
                 <span style="color: var(--gray-800); font-weight: 500;">Break all page boundaries (questions don't span pages)</span>
             </label>
         </div>
@@ -1345,6 +1345,9 @@ function showAlignmentInterface(composites, pageDimensions, numExams, suggestedS
             }
         }
     });
+
+    // Default to breaking all page boundaries.
+    breakAllCheckbox.dispatchEvent(new Event('change'));
 }
 
 function createPageBoundaryControl(currentPageNum, nextPageNum) {

@@ -462,13 +462,19 @@ async def prepare_alignment(
         total_steps
       )
 
-    return alignment_service.create_composite_images(
+    composites, dimensions, transforms_by_file = alignment_service.create_composite_images(
       file_paths,
       qr_positions_by_file=qr_positions,
       progress_callback=composite_progress
     )
+    suggested_split_points = alignment_service.suggest_split_points_from_composites(
+      composites,
+      qr_positions_by_file=qr_positions,
+      transforms_by_file=transforms_by_file
+    )
+    return composites, dimensions, transforms_by_file, suggested_split_points
 
-  composites, dimensions, transforms_by_file = await asyncio.to_thread(build_alignment_assets)
+  composites, dimensions, transforms_by_file, suggested_split_points = await asyncio.to_thread(build_alignment_assets)
 
   composite_dimensions = {
     str(page_num): [dims[0], dims[1]]
@@ -505,6 +511,7 @@ async def prepare_alignment(
     "composites": composites,
     "page_dimensions": page_dimensions,
     "num_exams": session.total_exams,
+    "suggested_split_points": suggested_split_points,
     "auto_processed": False
   }
 
