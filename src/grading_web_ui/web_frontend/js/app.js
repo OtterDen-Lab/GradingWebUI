@@ -253,6 +253,9 @@ function openNewSessionModal() {
   document.querySelector(`input[name="session-source"][value="${defaultSource}"]`).checked = true;
   document.querySelector('input[name="name-handling"][value="ai"]').checked = true;
   applySessionSourceMode(defaultSource);
+  if (defaultSource === 'manual') {
+    maybeSuggestManualSessionName();
+  }
 
   modal.style.display = 'flex';
 }
@@ -977,10 +980,26 @@ function applySessionSourceMode(mode) {
     if (overrides) {
       overrides.open = false;
     }
+    maybeSuggestManualSessionName();
   } else {
     const useProd = document.getElementById('canvas-env-new').value === 'true';
     loadCourses(useProd);
   }
+}
+
+function maybeSuggestManualSessionName() {
+  const sessionNameInput = document.getElementById('session-name-input');
+  if (!sessionNameInput || sessionNameDirty || sessionNameInput.value.trim()) return;
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+
+  sessionNameInput.value = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 function maybeSuggestSessionName() {
