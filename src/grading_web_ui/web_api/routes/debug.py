@@ -151,6 +151,9 @@ async def get_submissions_by_ink_for_problem(session_id: int,
         end_y,
         end_page,
         end_y,
+        region_y_start_pct=region_coords.get("region_y_start_pct"),
+        region_y_end_pct=region_coords.get("region_y_end_pct"),
+        end_region_y_pct=region_coords.get("end_region_y_pct"),
         page_transforms=region_coords.get("page_transforms"),
         dpi=150)
 

@@ -36,7 +36,17 @@ handlers:
 
 loggers:
   grading_web_ui:
-    level: INFO
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+  grading_web_ui.web_api.services.manual_alignment:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+  grading_web_ui.web_api.services.problem_service:
+    level: DEBUG
     handlers: [console, file]
     propagate: false
 

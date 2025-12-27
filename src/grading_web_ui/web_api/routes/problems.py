@@ -38,6 +38,9 @@ def extract_problem_image(pdf_data: str,
                           region_y_end: int,
                           end_page_number: int = None,
                           end_region_y: int = None,
+                          region_y_start_pct: float = None,
+                          region_y_end_pct: float = None,
+                          end_region_y_pct: float = None,
                           page_transforms: dict = None) -> str:
   """
     Extract a problem image from stored PDF data using region coordinates.
@@ -64,6 +67,9 @@ def extract_problem_image(pdf_data: str,
     region_y_end=region_y_end,
     end_page_number=end_page_number,
     end_region_y=end_region_y,
+    region_y_start_pct=region_y_start_pct,
+    region_y_end_pct=region_y_end_pct,
+    end_region_y_pct=end_region_y_pct,
     page_transforms=page_transforms)
 
 
@@ -103,6 +109,9 @@ def get_problem_image_data(problem, submission_repo: SubmissionRepository = None
           region_coords["region_y_end"],
           region_coords.get("end_page_number"),  # Optional: for cross-page regions
           region_coords.get("end_region_y"),  # Optional: for cross-page regions
+          region_coords.get("region_y_start_pct"),
+          region_coords.get("region_y_end_pct"),
+          region_coords.get("end_region_y_pct"),
           region_coords.get("page_transforms")
         )
       else:

@@ -93,6 +93,11 @@ class ManualAlignmentService:
             common_questions = common_questions & questions
         if common_questions:
           anchor_question = min(common_questions)
+      log.debug(
+        "Alignment page %s: anchor_question=%s",
+        page_num + 1,
+        anchor_question
+      )
 
       page_entries = []
 
@@ -115,6 +120,7 @@ class ManualAlignmentService:
             if img.mode != 'RGB':
               img = img.convert('RGB')
 
+            pre_resize_width, pre_resize_height = img.size
             # Resize to target dimensions first (keeps scale consistent)
             if target_dimensions and img.size != target_dimensions:
               log.debug(
@@ -139,6 +145,20 @@ class ManualAlignmentService:
                 page_angle = angles_sorted[len(angles_sorted) // 2]
                 if abs(page_angle) >= 1.0:
                   rotate_angle = page_angle
+            if anchor_question is not None:
+              has_anchor = False
+              if page_positions:
+                has_anchor = any(
+                  pos.get("question_number") == anchor_question
+                  for pos in page_positions
+                )
+              log.debug(
+                "Alignment page %s pdf %s: anchor_available=%s positions=%s",
+                page_num + 1,
+                pdf_path.name,
+                has_anchor,
+                len(page_positions)
+              )
 
             if rotate_angle:
               img = img.rotate(rotate_angle, expand=True, fillcolor='white')
@@ -177,6 +197,9 @@ class ManualAlignmentService:
             if anchor is None and anchor_question is not None and page_positions:
               width_scale = 1.0
               height_scale = 1.0
+              if target_dimensions and (pre_resize_width, pre_resize_height) != target_dimensions:
+                width_scale = target_dimensions[0] / pre_resize_width
+                height_scale = target_dimensions[1] / pre_resize_height
               anchor_pos = None
               candidates = [pos for pos in page_positions
                             if pos.get("question_number") == anchor_question]
@@ -213,6 +236,18 @@ class ManualAlignmentService:
                   if width_pos is not None and height_pos is not None:
                     anchor_size = max(width_pos, height_pos) * max(width_scale,
                                                                   height_scale)
+
+            log.debug(
+              "Alignment page %s pdf %s: pre_resize=%sx%s target=%s rotate=%.2f anchor=%s anchor_size=%s",
+              page_num + 1,
+              pdf_path.name,
+              pre_resize_width,
+              pre_resize_height,
+              target_dimensions,
+              rotate_angle,
+              anchor,
+              anchor_size
+            )
 
             page_entries.append({
               "image": img,
@@ -263,6 +298,7 @@ class ManualAlignmentService:
 
       base_width, base_height = page_entries[0]["image"].size
       offsets = []
+      ref_anchor = None
       if any(entry["anchor"] for entry in page_entries):
         anchors = [entry["anchor"] for entry in page_entries if entry["anchor"]]
         ref_anchor = max(anchors)
@@ -313,9 +349,38 @@ class ManualAlignmentService:
         entry["offset_y"] = offset[1]
         entry["canvas_width"] = output_size[0]
         entry["canvas_height"] = output_size[1]
+        anchor_aligned = None
+        if entry.get("anchor"):
+          anchor_aligned = (
+            entry["anchor"][0] + entry["offset_y"],
+            entry["anchor"][1] + entry["offset_x"]
+          )
+
+        log.debug(
+          "Alignment page %s pdf %s: pad_left=%s pad_top=%s offset=(%s,%s) canvas=%sx%s anchor_padded=%s anchor_aligned=%s ref_anchor=%s",
+          page_num + 1,
+          entry["pdf_path"].name,
+          entry.get("pad_left", 0),
+          entry.get("pad_top", 0),
+          entry.get("offset_x", 0),
+          entry.get("offset_y", 0),
+          entry.get("canvas_width", base_width),
+          entry.get("canvas_height", base_height),
+          entry.get("anchor"),
+          anchor_aligned,
+          ref_anchor
+        )
 
         pdf_path = entry["pdf_path"]
+        anchor_value = entry.get("anchor")
         transforms_by_file[pdf_path][page_num] = {
+          "anchor_question": anchor_question,
+          "anchor_y": anchor_value[0] if anchor_value else None,
+          "anchor_x": anchor_value[1] if anchor_value else None,
+          "anchor_aligned_y": anchor_aligned[0] if anchor_aligned else None,
+          "anchor_aligned_x": anchor_aligned[1] if anchor_aligned else None,
+          "ref_anchor_y": ref_anchor[0] if ref_anchor else None,
+          "ref_anchor_x": ref_anchor[1] if ref_anchor else None,
           "rotation_deg": entry.get("rotation_deg", 0.0),
           "offset_x": entry.get("offset_x", 0),
           "offset_y": entry.get("offset_y", 0),

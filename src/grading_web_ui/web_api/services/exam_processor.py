@@ -680,7 +680,8 @@ class ExamProcessor:
       line_percentages = split_points.get(page_num, [])
       # Convert from percentage of page height to absolute y-coordinate
       line_positions = [pct * page_height for pct in line_percentages]
-      for y_pos in sorted(line_positions):
+      for pct, y_pos in sorted(zip(line_percentages, line_positions),
+                               key=lambda item: item[1]):
         # Normalize splits at page boundaries:
         # If a split is at the very bottom of a page (within 1pt tolerance),
         # treat it as being at the top of the next page instead
@@ -689,9 +690,9 @@ class ExamProcessor:
           log.debug(
             f"Normalizing page boundary split: ({page_num}, {y_pos}) -> ({page_num + 1}, 0)"
           )
-          linear_splits.append((page_num + 1, 0))
+          linear_splits.append((page_num + 1, 0, 0.0))
         else:
-          linear_splits.append((page_num, y_pos))
+          linear_splits.append((page_num, y_pos, pct))
 
     # Sort splits chronologically (by page, then by y-position)
     linear_splits.sort(key=lambda x: (x[0], x[1]))
@@ -699,26 +700,26 @@ class ExamProcessor:
     # Remove duplicate splits (can happen if user manually added a split at y=0 of next page)
     unique_splits = []
     for split in linear_splits:
-      if not unique_splits or split != unique_splits[-1]:
+      if not unique_splits or split[:2] != unique_splits[-1][:2]:
         unique_splits.append(split)
     linear_splits = unique_splits
 
     # If no splits were provided, use the entire PDF as one problem
     if not linear_splits:
       log.warning("No split points found, treating entire PDF as one problem")
-      linear_splits = [(0, 0),
+      linear_splits = [(0, 0, 0.0),
                        (total_pages - 1,
-                        pdf_document[total_pages - 1].rect.height)]
+                        pdf_document[total_pages - 1].rect.height, 1.0)]
 
     # Add a split at the start if not present (problems start from top of page 0)
-    if linear_splits[0] != (0, 0):
-      linear_splits.insert(0, (0, 0))
+    if linear_splits[0][:2] != (0, 0):
+      linear_splits.insert(0, (0, 0, 0.0))
       log.debug("Inserted starting split at (0, 0)")
 
     # Add final split at end of last page if not present
     last_page = pdf_document[total_pages - 1]
-    last_split = (total_pages - 1, last_page.rect.height)
-    if linear_splits[-1] != last_split:
+    last_split = (total_pages - 1, last_page.rect.height, 1.0)
+    if linear_splits[-1][:2] != last_split[:2]:
       linear_splits.append(last_split)
       log.debug(f"Inserted ending split at {last_split}")
 
@@ -732,14 +733,15 @@ class ExamProcessor:
       last_page_num = total_pages - 1
       # Remove all splits that reference the last page
       splits_before_filter = len(linear_splits)
-      linear_splits = [(page, y) for page, y in linear_splits
+      linear_splits = [(page, y, pct) for page, y, pct in linear_splits
                        if page < last_page_num]
 
       # Ensure we have an ending split at the bottom of the second-to-last page
       if total_pages > 1 and linear_splits:
         second_to_last_page = pdf_document[last_page_num - 1]
-        expected_end = (last_page_num - 1, second_to_last_page.rect.height)
-        if linear_splits[-1] != expected_end:
+        expected_end = (last_page_num - 1, second_to_last_page.rect.height,
+                        1.0)
+        if linear_splits[-1][:2] != expected_end[:2]:
           linear_splits.append(expected_end)
           log.debug(
             f"Added ending split at bottom of page {last_page_num - 1}")
@@ -769,13 +771,14 @@ class ExamProcessor:
       total_prescan = len(linear_splits) - 1 - start_index
 
       for i in range(start_index, len(linear_splits) - 1):
-        start_page, start_y = linear_splits[i]
-        end_page, end_y = linear_splits[i + 1]
+        start_page, start_y, _ = linear_splits[i]
+        end_page, end_y, end_pct = linear_splits[i + 1]
 
         # Adjust end point if needed (same logic as problem extraction)
         if end_y == 0 and end_page > start_page:
           end_page = end_page - 1
           end_y = pdf_document_original[end_page].rect.height
+          end_pct = 1.0
 
         # Extract region from ORIGINAL unredacted PDF for QR detection
         # Use progressive DPI: start low (fast), increase only if needed
@@ -836,14 +839,15 @@ class ExamProcessor:
     problem_number = 1
 
     for i in range(start_index, len(linear_splits) - 1):
-      start_page, start_y = linear_splits[i]
-      end_page, end_y = linear_splits[i + 1]
+      start_page, start_y, start_pct = linear_splits[i]
+      end_page, end_y, end_pct = linear_splits[i + 1]
 
       # Special case: if end_y is 0 (top of page), the region actually ends
       # at the bottom of the PREVIOUS page, not at the top of end_page
       if end_y == 0 and end_page > start_page:
         end_page = end_page - 1
         end_y = pdf_document[end_page].rect.height
+        end_pct = 1.0
         log.debug(
           f"Adjusted end point from top of page {end_page + 1} to bottom of page {end_page}"
         )
@@ -865,6 +869,8 @@ class ExamProcessor:
         "region_y_start": int(start_y),
         "region_y_end": int(end_y) if start_page == end_page else int(
           pdf_document[start_page].rect.height),
+        "region_y_start_pct": start_pct,
+        "region_y_end_pct": end_pct if start_page == end_page else 1.0,
         "region_height": region_height,
       }
 
@@ -872,6 +878,7 @@ class ExamProcessor:
       if end_page != start_page:
         region_coords["end_page_number"] = end_page
         region_coords["end_region_y"] = int(end_y)
+        region_coords["end_region_y_pct"] = end_pct
         log.info(
           f"Problem {problem_number} spans multiple pages: {start_page} to {end_page}"
         )

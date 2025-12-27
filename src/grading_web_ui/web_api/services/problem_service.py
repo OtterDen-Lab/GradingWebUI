@@ -60,6 +60,9 @@ class ProblemService:
       region_y_end=region_coords["region_y_end"],
       end_page_number=region_coords.get("end_page_number"),
       end_region_y=region_coords.get("end_region_y"),
+      region_y_start_pct=region_coords.get("region_y_start_pct"),
+      region_y_end_pct=region_coords.get("region_y_end_pct"),
+      end_region_y_pct=region_coords.get("end_region_y_pct"),
       page_transforms=region_coords.get("page_transforms"),
       dpi=dpi)
 
@@ -71,6 +74,9 @@ class ProblemService:
       region_y_end: float,
       end_page_number: Optional[int] = None,
       end_region_y: Optional[float] = None,
+      region_y_start_pct: Optional[float] = None,
+      region_y_end_pct: Optional[float] = None,
+      end_region_y_pct: Optional[float] = None,
       page_transforms: Optional[Dict] = None,
       dpi: int = 150) -> str:
     """
@@ -105,6 +111,9 @@ class ProblemService:
         start_y=region_y_start,
         end_page=actual_end_page,
         end_y=actual_end_y,
+        start_y_pct=region_y_start_pct,
+        end_y_pct=region_y_end_pct,
+        end_page_y_pct=end_region_y_pct,
         page_transforms=page_transforms,
         dpi=dpi)
 
@@ -119,6 +128,9 @@ class ProblemService:
       start_y: float,
       end_page: int,
       end_y: float,
+      start_y_pct: Optional[float] = None,
+      end_y_pct: Optional[float] = None,
+      end_page_y_pct: Optional[float] = None,
       page_transforms: Optional[Dict] = None,
       dpi: int = 150) -> Tuple[str, int]:
     """
@@ -141,15 +153,21 @@ class ProblemService:
     if start_page == end_page:
       # Single page region
       return self._extract_single_page_region(pdf_document, start_page,
-                                               start_y, end_y, page_transforms, dpi)
+                                               start_y, end_y,
+                                               start_y_pct, end_y_pct,
+                                               page_transforms, dpi)
     else:
       # Cross-page region
       return self._extract_cross_page_region(pdf_document, start_page, start_y,
-                                              end_page, end_y, page_transforms, dpi)
+                                              end_page, end_y,
+                                              start_y_pct, end_page_y_pct,
+                                              page_transforms, dpi)
 
   def _extract_single_page_region(self, pdf_document: fitz.Document,
                                    page_number: int, start_y: float,
                                    end_y: float,
+                                   start_y_pct: Optional[float],
+                                   end_y_pct: Optional[float],
                                    page_transforms: Optional[Dict],
                                    dpi: int) -> Tuple[str, int]:
     """Extract a region from a single page"""
@@ -158,6 +176,8 @@ class ProblemService:
       page_number=page_number,
       region_start=start_y,
       region_end=end_y,
+      region_start_pct=start_y_pct,
+      region_end_pct=end_y_pct,
       page_transforms=page_transforms,
       dpi=dpi
     )
@@ -169,6 +189,8 @@ class ProblemService:
   def _extract_cross_page_region(self, pdf_document: fitz.Document,
                                   start_page: int, start_y: float,
                                   end_page: int, end_y: float,
+                                  start_y_pct: Optional[float],
+                                  end_page_y_pct: Optional[float],
                                   page_transforms: Optional[Dict],
                                   dpi: int) -> Tuple[str, int]:
     """Extract a region that spans multiple pages and merge vertically"""
@@ -179,6 +201,8 @@ class ProblemService:
     page_images = []
     total_height = 0
 
+    use_pct = start_y_pct is not None or end_page_y_pct is not None
+
     # Extract first page (from start_y to bottom)
     first_page = pdf_document[start_page]
     if start_y < first_page.rect.height:
@@ -187,6 +211,8 @@ class ProblemService:
         page_number=start_page,
         region_start=start_y,
         region_end=first_page.rect.height,
+        region_start_pct=start_y_pct if use_pct else None,
+        region_end_pct=1.0 if use_pct else None,
         page_transforms=page_transforms,
         dpi=dpi
       )
@@ -201,6 +227,8 @@ class ProblemService:
         page_number=page_num,
         region_start=0,
         region_end=middle_page.rect.height,
+        region_start_pct=0.0 if use_pct else None,
+        region_end_pct=1.0 if use_pct else None,
         page_transforms=page_transforms,
         dpi=dpi
       )
@@ -215,6 +243,8 @@ class ProblemService:
         page_number=end_page,
         region_start=0,
         region_end=end_y,
+        region_start_pct=0.0 if use_pct else None,
+        region_end_pct=end_page_y_pct if use_pct else None,
         page_transforms=page_transforms,
         dpi=dpi
       )
@@ -254,6 +284,8 @@ class ProblemService:
       page_number: int,
       region_start: float,
       region_end: float,
+      region_start_pct: Optional[float],
+      region_end_pct: Optional[float],
       page_transforms: Optional[Dict],
       dpi: int) -> Image.Image:
     page = pdf_document[page_number]
@@ -297,6 +329,8 @@ class ProblemService:
       canvas.paste(image, (offset_x, offset_y))
       image = canvas
 
+    use_pct = region_start_pct is not None and region_end_pct is not None
+
     def transform_point(x: float, y: float) -> Tuple[float, float]:
       cx, cy = base_width / 2.0, base_height / 2.0
       if rotation_deg:
@@ -313,21 +347,63 @@ class ProblemService:
       y += pad_top + offset_y
       return x, y
 
-    y_start_px = (region_start / page.rect.height) * base_height
-    y_end_px = (region_end / page.rect.height) * base_height
-    points = [
-      transform_point(0, y_start_px),
-      transform_point(base_width, y_start_px),
-      transform_point(0, y_end_px),
-      transform_point(base_width, y_end_px)
-    ]
-    xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
+    if use_pct:
+      canvas_height = image.size[1]
+      top = max(0, int(round(region_start_pct * canvas_height)))
+      bottom = min(image.size[1], int(round(region_end_pct * canvas_height)))
+      left = 0
+      right = image.size[0]
+    else:
+      y_start_px = (region_start / page.rect.height) * base_height
+      y_end_px = (region_end / page.rect.height) * base_height
+      points = [
+        transform_point(0, y_start_px),
+        transform_point(base_width, y_start_px),
+        transform_point(0, y_end_px),
+        transform_point(base_width, y_end_px)
+      ]
+      xs = [p[0] for p in points]
+      ys = [p[1] for p in points]
 
-    left = max(0, int(min(xs)))
-    right = min(image.size[0], int(max(xs)))
-    top = max(0, int(min(ys)))
-    bottom = min(image.size[1], int(max(ys)))
+      left = max(0, int(min(xs)))
+      right = min(image.size[0], int(max(xs)))
+      top = max(0, int(min(ys)))
+      bottom = min(image.size[1], int(max(ys)))
+
+    anchor_aligned_y = None
+    anchor_aligned_x = None
+    ref_anchor_y = None
+    ref_anchor_x = None
+    if transform:
+      anchor_aligned_y = transform.get("anchor_aligned_y")
+      anchor_aligned_x = transform.get("anchor_aligned_x")
+      ref_anchor_y = transform.get("ref_anchor_y")
+      ref_anchor_x = transform.get("ref_anchor_x")
+
+    log.debug(
+      "Render page %s: rotate=%.2f pad=(%s,%s) offset=(%s,%s) canvas=%sx%s target=%sx%s crop=(%s,%s,%s,%s) pct=%s pct_range=(%s,%s) anchor_aligned=(%s,%s) ref_anchor=(%s,%s)",
+      page_number + 1,
+      rotation_deg,
+      pad_left,
+      pad_top,
+      offset_x,
+      offset_y,
+      canvas_width,
+      canvas_height,
+      target_width or base_width,
+      target_height or base_height,
+      left,
+      top,
+      right,
+      bottom,
+      use_pct,
+      region_start_pct,
+      region_end_pct,
+      anchor_aligned_y,
+      anchor_aligned_x,
+      ref_anchor_y,
+      ref_anchor_x
+    )
 
     if right <= left or bottom <= top:
       return Image.new('RGB', (1, 1), color='white')

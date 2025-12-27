@@ -344,6 +344,9 @@ class AIGraderService:
               region_y_end=region_data["region_y_end"],
               end_page_number=region_data.get("end_page_number"),
               end_region_y=region_data.get("end_region_y"),
+              region_y_start_pct=region_data.get("region_y_start_pct"),
+              region_y_end_pct=region_data.get("region_y_end_pct"),
+              end_region_y_pct=region_data.get("end_region_y_pct"),
               page_transforms=region_data.get("page_transforms"),
               dpi=150
             )
@@ -442,6 +445,9 @@ class AIGraderService:
           region_y_end=region_data["region_y_end"],
           end_page_number=region_data.get("end_page_number"),
           end_region_y=region_data.get("end_region_y"),
+          region_y_start_pct=region_data.get("region_y_start_pct"),
+          region_y_end_pct=region_data.get("region_y_end_pct"),
+          end_region_y_pct=region_data.get("end_region_y_pct"),
           page_transforms=region_data.get("page_transforms"),
           dpi=150
         )
@@ -505,6 +511,9 @@ class AIGraderService:
                 region_y_end=region_data["region_y_end"],
                 end_page_number=region_data.get("end_page_number"),
                 end_region_y=region_data.get("end_region_y"),
+                region_y_start_pct=region_data.get("region_y_start_pct"),
+                region_y_end_pct=region_data.get("region_y_end_pct"),
+                end_region_y_pct=region_data.get("end_region_y_pct"),
                 page_transforms=region_data.get("page_transforms"),
                 dpi=150
               )
