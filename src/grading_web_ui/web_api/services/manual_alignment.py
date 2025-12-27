@@ -24,7 +24,7 @@ class ManualAlignmentService:
       alpha: float = 0.3,
       qr_positions_by_file: Optional[Dict[Path, Dict[int, List[Dict]]]] = None,
       progress_callback: Optional[callable] = None
-  ) -> tuple[Dict[int, str], Dict[int, tuple[int, int]]]:
+  ) -> tuple[Dict[int, str], Dict[int, tuple[int, int]], Dict[Path, Dict[int, Dict]]]:
     """
         Create composite overlay images for each page number across all exams.
 
@@ -67,6 +67,9 @@ class ManualAlignmentService:
     # Create composite for each page number
     composites = {}
     dimensions = {}  # Track (width, height) for each composite
+    transforms_by_file: Dict[Path, Dict[int, Dict]] = {}
+    for pdf_path in input_files:
+      transforms_by_file[pdf_path] = {}
 
     for page_num in range(max_pages):
       log.info(f"Creating composite for page {page_num + 1}/{max_pages}")
@@ -214,7 +217,11 @@ class ManualAlignmentService:
             page_entries.append({
               "image": img,
               "anchor": anchor,
-              "anchor_size": anchor_size
+              "anchor_size": anchor_size,
+              "rotation_deg": rotate_angle,
+              "pdf_path": pdf_path,
+              "target_width": target_dimensions[0] if target_dimensions else img.size[0],
+              "target_height": target_dimensions[1] if target_dimensions else img.size[1]
             })
 
           doc.close()
@@ -234,12 +241,20 @@ class ManualAlignmentService:
         img = entry["image"]
         width, height = img.size
         if width == max_width and height == max_height:
+          entry["pad_left"] = 0
+          entry["pad_top"] = 0
+          entry["padded_width"] = max_width
+          entry["padded_height"] = max_height
           continue
         pad_left = (max_width - width) // 2
         pad_top = (max_height - height) // 2
         padded = Image.new('RGB', (max_width, max_height), color='white')
         padded.paste(img, (pad_left, pad_top))
         entry["image"] = padded
+        entry["pad_left"] = pad_left
+        entry["pad_top"] = pad_top
+        entry["padded_width"] = max_width
+        entry["padded_height"] = max_height
         if entry["anchor"]:
           entry["anchor"] = (
             entry["anchor"][0] + pad_top,
@@ -293,6 +308,27 @@ class ManualAlignmentService:
         output_size = (base_width, base_height)
         offsets = [(0, 0) for _ in page_entries]
 
+      for entry, offset in zip(page_entries, offsets):
+        entry["offset_x"] = offset[0]
+        entry["offset_y"] = offset[1]
+        entry["canvas_width"] = output_size[0]
+        entry["canvas_height"] = output_size[1]
+
+        pdf_path = entry["pdf_path"]
+        transforms_by_file[pdf_path][page_num] = {
+          "rotation_deg": entry.get("rotation_deg", 0.0),
+          "offset_x": entry.get("offset_x", 0),
+          "offset_y": entry.get("offset_y", 0),
+          "pad_left": entry.get("pad_left", 0),
+          "pad_top": entry.get("pad_top", 0),
+          "padded_width": entry.get("padded_width", base_width),
+          "padded_height": entry.get("padded_height", base_height),
+          "canvas_width": entry.get("canvas_width", base_width),
+          "canvas_height": entry.get("canvas_height", base_height),
+          "target_width": entry.get("target_width", base_width),
+          "target_height": entry.get("target_height", base_height)
+        }
+
       # Create composite by averaging all images
       composite = self._create_overlay_composite(
         [entry["image"] for entry in page_entries],
@@ -318,7 +354,7 @@ class ManualAlignmentService:
         composites[page_num] = img_base64
 
     log.info(f"Created {len(composites)} composite images")
-    return composites, dimensions
+    return composites, dimensions, transforms_by_file
 
   def _get_target_dimensions(
       self, input_files: List[Path]) -> Optional[tuple[int, int]]:

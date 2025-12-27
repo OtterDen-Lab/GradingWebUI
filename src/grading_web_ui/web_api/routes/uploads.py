@@ -468,13 +468,26 @@ async def prepare_alignment(
       progress_callback=composite_progress
     )
 
-  composites, dimensions = await asyncio.to_thread(build_alignment_assets)
+  composites, dimensions, transforms_by_file = await asyncio.to_thread(build_alignment_assets)
 
   composite_dimensions = {
     str(page_num): [dims[0], dims[1]]
     for page_num, dims in dimensions.items()
   }
   session_data["composite_dimensions"] = composite_dimensions
+  file_hash_by_path = {
+    Path(k): v["hash"]
+    for k, v in session_data.get("file_metadata", {}).items()
+  }
+  page_transforms = {}
+  for pdf_path, transforms in transforms_by_file.items():
+    file_hash = file_hash_by_path.get(Path(pdf_path))
+    if not file_hash:
+      continue
+    page_transforms[file_hash] = {
+      str(page_num): data for page_num, data in transforms.items()
+    }
+  session_data["page_transforms"] = page_transforms
   session_repo.update_metadata(session_id, session_data)
   session_repo.update_status(session_id, SessionStatus.AWAITING_ALIGNMENT,
                              "Alignment ready. Please select split points.")
@@ -910,6 +923,9 @@ async def process_exam_names(
       log.error(f"Session {session_id} not found")
       return
 
+    session_data = session_repo.get_metadata(session_id) or {}
+    page_transforms_by_hash = session_data.get("page_transforms", {})
+
     mock_roster = bool(session.metadata and session.metadata.get("mock_roster"))
     ai_name_extraction = True
     if session.metadata and "ai_name_extraction" in session.metadata:
@@ -1086,6 +1102,9 @@ async def process_exam_splits(
       log.error(f"Session {session_id} not found")
       return
 
+    session_data = session_repo.get_metadata(session_id) or {}
+    page_transforms_by_hash = session_data.get("page_transforms", {})
+
     submission_repo = SubmissionRepository()
     problem_repo = ProblemRepository()
     processed_submission_ids = problem_repo.get_submission_ids_with_problems(session_id)
@@ -1165,12 +1184,12 @@ async def process_exam_splits(
     total_steps = len(file_paths_to_process) * (1 + regions_per_exam * len(PRESCAN_DPI_STEPS))
     current_step = {"count": 0}
 
-    def update_progress(processed, matched, message):
+    def update_progress(processed, matched, message, step_increment: int = 1):
       total = base_total
       processed_count = base_processed + processed
       matched_count = base_matched + matched
 
-      current_step["count"] += 1
+      current_step["count"] += step_increment
       progress_repo = SessionRepository()
       progress_session = progress_repo.get_by_id(session_id)
       progress_session.total_exams = total
@@ -1247,6 +1266,24 @@ async def process_exam_splits(
             if max_points is not None:
               max_points_to_upsert[problem_number] = max_points
 
+          region_coords = prob_dto.region_coords
+          transforms_for_file = page_transforms_by_hash.get(sub_dto.file_hash, {})
+          if transforms_for_file and region_coords:
+            page_transforms = {}
+            start_page = region_coords.get("page_number")
+            if start_page is not None:
+              transform = transforms_for_file.get(str(start_page))
+              if transform:
+                page_transforms[str(start_page)] = transform
+            end_page = region_coords.get("end_page_number")
+            if end_page is not None and end_page != start_page:
+              transform = transforms_for_file.get(str(end_page))
+              if transform:
+                page_transforms[str(end_page)] = transform
+            if page_transforms:
+              region_coords = dict(region_coords)
+              region_coords["page_transforms"] = page_transforms
+
           problem = Problem(
             id=0,
             session_id=session_id,
@@ -1258,7 +1295,7 @@ async def process_exam_splits(
             blank_method=prob_dto.blank_method,
             blank_reasoning=prob_dto.blank_reasoning,
             max_points=max_points,
-            region_coords=prob_dto.region_coords,
+            region_coords=region_coords,
             qr_encrypted_data=prob_dto.qr_encrypted_data
           )
           all_problems.append(problem)

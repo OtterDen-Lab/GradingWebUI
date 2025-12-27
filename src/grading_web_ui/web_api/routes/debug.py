@@ -151,6 +151,7 @@ async def get_submissions_by_ink_for_problem(session_id: int,
         end_y,
         end_page,
         end_y,
+        page_transforms=region_coords.get("page_transforms"),
         dpi=150)
 
       # Extract black_pixel_ratio from blank_reasoning field

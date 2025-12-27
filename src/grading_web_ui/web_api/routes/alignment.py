@@ -53,7 +53,7 @@ async def create_composite_images(files: List[UploadFile] = File(...)):
       pdf_paths.append(file_path)
 
     # Generate composite images
-    composites, _ = alignment_service.create_composite_images(pdf_paths)
+    composites, _, _ = alignment_service.create_composite_images(pdf_paths)
 
     # Get page dimensions from first PDF
     import fitz

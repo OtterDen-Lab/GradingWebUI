@@ -37,7 +37,8 @@ def extract_problem_image(pdf_data: str,
                           region_y_start: int,
                           region_y_end: int,
                           end_page_number: int = None,
-                          end_region_y: int = None) -> str:
+                          end_region_y: int = None,
+                          page_transforms: dict = None) -> str:
   """
     Extract a problem image from stored PDF data using region coordinates.
     Supports cross-page regions.
@@ -62,7 +63,8 @@ def extract_problem_image(pdf_data: str,
     region_y_start=region_y_start,
     region_y_end=region_y_end,
     end_page_number=end_page_number,
-    end_region_y=end_region_y)
+    end_region_y=end_region_y,
+    page_transforms=page_transforms)
 
 
 def get_problem_image_data(problem, submission_repo: SubmissionRepository = None) -> str:
@@ -100,7 +102,8 @@ def get_problem_image_data(problem, submission_repo: SubmissionRepository = None
           region_coords["region_y_start"],
           region_coords["region_y_end"],
           region_coords.get("end_page_number"),  # Optional: for cross-page regions
-          region_coords.get("end_region_y")  # Optional: for cross-page regions
+          region_coords.get("end_region_y"),  # Optional: for cross-page regions
+          region_coords.get("page_transforms")
         )
       else:
         log.error(
@@ -710,7 +713,13 @@ async def rescan_qr_for_single_problem(
 
   # Use ProblemService to extract the region at higher DPI
   problem_image_base64, _ = _problem_service.extract_image_from_document(
-    pdf_document, start_page, start_y, end_page, end_y, dpi=dpi)
+    pdf_document,
+    start_page,
+    start_y,
+    end_page,
+    end_y,
+    page_transforms=problem.region_coords.get("page_transforms"),
+    dpi=dpi)
 
   # Scan for QR code
   qr_data = qr_scanner.scan_qr_from_image(problem_image_base64)

@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Tuple, Optional, Dict
 import fitz  # PyMuPDF
@@ -59,6 +60,7 @@ class ProblemService:
       region_y_end=region_coords["region_y_end"],
       end_page_number=region_coords.get("end_page_number"),
       end_region_y=region_coords.get("end_region_y"),
+      page_transforms=region_coords.get("page_transforms"),
       dpi=dpi)
 
   def extract_image_from_pdf_data(
@@ -69,6 +71,7 @@ class ProblemService:
       region_y_end: float,
       end_page_number: Optional[int] = None,
       end_region_y: Optional[float] = None,
+      page_transforms: Optional[Dict] = None,
       dpi: int = 150) -> str:
     """
     Extract a region from PDF data as an image.
@@ -102,6 +105,7 @@ class ProblemService:
         start_y=region_y_start,
         end_page=actual_end_page,
         end_y=actual_end_y,
+        page_transforms=page_transforms,
         dpi=dpi)
 
       return image_base64
@@ -115,6 +119,7 @@ class ProblemService:
       start_y: float,
       end_page: int,
       end_y: float,
+      page_transforms: Optional[Dict] = None,
       dpi: int = 150) -> Tuple[str, int]:
     """
     Extract a region from an already-opened PDF document.
@@ -136,50 +141,35 @@ class ProblemService:
     if start_page == end_page:
       # Single page region
       return self._extract_single_page_region(pdf_document, start_page,
-                                               start_y, end_y, dpi)
+                                               start_y, end_y, page_transforms, dpi)
     else:
       # Cross-page region
       return self._extract_cross_page_region(pdf_document, start_page, start_y,
-                                              end_page, end_y, dpi)
+                                              end_page, end_y, page_transforms, dpi)
 
   def _extract_single_page_region(self, pdf_document: fitz.Document,
                                    page_number: int, start_y: float,
                                    end_y: float,
+                                   page_transforms: Optional[Dict],
                                    dpi: int) -> Tuple[str, int]:
     """Extract a region from a single page"""
-    page = pdf_document[page_number]
-    region = fitz.Rect(0, start_y, page.rect.width, end_y)
-
-    # Validate region is not empty
-    if region.is_empty or region.height <= 0:
-      log.warning(
-        f"Empty region on page {page_number}: y={start_y} to y={end_y}")
-      # Create a minimal white image
-      img = Image.new('RGB', (int(page.rect.width), 1), color='white')
-      buffer = io.BytesIO()
-      img.save(buffer, format='PNG')
-      img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-      return img_base64, 1
-
-    # Extract region as new PDF page
-    problem_pdf = fitz.open()
-    problem_page = problem_pdf.new_page(width=region.width,
-                                        height=region.height)
-    problem_page.show_pdf_page(problem_page.rect, pdf_document, page_number,
-                               clip=region)
-
-    # Convert to PNG
-    pix = problem_page.get_pixmap(dpi=dpi)
-    img_bytes = pix.tobytes("png")
-    img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-
-    problem_pdf.close()
-
-    return img_base64, int(region.height)
+    image = self._render_transformed_region(
+      pdf_document,
+      page_number=page_number,
+      region_start=start_y,
+      region_end=end_y,
+      page_transforms=page_transforms,
+      dpi=dpi
+    )
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+    return img_base64, image.height
 
   def _extract_cross_page_region(self, pdf_document: fitz.Document,
                                   start_page: int, start_y: float,
                                   end_page: int, end_y: float,
+                                  page_transforms: Optional[Dict],
                                   dpi: int) -> Tuple[str, int]:
     """Extract a region that spans multiple pages and merge vertically"""
     log.info(
@@ -191,57 +181,45 @@ class ProblemService:
 
     # Extract first page (from start_y to bottom)
     first_page = pdf_document[start_page]
-    first_region = fitz.Rect(0, start_y, first_page.rect.width,
-                             first_page.rect.height)
-
-    # Skip first page if region is empty (start_y is at page boundary)
-    if not first_region.is_empty and first_region.height > 0:
-      problem_pdf = fitz.open()
-      problem_page = problem_pdf.new_page(width=first_region.width,
-                                          height=first_region.height)
-      problem_page.show_pdf_page(problem_page.rect, pdf_document, start_page,
-                                 clip=first_region)
-
-      pix = problem_page.get_pixmap(dpi=dpi)
-      img = Image.open(io.BytesIO(pix.tobytes("png")))
+    if start_y < first_page.rect.height:
+      img = self._render_transformed_region(
+        pdf_document,
+        page_number=start_page,
+        region_start=start_y,
+        region_end=first_page.rect.height,
+        page_transforms=page_transforms,
+        dpi=dpi
+      )
       page_images.append(img)
       total_height += img.height
-      problem_pdf.close()
 
     # Extract middle pages (full pages)
     for page_num in range(start_page + 1, end_page):
       middle_page = pdf_document[page_num]
-      middle_region = fitz.Rect(0, 0, middle_page.rect.width,
-                                middle_page.rect.height)
-
-      problem_pdf = fitz.open()
-      problem_page = problem_pdf.new_page(width=middle_region.width,
-                                          height=middle_region.height)
-      problem_page.show_pdf_page(problem_page.rect, pdf_document, page_num,
-                                 clip=middle_region)
-
-      pix = problem_page.get_pixmap(dpi=dpi)
-      img = Image.open(io.BytesIO(pix.tobytes("png")))
+      img = self._render_transformed_region(
+        pdf_document,
+        page_number=page_num,
+        region_start=0,
+        region_end=middle_page.rect.height,
+        page_transforms=page_transforms,
+        dpi=dpi
+      )
       page_images.append(img)
       total_height += img.height
-      problem_pdf.close()
 
     # Extract last page (from top to end_y)
     last_page = pdf_document[end_page]
-    last_region = fitz.Rect(0, 0, last_page.rect.width, end_y)
-
-    if not last_region.is_empty and last_region.height > 0:
-      problem_pdf = fitz.open()
-      problem_page = problem_pdf.new_page(width=last_region.width,
-                                          height=last_region.height)
-      problem_page.show_pdf_page(problem_page.rect, pdf_document, end_page,
-                                 clip=last_region)
-
-      pix = problem_page.get_pixmap(dpi=dpi)
-      img = Image.open(io.BytesIO(pix.tobytes("png")))
+    if end_y > 0:
+      img = self._render_transformed_region(
+        pdf_document,
+        page_number=end_page,
+        region_start=0,
+        region_end=end_y,
+        page_transforms=page_transforms,
+        dpi=dpi
+      )
       page_images.append(img)
       total_height += img.height
-      problem_pdf.close()
 
     # Merge all page images vertically
     if not page_images:
@@ -269,3 +247,89 @@ class ProblemService:
     img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
     return img_base64, total_height
+
+  def _render_transformed_region(
+      self,
+      pdf_document: fitz.Document,
+      page_number: int,
+      region_start: float,
+      region_end: float,
+      page_transforms: Optional[Dict],
+      dpi: int) -> Image.Image:
+    page = pdf_document[page_number]
+    pix = page.get_pixmap(dpi=dpi)
+    image = Image.open(io.BytesIO(pix.tobytes("png")))
+    if image.mode != 'RGB':
+      image = image.convert('RGB')
+
+    transform = None
+    if page_transforms:
+      transform = page_transforms.get(str(page_number))
+
+    target_width = transform.get("target_width") if transform else None
+    target_height = transform.get("target_height") if transform else None
+    if target_width and target_height and image.size != (target_width, target_height):
+      image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+    base_width, base_height = image.size
+    rotation_deg = transform.get("rotation_deg", 0.0) if transform else 0.0
+    if rotation_deg:
+      image = image.rotate(rotation_deg, expand=True, fillcolor='white')
+
+    rotated_width, rotated_height = image.size
+    pad_left = transform.get("pad_left", 0) if transform else 0
+    pad_top = transform.get("pad_top", 0) if transform else 0
+    padded_width = transform.get("padded_width", rotated_width) if transform else rotated_width
+    padded_height = transform.get("padded_height", rotated_height) if transform else rotated_height
+
+    if padded_width != rotated_width or padded_height != rotated_height:
+      padded = Image.new('RGB', (padded_width, padded_height), color='white')
+      padded.paste(image, (pad_left, pad_top))
+      image = padded
+
+    offset_x = transform.get("offset_x", 0) if transform else 0
+    offset_y = transform.get("offset_y", 0) if transform else 0
+    canvas_width = transform.get("canvas_width", image.size[0]) if transform else image.size[0]
+    canvas_height = transform.get("canvas_height", image.size[1]) if transform else image.size[1]
+
+    if canvas_width != image.size[0] or canvas_height != image.size[1] or offset_x or offset_y:
+      canvas = Image.new('RGB', (canvas_width, canvas_height), color='white')
+      canvas.paste(image, (offset_x, offset_y))
+      image = canvas
+
+    def transform_point(x: float, y: float) -> Tuple[float, float]:
+      cx, cy = base_width / 2.0, base_height / 2.0
+      if rotation_deg:
+        theta = math.radians(rotation_deg)
+        dx = x - cx
+        dy = y - cy
+        x = (dx * math.cos(theta) - dy * math.sin(theta)) + cx
+        y = (dx * math.sin(theta) + dy * math.cos(theta)) + cy
+        cx2, cy2 = rotated_width / 2.0, rotated_height / 2.0
+        x += (cx2 - cx)
+        y += (cy2 - cy)
+
+      x += pad_left + offset_x
+      y += pad_top + offset_y
+      return x, y
+
+    y_start_px = (region_start / page.rect.height) * base_height
+    y_end_px = (region_end / page.rect.height) * base_height
+    points = [
+      transform_point(0, y_start_px),
+      transform_point(base_width, y_start_px),
+      transform_point(0, y_end_px),
+      transform_point(base_width, y_end_px)
+    ]
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+
+    left = max(0, int(min(xs)))
+    right = min(image.size[0], int(max(xs)))
+    top = max(0, int(min(ys)))
+    bottom = min(image.size[1], int(max(ys)))
+
+    if right <= left or bottom <= top:
+      return Image.new('RGB', (1, 1), color='white')
+
+    return image.crop((left, top, right, bottom))

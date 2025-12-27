@@ -173,12 +173,13 @@ class ExamProcessor:
         suggested_match, match_confidence = self._find_suggested_match(approximate_name, unmatched_students)
       
       # Extract problems from PDF
-      def report_prescan(message: str) -> None:
+      def report_prescan(message: str, step_increment: int = 1) -> None:
         self._report_progress(
           progress_callback,
           index,
           len(matched_submissions),
-          f"Exam {index + 1}/{len(input_files)}: {message}"
+          f"Exam {index + 1}/{len(input_files)}: {message}",
+          step_increment=step_increment
         )
 
       pdf_data, problems = self.redact_and_extract_regions(
@@ -285,11 +286,12 @@ class ExamProcessor:
     log.info("Post-processing complete")
   
   def _report_progress(
-      self,
-      progress_callback: Optional[callable],
-      processed: int,
-      matched: int,
-      message: str
+    self,
+    progress_callback: Optional[callable],
+    processed: int,
+    matched: int,
+    message: str,
+    step_increment: int = 1
   ):
     """
     Report progress via callback if provided.
@@ -301,7 +303,12 @@ class ExamProcessor:
         message: Progress message to display
     """
     if progress_callback:
-      progress_callback(processed=processed, matched=matched, message=message)
+      progress_callback(
+        processed=processed,
+        matched=matched,
+        message=message,
+        step_increment=step_increment
+      )
 
   def _find_suggested_match(
       self,
@@ -774,14 +781,10 @@ class ExamProcessor:
         # Use progressive DPI: start low (fast), increase only if needed
         # Since PDF is vector, higher DPI doesn't lose quality, just takes more time
         qr_data = None
-        for dpi in PRESCAN_DPI_STEPS:
+        for dpi_index, dpi in enumerate(PRESCAN_DPI_STEPS):
           log.info(
             f"Pre-scan problem {problem_number_prescan}/{total_prescan} at {dpi} DPI"
           )
-          if message_callback:
-            message_callback(
-              f"Pre-scan problem {problem_number_prescan}/{total_prescan} at {dpi} DPI"
-            )
           problem_image_base64, _ = self._extract_cross_page_region(
             pdf_document_original,
             start_page,
@@ -792,13 +795,23 @@ class ExamProcessor:
 
           # Try scanning at this resolution
           qr_data = self.qr_scanner.scan_qr_from_image(problem_image_base64)
+          step_increment = 1
+          remaining_steps = len(PRESCAN_DPI_STEPS) - dpi_index - 1
+          if qr_data and remaining_steps > 0:
+            step_increment += remaining_steps
+          if message_callback:
+            message_callback(
+              f"Pre-scan problem {problem_number_prescan}/{total_prescan} at {dpi} DPI",
+              step_increment=step_increment
+            )
           if qr_data:
             if dpi > 150:
               log.info(
                 f"QR code found at {dpi} DPI (after trying lower resolutions)")
             elif message_callback:
               message_callback(
-                f"QR code found at {dpi} DPI for problem {problem_number_prescan}/{total_prescan}"
+                f"QR code found at {dpi} DPI for problem {problem_number_prescan}/{total_prescan}",
+                step_increment=0
               )
             break  # Found it, no need to try higher DPI
         if qr_data:

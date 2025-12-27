@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from grading_web_ui.lms_interface.ai_helper import AI_Helper__Anthropic
 
 from ..repositories import ProblemRepository, ProblemMetadataRepository, SubmissionRepository
+from .problem_service import ProblemService
 
 log = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ class AIGraderService:
 
   def __init__(self):
     self.ai_helper = AI_Helper__Anthropic()
+    self.problem_service = ProblemService()
 
   def extract_question_text(self, image_base64: str) -> str:
     """Extract question text from a problem image, ignoring handwritten content.
@@ -327,42 +329,24 @@ class AIGraderService:
           # Legacy: image_data is stored
           image_data = row["image_data"]
         elif row["region_coords"]:
-          # New: extract from PDF using region_coords
           import json
-          import base64
-          import fitz
 
           region_data = row["region_coords"]
+          if isinstance(region_data, str):
+            region_data = json.loads(region_data)
 
-          # Get PDF data from submission
           submission = submission_repo.get_by_id(row["submission_id"])
-
           if submission and submission.exam_pdf_data:
-            # Extract region from PDF
-            pdf_bytes = base64.b64decode(submission.exam_pdf_data)
-            pdf_document = fitz.open("pdf", pdf_bytes)
-            page = pdf_document[region_data["page_number"]]
-
-            region = fitz.Rect(0, region_data["region_y_start"],
-                               page.rect.width, region_data["region_y_end"])
-
-            # Extract region as new PDF page
-            problem_pdf = fitz.open()
-            problem_page = problem_pdf.new_page(width=region.width,
-                                                height=region.height)
-            problem_page.show_pdf_page(problem_page.rect,
-                                       pdf_document,
-                                       region_data["page_number"],
-                                       clip=region)
-
-            # Convert to PNG
-            pix = problem_page.get_pixmap(dpi=150)
-            img_bytes = pix.tobytes("png")
-            image_data = base64.b64encode(img_bytes).decode("utf-8")
-
-            # Cleanup
-            problem_pdf.close()
-            pdf_document.close()
+            image_data = self.problem_service.extract_image_from_pdf_data(
+              pdf_base64=submission.exam_pdf_data,
+              page_number=region_data["page_number"],
+              region_y_start=region_data["region_y_start"],
+              region_y_end=region_data["region_y_end"],
+              end_page_number=region_data.get("end_page_number"),
+              end_region_y=region_data.get("end_region_y"),
+              page_transforms=region_data.get("page_transforms"),
+              dpi=150
+            )
 
         if not image_data:
           log.warning(
@@ -444,33 +428,23 @@ class AIGraderService:
       first_image_data = first_problem["image_data"]
     elif first_problem["region_coords"]:
       import json
-      import base64
-      import fitz
 
       region_data = first_problem["region_coords"]
+      if isinstance(region_data, str):
+        region_data = json.loads(region_data)
+
       submission = submission_repo.get_by_id(first_problem["submission_id"])
-
       if submission and submission.exam_pdf_data:
-        pdf_bytes = base64.b64decode(submission.exam_pdf_data)
-        pdf_document = fitz.open("pdf", pdf_bytes)
-        page = pdf_document[region_data["page_number"]]
-        region = fitz.Rect(0, region_data["region_y_start"], page.rect.width,
-                           region_data["region_y_end"])
-
-        problem_pdf = fitz.open()
-        problem_page = problem_pdf.new_page(width=region.width,
-                                            height=region.height)
-        problem_page.show_pdf_page(problem_page.rect,
-                                   pdf_document,
-                                   region_data["page_number"],
-                                   clip=region)
-
-        pix = problem_page.get_pixmap(dpi=150)
-        img_bytes = pix.tobytes("png")
-        first_image_data = base64.b64encode(img_bytes).decode("utf-8")
-
-        problem_pdf.close()
-        pdf_document.close()
+        first_image_data = self.problem_service.extract_image_from_pdf_data(
+          pdf_base64=submission.exam_pdf_data,
+          page_number=region_data["page_number"],
+          region_y_start=region_data["region_y_start"],
+          region_y_end=region_data["region_y_end"],
+          end_page_number=region_data.get("end_page_number"),
+          end_region_y=region_data.get("end_region_y"),
+          page_transforms=region_data.get("page_transforms"),
+          dpi=150
+        )
 
     question_text = self.get_or_extract_question(session_id, problem_number,
                                                  first_image_data)
@@ -517,36 +491,23 @@ class AIGraderService:
             image_data = problem["image_data"]
           elif problem["region_coords"]:
             import json
-            import base64
-            import fitz
 
             region_data = problem["region_coords"]
+            if isinstance(region_data, str):
+              region_data = json.loads(region_data)
 
-            # Get submission PDF data
             submission = submission_repo.get_by_id(problem["submission_id"])
-
             if submission and submission.exam_pdf_data:
-              pdf_bytes = base64.b64decode(submission.exam_pdf_data)
-              pdf_document = fitz.open("pdf", pdf_bytes)
-              page = pdf_document[region_data["page_number"]]
-              region = fitz.Rect(0, region_data["region_y_start"],
-                                 page.rect.width,
-                                 region_data["region_y_end"])
-
-              problem_pdf = fitz.open()
-              problem_page = problem_pdf.new_page(width=region.width,
-                                                  height=region.height)
-              problem_page.show_pdf_page(problem_page.rect,
-                                         pdf_document,
-                                         region_data["page_number"],
-                                         clip=region)
-
-              pix = problem_page.get_pixmap(dpi=150)
-              img_bytes = pix.tobytes("png")
-              image_data = base64.b64encode(img_bytes).decode("utf-8")
-
-              problem_pdf.close()
-              pdf_document.close()
+              image_data = self.problem_service.extract_image_from_pdf_data(
+                pdf_base64=submission.exam_pdf_data,
+                page_number=region_data["page_number"],
+                region_y_start=region_data["region_y_start"],
+                region_y_end=region_data["region_y_end"],
+                end_page_number=region_data.get("end_page_number"),
+                end_region_y=region_data.get("end_region_y"),
+                page_transforms=region_data.get("page_transforms"),
+                dpi=150
+              )
 
           if not image_data:
             log.warning(

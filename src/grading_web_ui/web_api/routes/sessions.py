@@ -357,6 +357,7 @@ async def get_submission_problems(
         end_y,
         end_page,
         end_y,
+        page_transforms=region_coords.get("page_transforms"),
         dpi=150)
     except Exception as e:
       import logging
@@ -975,7 +976,13 @@ async def rescan_qr_codes(
       qr_data = None
       for dpi in [150, 300, 600, 900]:
         problem_image_base64, _ = problem_service.extract_image_from_document(
-          pdf_document, start_page, start_y, end_page, end_y, dpi=dpi)
+          pdf_document,
+          start_page,
+          start_y,
+          end_page,
+          end_y,
+          page_transforms=region_coords.get("page_transforms"),
+          dpi=dpi)
 
         # Try scanning at this resolution
         qr_data = qr_scanner.scan_qr_from_image(problem_image_base64)
