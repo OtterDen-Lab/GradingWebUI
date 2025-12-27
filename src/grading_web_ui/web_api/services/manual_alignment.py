@@ -22,7 +22,8 @@ class ManualAlignmentService:
       input_files: List[Path],
       output_dir: Optional[Path] = None,
       alpha: float = 0.3,
-      qr_positions_by_file: Optional[Dict[Path, Dict[int, List[Dict]]]] = None
+      qr_positions_by_file: Optional[Dict[Path, Dict[int, List[Dict]]]] = None,
+      progress_callback: Optional[callable] = None
   ) -> tuple[Dict[int, str], Dict[int, tuple[int, int]]]:
     """
         Create composite overlay images for each page number across all exams.
@@ -69,6 +70,9 @@ class ManualAlignmentService:
 
     for page_num in range(max_pages):
       log.info(f"Creating composite for page {page_num + 1}/{max_pages}")
+      if progress_callback:
+        progress_callback(page_num + 1, max_pages,
+                          f"Creating composites ({page_num + 1}/{max_pages})")
 
       page_entries = []
 

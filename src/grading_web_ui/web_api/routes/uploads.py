@@ -413,44 +413,59 @@ async def prepare_alignment(
 
   def build_alignment_assets():
     qr_positions = None
+    total_qr_steps = 0
+    max_pages = 0
+    page_counts = []
     if qr_scanner.available:
+      import fitz
+      for pdf_path in file_paths:
+        try:
+          doc = fitz.open(str(pdf_path))
+          count = doc.page_count
+          doc.close()
+        except Exception:
+          count = 0
+        page_counts.append(count)
+        total_qr_steps += count
+        max_pages = max(max_pages, count)
+
       qr_positions = {}
       total_files = len(file_paths)
+      total_steps = total_qr_steps + max_pages
+      processed_offset = 0
       for index, pdf_path in enumerate(file_paths, start=1):
-        log.info(
-          "Scanning QR positions (%s/%s): %s",
-          index,
-          total_files,
-          pdf_path.name
-        )
-        send_progress(
-          f"Scanning QR positions ({index}/{total_files}): {pdf_path.name}",
-          index - 1,
-          total_files
-        )
+        page_total = page_counts[index - 1] if index - 1 < len(page_counts) else 0
+
         def page_progress(page_index: int, page_total: int, message: str) -> None:
           send_progress(
             f"Scanning QR codes ({index}/{total_files}) page {page_index}/{page_total}: {pdf_path.name}",
-            (index - 1) * page_total + page_index,
-            total_files * page_total
+            processed_offset + page_index,
+            total_steps
           )
 
         qr_positions[pdf_path] = qr_scanner.scan_qr_positions_from_pdf(
           pdf_path,
           progress_callback=page_progress
         )
-        send_progress(
-          f"Scanning QR positions ({index}/{total_files}): {pdf_path.name}",
-          index,
-          total_files
-        )
+        processed_offset += page_total
     else:
-      send_progress("Preparing alignment images...", 0, 1)
+      max_pages = 1
+      total_qr_steps = 0
+      send_progress("Preparing alignment images...", 0, max_pages)
 
     alignment_service = ManualAlignmentService()
+    def composite_progress(page_index: int, page_total: int, message: str) -> None:
+      total_steps = total_qr_steps + page_total
+      send_progress(
+        message,
+        total_qr_steps + page_index,
+        total_steps
+      )
+
     return alignment_service.create_composite_images(
       file_paths,
-      qr_positions_by_file=qr_positions
+      qr_positions_by_file=qr_positions,
+      progress_callback=composite_progress
     )
 
   composites, dimensions = await asyncio.to_thread(build_alignment_assets)
