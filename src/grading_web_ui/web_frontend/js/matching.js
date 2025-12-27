@@ -211,47 +211,15 @@ async function confirmAllMatches() {
     const unmatchedCount = allSubmissions.filter(s => !s.is_matched).length;
 
     if (pendingMatches.length === 0) {
-        // No pending changes, but check if we should update status
+        // No pending changes, but check if we should proceed
         if (unmatchedCount === 0) {
-            // All already matched - just update status to 'ready' and navigate
-            console.log('All submissions already matched. Updating status to ready...');
-
-            try {
-                const statusResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}/status`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status: 'ready' })
-                });
-
-                if (!statusResponse.ok) {
-                    let errorMessage = `HTTP ${statusResponse.status}`;
-                    try {
-                        const errorData = await statusResponse.json();
-                        errorMessage = errorData.detail || JSON.stringify(errorData);
-                    } catch (e) {
-                        errorMessage = statusResponse.statusText || errorMessage;
-                    }
-                    alert(`Failed to update status: ${errorMessage}`);
-                    return;
-                }
-
-                console.log('Status successfully updated to ready');
-
-                // Reload session and navigate
-                const response = await fetch(`${API_BASE}/sessions/${currentSession.id}`);
-                currentSession = await response.json();
-                console.log(`Session reloaded. Current status: ${currentSession.status}`);
-                updateSessionInfo();
-                navigateToSection('grading-section');
-            } catch (error) {
-                console.error('Failed to update status:', error);
-                alert('Failed to update status: ' + error.message);
-            }
-            return;
-        } else {
-            alert('No new matches to confirm. Please select students from the dropdowns.');
+            console.log('All submissions already matched. Preparing alignment...');
+            await prepareAlignment();
             return;
         }
+
+        alert('No new matches to confirm. Please select students from the dropdowns.');
+        return;
     }
 
     // Show confirmation dialog with warnings if any
@@ -305,37 +273,12 @@ async function confirmAllMatches() {
         // Reload data to reflect changes
         await loadNameMatching();
 
-        // Check if all submissions are matched, then set status to 'ready'
+        // Check if all submissions are matched, then move to alignment
         const unmatchedCount = allSubmissions.filter(s => !s.is_matched).length;
 
         if (unmatchedCount === 0) {
-            // All matched - update session status to 'ready'
-            console.log(`All ${allSubmissions.length} submissions matched. Updating status to 'ready'...`);
-            const statusResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}/status`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: 'ready' })
-            });
-
-            if (!statusResponse.ok) {
-                let errorMessage = `HTTP ${statusResponse.status}`;
-                try {
-                    const errorData = await statusResponse.json();
-                    errorMessage = errorData.detail || JSON.stringify(errorData);
-                } catch (e) {
-                    errorMessage = statusResponse.statusText || errorMessage;
-                }
-                throw new Error(`Failed to update status: ${errorMessage}`);
-            }
-
-            console.log('Status successfully updated to ready');
-
-            // Reload session and navigate
-            const response = await fetch(`${API_BASE}/sessions/${currentSession.id}`);
-            currentSession = await response.json();
-            console.log(`Session reloaded. Current status: ${currentSession.status}`);
-            updateSessionInfo();
-            navigateToSection('grading-section');
+            console.log(`All ${allSubmissions.length} submissions matched. Preparing alignment...`);
+            await prepareAlignment();
         } else {
             // Some submissions still unmatched
             console.log(`${unmatchedCount} submissions still need matching`);
@@ -389,12 +332,10 @@ async function matchSubmission(submissionId) {
         // Reload data to reflect changes
         await loadNameMatching();
 
-        // If all matched, navigate to grading
+        // If all matched, move to alignment
         if (result.remaining_unmatched === 0) {
-            setTimeout(() => {
-                currentSession.status = 'ready';
-                updateSessionInfo();
-                navigateToSection('grading-section');
+            setTimeout(async () => {
+                await prepareAlignment();
             }, 1500);
         }
 

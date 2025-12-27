@@ -542,8 +542,11 @@ async def get_default_feedback(
 ):
   """Get default feedback for a specific problem number (requires session access)"""
   metadata_repo = ProblemMetadataRepository()
-  feedback, threshold = metadata_repo.get_default_feedback(
-    session_id, problem_number)
+  result = metadata_repo.get_default_feedback(session_id, problem_number)
+  if result:
+    feedback, threshold = result
+  else:
+    feedback, threshold = None, None
 
   return {
     "default_feedback": feedback,

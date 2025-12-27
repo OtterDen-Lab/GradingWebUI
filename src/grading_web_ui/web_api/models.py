@@ -182,6 +182,7 @@ class UploadResponse(BaseModel):
   composites: Optional[dict] = None  # page_num -> base64 image
   page_dimensions: Optional[dict] = None  # page_num -> {width, height}
   num_exams: Optional[int] = None
+  auto_processed: Optional[bool] = None
 
 
 # Authentication Models

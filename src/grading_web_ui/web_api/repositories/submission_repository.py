@@ -253,6 +253,12 @@ class SubmissionRepository(BaseRepository[Submission]):
         (session_id, file_hash)
       )
 
+  def get_by_file_hash(self, session_id: int, file_hash: str) -> Optional[Submission]:
+    """
+    Get submission by file hash within a session.
+    """
+    return self.check_duplicate_hash(session_id, file_hash)
+
   def get_existing_hashes(self, session_id: int) -> Dict[str, str]:
     """
     Get all file hashes for submissions in session.
@@ -335,6 +341,20 @@ class SubmissionRepository(BaseRepository[Submission]):
         SET canvas_user_id = ?, student_name = ?
         WHERE id = ?
       """, (canvas_user_id, student_name, submission_id))
+
+  def update_processing_data(self, submission_id: int,
+                             page_mappings: List[int],
+                             exam_pdf_data: Optional[str]) -> None:
+    """
+    Update submission with processing data after splitting.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        UPDATE submissions
+        SET page_mappings = ?, exam_pdf_data = ?
+        WHERE id = ?
+      """, (json.dumps(page_mappings), exam_pdf_data, submission_id))
 
   def clear_match(self, submission_id: int) -> None:
     """

@@ -1017,17 +1017,9 @@ async function uploadFiles() {
         const result = await response.json();
         console.log('Upload response:', result);
 
-        // Check if we need to show alignment interface
-        // Only show if awaiting alignment AND not auto-processed
-        if (result.status === 'awaiting_alignment' && result.composites && !result.auto_processed) {
-            console.log('Showing alignment interface with', Object.keys(result.composites).length, 'pages');
-            showAlignmentInterface(result.composites, result.page_dimensions, result.num_exams);
-        } else {
-            console.log('Not showing alignment interface. Status:', result.status, 'Has composites:', !!result.composites, 'Auto-processed:', result.auto_processed);
-            // Connect to SSE stream for processing updates
-            listenForStatusUpdates();
-            document.getElementById('upload-status').textContent = result.message;
-        }
+        // Connect to SSE stream for processing updates
+        listenForStatusUpdates();
+        document.getElementById('upload-status').textContent = result.message;
 
     } catch (error) {
         console.error('Upload failed:', error);
@@ -1117,6 +1109,11 @@ function listenForStatusUpdates() {
         currentSession = await response.json();
         updateSessionInfo();
 
+        if (currentSession.status === 'awaiting_alignment' && currentSession.mock_roster) {
+            await prepareAlignment();
+            return;
+        }
+
         // Show final message for 2 seconds before navigating
         setTimeout(() => {
             navigateToSection(getNextSectionForStatus(currentSession.status));
@@ -1132,6 +1129,37 @@ function listenForStatusUpdates() {
             statusDiv.textContent = 'Connection error - please refresh';
         }
     });
+}
+
+async function prepareAlignment() {
+    if (!currentSession) return;
+
+    try {
+        navigateToSection('upload-section');
+        const response = await fetch(`${API_BASE}/uploads/${currentSession.id}/prepare-alignment`, {
+            method: 'POST'
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to prepare alignment');
+        }
+
+        const sessionResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}`);
+        currentSession = await sessionResponse.json();
+        updateSessionInfo();
+
+        if (result.composites) {
+            console.log('Showing alignment interface with', Object.keys(result.composites).length, 'pages');
+            showAlignmentInterface(result.composites, result.page_dimensions, result.num_exams);
+        } else {
+            listenForStatusUpdates();
+            document.getElementById('upload-status').textContent = result.message;
+        }
+    } catch (error) {
+        console.error('Failed to prepare alignment:', error);
+        alert(`Failed to prepare alignment: ${error.message}`);
+    }
 }
 
 // Show alignment interface for manual split point selection

@@ -566,6 +566,19 @@ class ProblemRepository(BaseRepository[Problem]):
       cursor.execute("DELETE FROM problems WHERE session_id = ?", (session_id,))
       return cursor.rowcount
 
+  def get_submission_ids_with_problems(self, session_id: int) -> set:
+    """
+    Get set of submission IDs that already have problems.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        SELECT DISTINCT submission_id
+        FROM problems
+        WHERE session_id = ?
+      """, (session_id,))
+      return {row["submission_id"] for row in cursor.fetchall()}
+
   def get_distinct_problem_numbers(self, session_id: int) -> List[int]:
     """
     Get list of all problem numbers in session.

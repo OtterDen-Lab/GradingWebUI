@@ -3,7 +3,7 @@ File upload and processing endpoints.
 """
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
-from typing import List, Dict
+from typing import List, Dict, Optional
 from pydantic import BaseModel
 import tempfile
 import zipfile
@@ -26,7 +26,7 @@ import logging
 import asyncio
 from ..services.exam_processor import ExamProcessor
 from grading_web_ui.lms_interface.canvas_interface import CanvasInterface
-from ..repositories import SessionRepository, SubmissionRepository, ProblemMetadataRepository
+from ..repositories import SessionRepository, SubmissionRepository, ProblemMetadataRepository, ProblemRepository
 from ..domain.common import SessionStatus
 
 router = APIRouter()
@@ -73,14 +73,14 @@ async def upload_progress_stream(
 @router.post("/{session_id}/upload", response_model=UploadResponse)
 async def upload_exams(
   session_id: int,
+  background_tasks: BackgroundTasks,
   files: List[UploadFile] = File(...),
   current_user: dict = Depends(require_instructor)
 ):
   """
     Upload exam PDFs or a zip file containing exams (instructor only).
-    Returns composites for manual alignment before processing.
+    Starts name extraction before alignment.
     """
-  from ..services.manual_alignment import ManualAlignmentService
 
   # Verify session exists
   session_repo = SessionRepository()
@@ -240,7 +240,11 @@ async def upload_exams(
 
   # Update session with file metadata and status
   session_repo.update_metadata(session_id, session_data)
-  session_repo.update_status(session_id, SessionStatus.AWAITING_ALIGNMENT, "Uploaded. Please align split points.")
+  session_repo.update_status(
+    session_id,
+    SessionStatus.PREPROCESSING,
+    "Uploaded. Extracting names..."
+  )
 
   # Also update total_exams count
   session = session_repo.get_by_id(session_id)
@@ -262,14 +266,11 @@ async def upload_exams(
       for k, v in session_data["file_metadata"].items()
     }
 
-    # Start background processing with existing split points
+    # Start background name extraction (no splitting yet)
     from fastapi import BackgroundTasks
     background_tasks = BackgroundTasks()
-    background_tasks.add_task(process_exam_files, session_id, file_paths,
+    background_tasks.add_task(process_exam_names, session_id, file_paths,
                               file_metadata_dict, stream_id,
-                              session_data["split_points"],
-                              session_data.get("skip_first_region", True),
-                              session_data.get("last_page_blank", False),
                               session_data.get("ai_provider", "anthropic"))
 
     # Execute background tasks (they run after response is sent)
@@ -281,39 +282,138 @@ async def upload_exams(
       "files_uploaded": len(saved_files),
       "status": "processing",
       "message":
-      f"Uploaded {len(saved_files)} exam(s). Auto-processing with existing split points.",
+      f"Uploaded {len(saved_files)} exam(s). Extracting names...",
       "num_exams": total_files,
       "auto_processed": True
     }
 
-  # Otherwise, generate composite images for alignment UI (first upload only)
-  all_file_paths = [Path(p) for p in session_data["file_paths"]]
-  alignment_service = ManualAlignmentService()
-  composites, composite_dimensions = alignment_service.create_composite_images(
-    all_file_paths)
-
-  # Convert composite dimensions to dict with string keys for JSON serialization
-  page_dimensions = {}
-  for page_num, (width, height) in composite_dimensions.items():
-    page_dimensions[page_num] = {"width": width, "height": height}
-
-  # Store composite dimensions in session metadata for later use during processing
-  session_data["composite_dimensions"] = {
-    str(k): list(v)
-    for k, v in composite_dimensions.items()
+  # Start background name extraction (no splitting yet)
+  file_paths = [Path(p) for p in session_data["file_paths"]]
+  file_metadata_dict = {
+    Path(k): v
+    for k, v in session_data["file_metadata"].items()
   }
 
-  session_repo.update_metadata(session_id, session_data)
+  stream_id = sse.make_stream_id("upload", session_id)
+  if not sse.get_stream(stream_id):
+    sse.create_stream(stream_id)
+
+  background_tasks.add_task(
+    process_exam_names,
+    session_id,
+    file_paths,
+    file_metadata_dict,
+    stream_id,
+    session_data.get("ai_provider", "anthropic")
+  )
 
   return {
     "session_id": session_id,
     "files_uploaded": len(saved_files),
-    "status": "awaiting_alignment",
+    "status": "processing",
     "message":
-    f"Uploaded {len(saved_files)} exam(s). Total: {total_files} exam(s). Please set split points.",
+    f"Uploaded {len(saved_files)} exam(s). Total: {total_files} exam(s). Extracting names...",
+    "num_exams": total_files,
+    "auto_processed": False
+  }
+
+
+@router.post("/{session_id}/prepare-alignment", response_model=UploadResponse)
+async def prepare_alignment(
+  session_id: int,
+  background_tasks: BackgroundTasks,
+  current_user: dict = Depends(require_instructor)
+):
+  """
+    Prepare the alignment step after name matching.
+    Returns composites for manual alignment or starts auto-processing if split points exist.
+    """
+  from ..services.manual_alignment import ManualAlignmentService
+
+  session_repo = SessionRepository()
+  session = session_repo.get_by_id(session_id)
+  if not session:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  session_data = session_repo.get_metadata(session_id)
+  if not session_data or "file_paths" not in session_data:
+    raise HTTPException(status_code=400, detail="No uploaded files found for this session")
+
+  mock_roster = bool(session_data.get("mock_roster"))
+  if not mock_roster:
+    submission_repo = SubmissionRepository()
+    if submission_repo.count_unmatched(session_id) > 0:
+      raise HTTPException(status_code=400,
+                          detail="Name matching is incomplete. Match all submissions before alignment.")
+
+  file_paths = [Path(p) for p in session_data["file_paths"]]
+  file_metadata = {
+    Path(k): v
+    for k, v in session_data["file_metadata"].items()
+  }
+
+  split_points = session_data.get("split_points")
+  if split_points:
+    split_points = {int(k): v for k, v in split_points.items()}
+    session_data["split_points"] = split_points
+    session_repo.update_metadata(session_id, session_data)
+  has_existing_split_points = bool(split_points)
+
+  if has_existing_split_points:
+    stream_id = sse.make_stream_id("upload", session_id)
+    sse.create_stream(stream_id)
+
+    background_tasks.add_task(
+      process_exam_splits,
+      session_id,
+      file_paths,
+      file_metadata,
+      stream_id,
+      split_points,
+      session_data.get("skip_first_region", True),
+      session_data.get("last_page_blank", False),
+      session_data.get("ai_provider", "anthropic")
+    )
+
+    session.status = SessionStatus.PREPROCESSING
+    session.processed_exams = 0
+    session.processing_message = "Processing with saved split points..."
+    session_repo.update(session)
+
+    return {
+      "session_id": session_id,
+      "files_uploaded": len(file_paths),
+      "status": "processing",
+      "message": "Processing exams with saved split points...",
+      "num_exams": session.total_exams,
+      "auto_processed": True
+    }
+
+  alignment_service = ManualAlignmentService()
+  composites, dimensions = alignment_service.create_composite_images(file_paths)
+
+  composite_dimensions = {
+    str(page_num): [dims[0], dims[1]]
+    for page_num, dims in dimensions.items()
+  }
+  session_data["composite_dimensions"] = composite_dimensions
+  session_repo.update_metadata(session_id, session_data)
+  session_repo.update_status(session_id, SessionStatus.AWAITING_ALIGNMENT,
+                             "Alignment ready. Please select split points.")
+
+  page_dimensions = {
+    page_num: {"width": dims[0], "height": dims[1]}
+    for page_num, dims in dimensions.items()
+  }
+
+  return {
+    "session_id": session_id,
+    "files_uploaded": len(file_paths),
+    "status": "awaiting_alignment",
+    "message": "Alignment ready. Please select split points.",
     "composites": composites,
     "page_dimensions": page_dimensions,
-    "num_exams": total_files,
+    "num_exams": session.total_exams,
     "auto_processed": False
   }
 
@@ -386,7 +486,7 @@ async def submit_alignment(
 
   # Start background processing with manual split points
   background_tasks.add_task(
-    process_exam_files,
+    process_exam_splits,
     session_id,
     file_paths,
     file_metadata,
@@ -401,7 +501,6 @@ async def submit_alignment(
   session = session_repo.get_by_id(session_id)
   session.status = SessionStatus.PREPROCESSING
   session.processed_exams = 0
-  session.matched_exams = 0
   session.processing_message = 'Processing with manual split points...'
   session_repo.update(session)
 
@@ -711,3 +810,347 @@ async def process_exam_files(
     # Update session to error state
     error_repo = SessionRepository()
     error_repo.update_status(session_id, SessionStatus.ERROR, f"Processing failed: {str(e)}")
+
+
+async def process_exam_names(
+  session_id: int,
+  file_paths: List[Path],
+  file_metadata: Dict[Path, Dict],
+  stream_id: str,
+  ai_provider: str = "anthropic"
+):
+  """
+    Background task to extract name images and optional AI names (no splitting).
+  """
+  log = logging.getLogger(__name__)
+  log.info(f"Extracting names for {len(file_paths)} files in session {session_id}")
+
+  try:
+    session_repo = SessionRepository()
+    session = session_repo.get_by_id(session_id)
+    if not session:
+      log.error(f"Session {session_id} not found")
+      return
+
+    mock_roster = bool(session.metadata and session.metadata.get("mock_roster"))
+    ai_name_extraction = True
+    if session.metadata and "ai_name_extraction" in session.metadata:
+      ai_name_extraction = bool(session.metadata.get("ai_name_extraction"))
+
+    canvas_students = []
+    if not mock_roster:
+      canvas_interface = CanvasInterface(prod=session.use_prod_canvas)
+      course = canvas_interface.get_course(session.course_id)
+      assignment = course.get_assignment(session.assignment_id)
+      students = assignment.get_students()
+      canvas_students = [{"name": s.name, "user_id": s.user_id} for s in students]
+
+    submission_repo = SubmissionRepository()
+    existing_hashes = submission_repo.get_existing_hashes(session_id)
+
+    # Filter out duplicate files
+    new_file_paths = []
+    for file_path in file_paths:
+      file_hash = file_metadata[file_path]["hash"]
+      if file_hash in existing_hashes:
+        log.info(
+          f"Skipping duplicate file: {file_path.name} (hash={file_hash[:8]}..., already processed)"
+        )
+      else:
+        new_file_paths.append(file_path)
+
+    if not new_file_paths:
+      log.info("No new files to process (all were duplicates)")
+      session_repo.update_status(
+        session_id,
+        SessionStatus.NAME_MATCHING_NEEDED if not mock_roster else SessionStatus.AWAITING_ALIGNMENT,
+        "All uploaded files were duplicates - no new exams added"
+      )
+      return
+
+    file_paths = new_file_paths
+    start_document_id = submission_repo.get_max_document_id(session_id) + 1
+    base_total = session.total_exams
+    base_processed = session.processed_exams
+    base_matched = session.matched_exams
+
+    main_loop = asyncio.get_event_loop()
+    total_steps = len(file_paths)
+    current_step = {"count": 0}
+
+    def update_progress(processed, matched, message):
+      total = base_total + len(file_paths)
+      processed_count = base_processed + processed
+      matched_count = base_matched + matched
+
+      current_step["count"] += 1
+      progress_repo = SessionRepository()
+      progress_session = progress_repo.get_by_id(session_id)
+      progress_session.total_exams = total
+      progress_session.processed_exams = processed_count
+      progress_session.matched_exams = matched_count
+      progress_session.processing_message = message
+      progress_repo.update(progress_session)
+
+      progress_percent = min(100,
+                             int((current_step["count"] / total_steps) * 100))
+
+      try:
+        asyncio.run_coroutine_threadsafe(
+          sse.send_event(
+            stream_id, "progress", {
+              "total": total,
+              "processed": processed_count,
+              "matched": matched_count,
+              "progress": progress_percent,
+              "current_step": current_step["count"],
+              "total_steps": total_steps,
+              "message": message
+            }), main_loop)
+      except Exception as e:
+        log.error(f"Failed to send SSE event: {e}")
+
+    processor = ExamProcessor(ai_provider=ai_provider)
+    submissions_to_create = []
+    matched_count = 0
+
+    for index, pdf_path in enumerate(file_paths):
+      document_id = index + start_document_id
+      update_progress(index, matched_count,
+                      f"Extracting name {index + 1}/{len(file_paths)}: {pdf_path.name}")
+
+      if mock_roster:
+        name_image = processor.extract_name_image(pdf_path)
+        student_index = base_total + index + 1
+        student_name = f"Student {student_index}"
+        approximate_name = student_name
+        canvas_user_id = -(student_index)
+        matched_count += 1
+      else:
+        if ai_name_extraction:
+          approximate_name, name_image = processor.extract_name(
+            pdf_path,
+            student_names=[s["name"] for s in canvas_students]
+          )
+        else:
+          name_image = processor.extract_name_image(pdf_path)
+          approximate_name = ""
+        student_name = None
+        canvas_user_id = None
+
+      submission = Submission(
+        id=0,
+        session_id=session_id,
+        document_id=document_id,
+        approximate_name=approximate_name,
+        name_image_data=name_image,
+        student_name=student_name,
+        display_name=None,
+        canvas_user_id=canvas_user_id,
+        page_mappings=[],
+        total_score=None,
+        graded_at=None,
+        file_hash=file_metadata[pdf_path]["hash"],
+        original_filename=file_metadata[pdf_path]["original_filename"],
+        exam_pdf_data=None
+      )
+      submissions_to_create.append(submission)
+
+    if submissions_to_create:
+      submission_repo.bulk_create(submissions_to_create)
+
+    next_status = SessionStatus.NAME_MATCHING_NEEDED
+    if mock_roster:
+      next_status = SessionStatus.AWAITING_ALIGNMENT
+    session_repo.update_status(session_id, next_status, "Name extraction complete")
+
+    await sse.send_event(
+      stream_id, "complete", {
+        "total": len(file_paths),
+        "matched": matched_count,
+        "unmatched": len(file_paths) - matched_count,
+        "message": f"Name extraction complete: {len(file_paths)} exams processed"
+      })
+
+  except Exception as e:
+    log.error(f"Error extracting names: {e}", exc_info=True)
+    await sse.send_event(stream_id, "error", {
+      "error": str(e),
+      "message": f"Name extraction failed: {str(e)}"
+    })
+    error_repo = SessionRepository()
+    error_repo.update_status(session_id, SessionStatus.ERROR, f"Name extraction failed: {str(e)}")
+
+
+async def process_exam_splits(
+  session_id: int,
+  file_paths: List[Path],
+  file_metadata: Dict[Path, Dict],
+  stream_id: str,
+  manual_split_points: Optional[Dict[int, List[int]]] = None,
+  skip_first_region: bool = True,
+  last_page_blank: bool = False,
+  ai_provider: str = "anthropic"
+):
+  """
+    Background task to split exams into problems after name matching.
+  """
+  log = logging.getLogger(__name__)
+  log.info(f"Splitting {len(file_paths)} files for session {session_id}")
+
+  try:
+    session_repo = SessionRepository()
+    session = session_repo.get_by_id(session_id)
+    if not session:
+      log.error(f"Session {session_id} not found")
+      return
+
+    submission_repo = SubmissionRepository()
+    problem_repo = ProblemRepository()
+    processed_submission_ids = problem_repo.get_submission_ids_with_problems(session_id)
+
+    file_paths_to_process = []
+    for file_path in file_paths:
+      file_hash = file_metadata[file_path]["hash"]
+      submission = submission_repo.get_by_file_hash(session_id, file_hash)
+      if not submission:
+        log.warning(f"No submission found for file {file_path.name}; skipping")
+        continue
+      if submission.id in processed_submission_ids:
+        log.info(f"Skipping already-processed submission {submission.id}")
+        continue
+      file_paths_to_process.append(file_path)
+
+    if not file_paths_to_process:
+      session_repo.update_status(session_id, SessionStatus.READY, "No new exams to split")
+      return
+
+    base_total = session.total_exams
+    base_processed = session.processed_exams
+    base_matched = session.matched_exams
+
+    main_loop = asyncio.get_event_loop()
+    total_steps = len(file_paths_to_process) * 5
+    current_step = {"count": 0}
+
+    def update_progress(processed, matched, message):
+      total = base_total
+      processed_count = base_processed + processed
+      matched_count = base_matched + matched
+
+      current_step["count"] += 1
+      progress_repo = SessionRepository()
+      progress_session = progress_repo.get_by_id(session_id)
+      progress_session.total_exams = total
+      progress_session.processed_exams = processed_count
+      progress_session.matched_exams = matched_count
+      progress_session.processing_message = message
+      progress_repo.update(progress_session)
+
+      progress_percent = min(100,
+                             int((current_step["count"] / total_steps) * 100))
+
+      try:
+        asyncio.run_coroutine_threadsafe(
+          sse.send_event(
+            stream_id, "progress", {
+              "total": total,
+              "processed": processed_count,
+              "matched": matched_count,
+              "progress": progress_percent,
+              "current_step": current_step["count"],
+              "total_steps": total_steps,
+              "message": message
+            }), main_loop)
+      except Exception as e:
+        log.error(f"Failed to send SSE event: {e}")
+
+    processor = ExamProcessor(ai_provider=ai_provider)
+    loop = asyncio.get_event_loop()
+    matched, unmatched = await loop.run_in_executor(
+      None,
+      lambda: processor.process_exams(
+        input_files=file_paths_to_process,
+        canvas_students=[],
+        progress_callback=update_progress,
+        document_id_offset=0,
+        file_metadata=file_metadata,
+        manual_split_points=manual_split_points,
+        skip_first_region=skip_first_region,
+        last_page_blank=last_page_blank,
+        skip_name_extraction=True,
+        mock_roster=False
+      ))
+
+    metadata_repo = ProblemMetadataRepository()
+    problem_max_points = metadata_repo.get_all_max_points(session_id)
+
+    with with_transaction() as repos:
+      all_submissions_data = matched + unmatched
+      all_problems = []
+      max_points_to_upsert = {}
+
+      for sub_dto in all_submissions_data:
+        if not sub_dto.file_hash:
+          continue
+        submission = repos.submissions.get_by_file_hash(session_id, sub_dto.file_hash)
+        if not submission:
+          continue
+        if submission.id in processed_submission_ids:
+          continue
+
+        repos.submissions.update_processing_data(
+          submission.id,
+          sub_dto.page_mappings,
+          sub_dto.pdf_data
+        )
+
+        for prob_dto in sub_dto.problems:
+          problem_number = prob_dto.problem_number
+          existing_max = repos.metadata.get_max_points(session_id, problem_number)
+          if existing_max is not None:
+            max_points = existing_max
+          else:
+            max_points = prob_dto.max_points
+            if max_points is not None:
+              max_points_to_upsert[problem_number] = max_points
+
+          problem = Problem(
+            id=0,
+            session_id=session_id,
+            submission_id=submission.id,
+            problem_number=problem_number,
+            graded=False,
+            is_blank=prob_dto.is_blank,
+            blank_confidence=prob_dto.blank_confidence,
+            blank_method=prob_dto.blank_method,
+            blank_reasoning=prob_dto.blank_reasoning,
+            max_points=max_points,
+            region_coords=prob_dto.region_coords,
+            qr_encrypted_data=prob_dto.qr_encrypted_data
+          )
+          all_problems.append(problem)
+
+      if all_problems:
+        repos.problems.bulk_create(all_problems)
+      for problem_num, max_pts in max_points_to_upsert.items():
+        repos.metadata.upsert_max_points(session_id, problem_num, max_pts)
+
+      repos.sessions.update_status(session_id, SessionStatus.READY)
+
+    await sse.send_event(
+      stream_id, "complete", {
+        "total": len(file_paths_to_process),
+        "matched": len(file_paths_to_process),
+        "unmatched": 0,
+        "message": "Splitting complete"
+      })
+
+  except Exception as e:
+    log.error(f"Error splitting exams: {e}", exc_info=True)
+    await sse.send_event(stream_id, "error", {
+      "error": str(e),
+      "message": f"Splitting failed: {str(e)}"
+    })
+    error_repo = SessionRepository()
+    error_repo.update_status(session_id, SessionStatus.ERROR, f"Splitting failed: {str(e)}")
