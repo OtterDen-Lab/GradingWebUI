@@ -19,8 +19,11 @@ log = logging.getLogger(__name__)
 try:
   from pyzbar import pyzbar
   PYZBAR_AVAILABLE = True
-except ImportError:
-  log.warning("pyzbar not installed - QR code scanning will not be available")
+except Exception as exc:
+  log.warning(
+    "pyzbar/zbar not available - QR code scanning will not be available (%s)",
+    exc
+  )
   PYZBAR_AVAILABLE = False
 
 
@@ -31,7 +34,7 @@ class QRScanner:
     """Initialize QR scanner."""
     self.available = PYZBAR_AVAILABLE
     if not PYZBAR_AVAILABLE:
-      log.warning("QR scanner unavailable: pyzbar not installed")
+      log.warning("QR scanner unavailable: pyzbar/zbar not available")
 
   def _preprocess_image_for_qr(self, image: Image.Image) -> List[Image.Image]:
     """
