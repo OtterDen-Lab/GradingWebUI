@@ -25,6 +25,7 @@ from ..domain.problem import Problem
 import logging
 import asyncio
 from ..services.exam_processor import ExamProcessor
+from ..services.qr_scanner import QRScanner
 from grading_web_ui.lms_interface.canvas_interface import CanvasInterface
 from ..repositories import SessionRepository, SubmissionRepository, ProblemMetadataRepository, ProblemRepository
 from ..domain.common import SessionStatus
@@ -389,8 +390,20 @@ async def prepare_alignment(
       "auto_processed": True
     }
 
+  qr_positions_by_file = None
+  qr_scanner = QRScanner()
+  if qr_scanner.available:
+    qr_positions_by_file = {}
+    for pdf_path in file_paths:
+      qr_positions_by_file[pdf_path] = qr_scanner.scan_qr_positions_from_pdf(
+        pdf_path
+      )
+
   alignment_service = ManualAlignmentService()
-  composites, dimensions = alignment_service.create_composite_images(file_paths)
+  composites, dimensions = alignment_service.create_composite_images(
+    file_paths,
+    qr_positions_by_file=qr_positions_by_file
+  )
 
   composite_dimensions = {
     str(page_num): [dims[0], dims[1]]

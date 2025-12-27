@@ -2,6 +2,7 @@
 Manual alignment service - creates composite images and handles user-defined split points
 """
 from typing import List, Dict, Optional
+import math
 from pathlib import Path
 import logging
 import base64
@@ -20,7 +21,9 @@ class ManualAlignmentService:
       self,
       input_files: List[Path],
       output_dir: Optional[Path] = None,
-      alpha: float = 0.3) -> tuple[Dict[int, str], Dict[int, tuple[int, int]]]:
+      alpha: float = 0.3,
+      qr_positions_by_file: Optional[Dict[Path, Dict[int, List[Dict]]]] = None
+  ) -> tuple[Dict[int, str], Dict[int, tuple[int, int]]]:
     """
         Create composite overlay images for each page number across all exams.
 
@@ -67,7 +70,7 @@ class ManualAlignmentService:
     for page_num in range(max_pages):
       log.info(f"Creating composite for page {page_num + 1}/{max_pages}")
 
-      page_images = []
+      page_entries = []
 
       # Collect all images for this page number
       for pdf_path in input_files:
@@ -88,6 +91,8 @@ class ManualAlignmentService:
             if img.mode != 'RGB':
               img = img.convert('RGB')
 
+            original_size = img.size
+
             # Resize to target dimensions if different
             if target_dimensions and img.size != target_dimensions:
               log.debug(
@@ -95,7 +100,47 @@ class ManualAlignmentService:
               )
               img = img.resize(target_dimensions, Image.Resampling.LANCZOS)
 
-            page_images.append(img)
+            anchor = None
+            if qr_positions_by_file:
+              page_positions = qr_positions_by_file.get(pdf_path, {}).get(
+                page_num, [])
+              if page_positions:
+                width_scale = 1.0
+                height_scale = 1.0
+                if target_dimensions and original_size[0] and original_size[1]:
+                  width_scale = target_dimensions[0] / original_size[0]
+                  height_scale = target_dimensions[1] / original_size[1]
+
+                anchor_pos = None
+                candidates = [pos for pos in page_positions
+                              if pos.get("question_number") is not None]
+                if candidates:
+                  anchor_pos = max(
+                    candidates,
+                    key=lambda pos: pos.get("question_number", 0)
+                  )
+                else:
+                  anchor_pos = max(page_positions, key=lambda pos: (
+                    pos.get("y", 0), pos.get("x", 0)
+                  ))
+
+                x_pos = anchor_pos.get("x")
+                y_pos = anchor_pos.get("y")
+                width_pos = anchor_pos.get("width")
+                height_pos = anchor_pos.get("height")
+                if x_pos is not None and y_pos is not None:
+                  if width_pos is not None and height_pos is not None:
+                    y_anchor = (y_pos + height_pos) * height_scale
+                    x_anchor = (x_pos + width_pos) * width_scale
+                  else:
+                    y_anchor = y_pos * height_scale
+                    x_anchor = x_pos * width_scale
+                  anchor = (y_anchor, x_anchor)
+
+            page_entries.append({
+              "image": img,
+              "anchor": anchor
+            })
 
           doc.close()
         except Exception as e:
@@ -103,12 +148,50 @@ class ManualAlignmentService:
             f"Failed to process page {page_num} from {pdf_path.name}: {e}")
           continue
 
-      if not page_images:
+      if not page_entries:
         log.warning(f"No images found for page {page_num}")
         continue
 
+      base_width, base_height = page_entries[0]["image"].size
+      offsets = []
+      if any(entry["anchor"] for entry in page_entries):
+        anchors = [entry["anchor"] for entry in page_entries if entry["anchor"]]
+        ref_anchor = max(anchors)
+        shifts = []
+        for entry in page_entries:
+          if entry["anchor"]:
+            dy = ref_anchor[0] - entry["anchor"][0]
+            dx = ref_anchor[1] - entry["anchor"][1]
+          else:
+            dy = 0
+            dx = 0
+          shifts.append((dx, dy))
+
+        min_dx = min(dx for dx, _ in shifts)
+        min_dy = min(dy for _, dy in shifts)
+        max_dx = max(dx for dx, _ in shifts)
+        max_dy = max(dy for _, dy in shifts)
+
+        output_width = int(math.ceil(base_width + (max_dx - min_dx)))
+        output_height = int(math.ceil(base_height + (max_dy - min_dy)))
+        output_size = (max(output_width, base_width),
+                       max(output_height, base_height))
+
+        offsets = [
+          (int(math.floor(dx - min_dx)), int(math.floor(dy - min_dy)))
+          for dx, dy in shifts
+        ]
+      else:
+        output_size = (base_width, base_height)
+        offsets = [(0, 0) for _ in page_entries]
+
       # Create composite by averaging all images
-      composite = self._create_overlay_composite(page_images, alpha)
+      composite = self._create_overlay_composite(
+        [entry["image"] for entry in page_entries],
+        alpha,
+        offsets=offsets,
+        output_size=output_size
+      )
 
       # Record dimensions (width, height) of this composite
       dimensions[page_num] = composite.size
@@ -174,7 +257,9 @@ class ManualAlignmentService:
 
   def _create_overlay_composite(self,
                                 images: List[Image.Image],
-                                alpha: float = 0.3) -> Image.Image:
+                                alpha: float = 0.3,
+                                offsets: Optional[List[tuple]] = None,
+                                output_size: Optional[tuple] = None) -> Image.Image:
     """
         Create a composite image by overlaying multiple images with brightness-based transparency.
 
@@ -193,6 +278,10 @@ class ManualAlignmentService:
 
     # Get dimensions from first image (assume all are same size)
     width, height = images[0].size
+    if offsets is None:
+      offsets = [(0, 0) for _ in images]
+    if output_size is None:
+      output_size = (width, height)
 
     # Resize all images to match first image size (handle any size variations)
     resized_images = []
@@ -206,19 +295,29 @@ class ManualAlignmentService:
     arrays = [np.array(img, dtype=np.float32) for img in resized_images]
 
     # Initialize composite with white background
-    composite_array = np.ones_like(arrays[0], dtype=np.float32) * 255
+    composite_array = np.ones(
+      (output_size[1], output_size[0], 3), dtype=np.float32) * 255
 
     # Brightness-based alpha blending
-    for arr in arrays:
-      # Calculate brightness for each pixel (average across RGB channels)
-      # Shape: (height, width)
-      brightness = np.mean(arr, axis=2, keepdims=True)
+    for arr, offset in zip(arrays, offsets):
+      offset_x, offset_y = offset
+      offset_x = max(0, int(offset_x))
+      offset_y = max(0, int(offset_y))
+      height, width = arr.shape[:2]
 
-      # Calculate per-pixel alpha based on darkness
-      # Brightness range: 0 (black) to 255 (white)
-      # We want: dark pixels (< 25) -> alpha ≈ 1.0 (fully opaque)
-      #          medium pixels (25-230) -> alpha decreases from 1.0 to 0.05
-      #          light pixels (> 230) -> alpha ≈ 0.05 (very transparent)
+      x_end = min(offset_x + width, composite_array.shape[1])
+      y_end = min(offset_y + height, composite_array.shape[0])
+      region_width = x_end - offset_x
+      region_height = y_end - offset_y
+
+      if region_width <= 0 or region_height <= 0:
+        continue
+
+      arr_region = arr[:region_height, :region_width]
+      comp_region = composite_array[offset_y:y_end, offset_x:x_end]
+
+      # Calculate brightness for each pixel (average across RGB channels)
+      brightness = np.mean(arr_region, axis=2, keepdims=True)
 
       # Normalize brightness to 0-1 range
       normalized_brightness = brightness / 255.0
@@ -241,8 +340,8 @@ class ManualAlignmentService:
                  (light_threshold - darkness_threshold)) * 0.95))
 
       # Apply alpha blending with per-pixel alpha
-      # composite = composite * (1 - pixel_alpha) + arr * pixel_alpha
-      composite_array = composite_array * (1 - pixel_alpha) + arr * pixel_alpha
+      composite_array[offset_y:y_end, offset_x:x_end] = (
+        comp_region * (1 - pixel_alpha) + arr_region * pixel_alpha)
 
     # Clip values to valid range and convert back to uint8
     composite_array = np.clip(composite_array, 0, 255).astype(np.uint8)

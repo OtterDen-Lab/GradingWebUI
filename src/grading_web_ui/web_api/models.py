@@ -183,6 +183,7 @@ class UploadResponse(BaseModel):
   page_dimensions: Optional[dict] = None  # page_num -> {width, height}
   num_exams: Optional[int] = None
   auto_processed: Optional[bool] = None
+  suggested_split_points: Optional[dict] = None  # page_num -> list of y positions
 
 
 # Authentication Models

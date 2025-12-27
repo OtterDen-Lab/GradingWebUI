@@ -1151,7 +1151,7 @@ async function prepareAlignment() {
 
         if (result.composites) {
             console.log('Showing alignment interface with', Object.keys(result.composites).length, 'pages');
-            showAlignmentInterface(result.composites, result.page_dimensions, result.num_exams);
+            showAlignmentInterface(result.composites, result.page_dimensions, result.num_exams, result.suggested_split_points);
         } else {
             listenForStatusUpdates();
             document.getElementById('upload-status').textContent = result.message;
@@ -1166,13 +1166,18 @@ async function prepareAlignment() {
 let splitPoints = {};
 let compositeData = null;
 
-function showAlignmentInterface(composites, pageDimensions, numExams) {
+function showAlignmentInterface(composites, pageDimensions, numExams, suggestedSplitPoints = null) {
     compositeData = {
         composites: composites,
         page_dimensions: pageDimensions,
         num_exams: numExams
     };
     splitPoints = {};
+    if (suggestedSplitPoints) {
+        Object.entries(suggestedSplitPoints).forEach(([pageNum, points]) => {
+            splitPoints[parseInt(pageNum, 10)] = points.map(y => Math.round(y));
+        });
+    }
 
     // Hide upload area, show alignment interface
     document.getElementById('upload-area').style.display = 'none';
@@ -1423,6 +1428,10 @@ function createAlignmentPageSection(pageNum, imageBase64) {
         canvas.height = img.height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
+
+        if (splitPoints[pageNum]) {
+            updateSplitLines(pageNum, canvasContainer, canvas);
+        }
     };
     img.src = `data:image/png;base64,${imageBase64}`;
 

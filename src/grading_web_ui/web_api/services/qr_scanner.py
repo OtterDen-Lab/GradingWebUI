@@ -10,6 +10,7 @@ import base64
 import json
 import logging
 from typing import Optional, Dict, List
+from pathlib import Path
 from PIL import Image
 import io
 
@@ -220,6 +221,103 @@ class QRScanner:
     except Exception as e:
       log.error(f"Error scanning QR from PDF region: {e}", exc_info=True)
       return None
+
+  def scan_qr_positions_from_pdf(self, pdf_path: Path,
+                                 dpi_steps: Optional[List[int]] = None) -> Dict[int, List[Dict]]:
+    """
+        Scan QR codes from each page in a PDF and return their positions.
+
+        Args:
+        pdf_path: Path to PDF file
+        dpi_steps: List of DPIs to try in order (e.g., [150, 300, 600])
+
+        Returns:
+            Dict mapping page_number -> list of QR info dicts:
+            {
+              "question_number": int,
+              "max_points": float,
+              "x": int,
+              "y": int,
+              "width": int,
+              "height": int
+            }
+    """
+    if not self.available:
+      return {}
+
+    try:
+      import fitz  # PyMuPDF
+    except Exception as exc:
+      log.warning("PyMuPDF not available for QR position scan: %s", exc)
+      return {}
+
+    results: Dict[int, List[Dict]] = {}
+
+    if dpi_steps is None:
+      dpi_steps = [150, 300, 600, 900]
+
+    try:
+      pdf_document = fitz.open(str(pdf_path))
+      for page_number in range(pdf_document.page_count):
+        page = pdf_document[page_number]
+        page_results: List[Dict] = []
+
+        for dpi in dpi_steps:
+          pix = page.get_pixmap(dpi=dpi)
+          img_bytes = pix.tobytes("png")
+          image = Image.open(io.BytesIO(img_bytes))
+          if image.mode != 'RGB':
+            image = image.convert('RGB')
+
+          qr_codes = pyzbar.decode(image)
+          if not qr_codes:
+            continue
+
+          log.debug(
+            "QR scan: %s page %s detected %s code(s) at %sdpi",
+            pdf_path.name,
+            page_number,
+            len(qr_codes),
+            dpi
+          )
+
+          for qr in qr_codes:
+            try:
+              qr_data = qr.data.decode('utf-8')
+              qr_json = json.loads(qr_data)
+            except Exception:
+              continue
+
+            question_number = qr_json.get('q')
+            max_points = qr_json.get('pts')
+            if question_number is None or max_points is None:
+              continue
+
+            rect = qr.rect
+            scale = 150.0 / dpi
+            page_results.append({
+              "question_number": int(question_number),
+              "max_points": float(max_points),
+              "x": rect.left * scale,
+              "y": rect.top * scale,
+              "width": rect.width * scale,
+              "height": rect.height * scale
+            })
+
+          if page_results:
+            break
+
+        if page_results:
+          results[page_number] = page_results
+    except Exception as e:
+      log.error(f"Error scanning QR positions from PDF: {e}", exc_info=True)
+    finally:
+      try:
+        pdf_document.close()
+      except Exception:
+        pass
+
+    return results
 
   def scan_multiple_regions(self, pdf_base64: str,
                             regions: List[Dict]) -> Dict[int, Optional[Dict]]:
