@@ -3,6 +3,8 @@
 const API_BASE = '/api';
 let currentSession = null;
 let currentUser = null;
+let mockRosterEnabled = false;
+let sessionNameDirty = false;
 
 // Helper function to recursively get all files from dropped items (including directories)
 async function getAllFilesFromDataTransfer(dataTransferItems) {
@@ -206,11 +208,61 @@ function hideInstructorUI() {
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
-    await checkAuth();
-    loadSessions();
-    setupEventListeners();
-    initializeAIProvider();
+  await checkAuth();
+  await loadMockRosterConfig();
+  loadSessions();
+  setupEventListeners();
+  initializeAIProvider();
 });
+
+async function loadMockRosterConfig() {
+  const manualOption = document.getElementById('manual-source-option');
+  if (!manualOption) return;
+
+  try {
+    const response = await fetch(`${API_BASE}/sessions/mock-roster-enabled`);
+    const data = await response.json();
+    mockRosterEnabled = !!data.enabled;
+  } catch (error) {
+    console.warn('Failed to load mock roster config:', error);
+    mockRosterEnabled = false;
+  }
+
+  manualOption.style.display = mockRosterEnabled ? 'flex' : 'none';
+}
+
+function getSessionSource() {
+  const selected = document.querySelector('input[name="session-source"]:checked');
+  return selected ? selected.value : 'canvas';
+}
+
+function getNameHandling() {
+  const selected = document.querySelector('input[name="name-handling"]:checked');
+  return selected ? selected.value : 'ai';
+}
+
+function openNewSessionModal() {
+  const modal = document.getElementById('new-session-modal');
+  const form = document.getElementById('session-form');
+  const sessionNameInput = document.getElementById('session-name-input');
+  if (!modal || !form) return;
+
+  form.reset();
+  sessionNameDirty = false;
+  const defaultSource = mockRosterEnabled ? 'manual' : 'canvas';
+  document.querySelector(`input[name="session-source"][value="${defaultSource}"]`).checked = true;
+  document.querySelector('input[name="name-handling"][value="ai"]').checked = true;
+  applySessionSourceMode(defaultSource);
+
+  modal.style.display = 'flex';
+}
+
+function closeNewSessionModal() {
+  const modal = document.getElementById('new-session-modal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  sessionNameDirty = false;
+}
 
 // Initialize AI provider dropdown from localStorage
 function initializeAIProvider() {
@@ -271,7 +323,7 @@ async function loadSessions() {
                 <div class="session-item-content">
                     <div class="session-item-main">
                         <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
-                            <strong>${session.assignment_name}</strong>
+            <strong>${session.session_name || session.assignment_name}</strong>
                             ${statusBadge}
                         </div>
                         <div>${session.course_name || `Course ${session.course_id}`}</div>
@@ -303,19 +355,21 @@ async function selectSession(sessionId) {
 
 // Update session info in header
 function updateSessionInfo() {
-    const info = document.getElementById('session-info');
-    const homeBtn = document.getElementById('home-btn');
+  const info = document.getElementById('session-info');
+  const homeBtn = document.getElementById('home-btn');
 
-    if (currentSession) {
+  if (currentSession) {
+        const mockTag = currentSession.mock_roster ? '<span style="margin-left: 10px; color: #b45309;">Mock roster</span>' : '';
         info.innerHTML = `
-            ${currentSession.assignment_name} - ${currentSession.course_name || `Course ${currentSession.course_id}`}
-            <span style="margin-left: 20px;">Status: ${currentSession.status}</span>
-        `;
-        homeBtn.style.display = 'block';  // Show home button when session is active
-    } else {
-        info.innerHTML = '';
-        homeBtn.style.display = 'none';
-    }
+      ${currentSession.session_name || currentSession.assignment_name} - ${currentSession.course_name || `Course ${currentSession.course_id}`}
+      <span style="margin-left: 20px;">Status: ${currentSession.status}</span>
+      ${mockTag}
+    `;
+    homeBtn.style.display = 'block';  // Show home button when session is active
+  } else {
+    info.innerHTML = '';
+    homeBtn.style.display = 'none';
+  }
 }
 
 // Navigate to appropriate section based on status
@@ -344,39 +398,49 @@ function navigateToSection(sectionId) {
 
 // Setup event listeners
 function setupEventListeners() {
-    // Home button - go back to session selection
-    document.getElementById('home-btn').onclick = () => {
-        currentSession = null;
-        document.getElementById('session-info').innerHTML = '';
-        document.getElementById('home-btn').style.display = 'none';
-        navigateToSection('session-section');
-        loadSessions();
-    };
+  // Home button - go back to session selection
+  document.getElementById('home-btn').onclick = () => {
+    currentSession = null;
+    document.getElementById('session-info').innerHTML = '';
+    document.getElementById('home-btn').style.display = 'none';
+    navigateToSection('session-section');
+    loadSessions();
+  };
 
-    // New session button - toggle form
-    document.getElementById('new-session-btn').onclick = () => {
-        const form = document.getElementById('new-session-form');
-        const btn = document.getElementById('new-session-btn');
-        if (form.style.display === 'none') {
-            form.style.display = 'block';
-            btn.textContent = '− Hide Form';
-            const useProd = document.getElementById('canvas-env-new').value === 'true';
-            loadCourses(useProd); // Load courses when form is shown
-        } else {
-            form.style.display = 'none';
-            btn.textContent = '+ Create New Session';
-        }
-    };
+  // New session button - open modal
+  document.getElementById('new-session-btn').onclick = () => {
+    openNewSessionModal();
+  };
 
-    // Canvas environment change handler
-    document.getElementById('canvas-env-new').onchange = (e) => {
-        const useProd = e.target.value === 'true';
-        loadCourses(useProd);
-        // Clear assignment selection when environment changes
-        document.getElementById('assignment-select').innerHTML = '<option value="">Select a course first</option>';
-        document.getElementById('assignment-select').disabled = true;
-        document.getElementById('assignment-info').textContent = '';
-    };
+  // Canvas environment change handler
+  document.getElementById('canvas-env-new').onchange = (e) => {
+    if (getSessionSource() !== 'canvas') return;
+    const useProd = e.target.value === 'true';
+    loadCourses(useProd);
+    // Clear assignment selection when environment changes
+    document.getElementById('assignment-select').innerHTML = '<option value="">Select a course first</option>';
+    document.getElementById('assignment-select').disabled = true;
+    document.getElementById('assignment-info').textContent = '';
+  };
+
+  document.querySelectorAll('input[name="session-source"]').forEach((radio) => {
+    radio.addEventListener('change', (e) => {
+      applySessionSourceMode(e.target.value);
+    });
+  });
+
+  document.getElementById('new-session-modal').onclick = (e) => {
+    if (e.target.id === 'new-session-modal') {
+      closeNewSessionModal();
+    }
+  };
+
+  const sessionNameInput = document.getElementById('session-name-input');
+  if (sessionNameInput) {
+    sessionNameInput.addEventListener('input', () => {
+      sessionNameDirty = true;
+    });
+  }
 
     // Import session button
     document.getElementById('import-session-btn').onclick = () => {
@@ -429,16 +493,18 @@ function setupEventListeners() {
             return;
         }
 
-        const selectedOption = e.target.options[e.target.selectedIndex];
-        const courseName = selectedOption.textContent;
+    const selectedOption = e.target.options[e.target.selectedIndex];
+    const courseName = selectedOption.textContent;
 
         infoBox.textContent = `✓ Selected: ${courseName}`;
         infoBox.className = 'info-box success';
 
-        // Load assignments for this course
-        const useProd = document.getElementById('canvas-env-new').value === 'true';
-        await loadAssignments(parseInt(courseId), useProd);
-    };
+    // Load assignments for this course
+    const useProd = document.getElementById('canvas-env-new').value === 'true';
+    await loadAssignments(parseInt(courseId), useProd);
+
+    maybeSuggestSessionName();
+  };
 
     // Assignment selection handler
     document.getElementById('assignment-select').onchange = (e) => {
@@ -460,19 +526,19 @@ function setupEventListeners() {
             document.getElementById('canvas-points-input').value = points;
         }
 
-        infoBox.textContent = `✓ Selected: ${assignmentName} (${points || '?'} points)`;
-        infoBox.className = 'info-box success';
-    };
+    infoBox.textContent = `✓ Selected: ${assignmentName} (${points || '?'} points)`;
+    infoBox.className = 'info-box success';
+
+    maybeSuggestSessionName();
+  };
 
     // Session form submission
     document.getElementById('session-form').onsubmit = createNewSession;
 
-    // Cancel button
-    document.getElementById('cancel-session-btn').onclick = () => {
-        document.getElementById('new-session-form').style.display = 'none';
-        document.getElementById('new-session-btn').textContent = '+ Create New Session';
-        document.getElementById('session-form').reset();
-    };
+  // Cancel button
+  document.getElementById('cancel-session-btn').onclick = () => {
+    closeNewSessionModal();
+  };
 
     // Upload area
     const uploadArea = document.getElementById('upload-area');
@@ -801,53 +867,134 @@ async function loadAssignments(courseId, useProd = false) {
 
 // Create new session
 async function createNewSession(e) {
-    e.preventDefault();
+  e.preventDefault();
 
-    const courseSelect = document.getElementById('course-select');
-    const assignmentSelect = document.getElementById('assignment-select');
+  const courseSelect = document.getElementById('course-select');
+  const assignmentSelect = document.getElementById('assignment-select');
+  const sessionNameInput = document.getElementById('session-name-input');
+  const source = getSessionSource();
+  const useMockRoster = source === 'manual';
+  if (useMockRoster && !mockRosterEnabled) {
+    alert('Manual setup is disabled. Enable ALLOW_MOCK_ROSTER to use mock sessions.');
+    return;
+  }
 
-    const courseId = parseInt(courseSelect.value);
-    const assignmentId = parseInt(assignmentSelect.value);
+  let courseId = parseInt(courseSelect.value);
+  let assignmentId = parseInt(assignmentSelect.value);
+  let courseName = courseSelect.options[courseSelect.selectedIndex]?.textContent || '';
+  let assignmentName = assignmentSelect.options[assignmentSelect.selectedIndex]?.textContent || '';
+  let assignmentPoints = assignmentSelect.options[assignmentSelect.selectedIndex]?.dataset?.points;
+  const sessionName = sessionNameInput.value.trim();
 
-    // Get names from selected options
-    const courseName = courseSelect.options[courseSelect.selectedIndex].textContent;
-    const assignmentName = assignmentSelect.options[assignmentSelect.selectedIndex].textContent;
+  if (useMockRoster) {
+    courseId = 0;
+    assignmentId = 0;
+    courseName = 'Mock Course';
+    assignmentName = sessionName || 'Mock Session';
+    assignmentPoints = 100;
+  }
 
-    // Get points (either override or from assignment)
-    const pointsInput = document.getElementById('canvas-points-input').value;
-    const assignmentPoints = assignmentSelect.options[assignmentSelect.selectedIndex].dataset.points;
-    const canvasPoints = pointsInput ? parseFloat(pointsInput) : (assignmentPoints ? parseFloat(assignmentPoints) : null);
+  // Get points (either override or from assignment)
+  const pointsInput = document.getElementById('canvas-points-input').value;
+  const canvasPoints = pointsInput ? parseFloat(pointsInput) : (assignmentPoints ? parseFloat(assignmentPoints) : null);
 
-    // Get environment setting
-    const useProdCanvas = document.getElementById('canvas-env-new').value === 'true';
+  // Get environment setting
+  const useProdCanvas = document.getElementById('canvas-env-new').value === 'true';
+  const useAiNameExtraction = getNameHandling() === 'ai';
 
-    try {
-        const response = await fetch(`${API_BASE}/sessions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                course_id: courseId,
-                assignment_id: assignmentId,
-                assignment_name: assignmentName,
-                course_name: courseName,
-                canvas_points: canvasPoints,
-                use_prod_canvas: useProdCanvas
-            })
-        });
+  try {
+    const response = await fetch(`${API_BASE}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        course_id: courseId,
+        assignment_id: assignmentId,
+        assignment_name: assignmentName,
+        course_name: courseName,
+        session_name: sessionName || assignmentName,
+        canvas_points: canvasPoints,
+        use_prod_canvas: useProdCanvas,
+        use_mock_roster: useMockRoster,
+        use_ai_name_extraction: useAiNameExtraction
+      })
+    });
 
-        currentSession = await response.json();
-
-        // Hide form and reset
-        document.getElementById('new-session-form').style.display = 'none';
-        document.getElementById('new-session-btn').textContent = '+ Create New Session';
-        document.getElementById('session-form').reset();
-
-        updateSessionInfo();
-        navigateToSection('upload-section');
-    } catch (error) {
-        console.error('Failed to create session:', error);
-        alert('Failed to create session');
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to create session');
     }
+
+    currentSession = await response.json();
+
+    closeNewSessionModal();
+
+    updateSessionInfo();
+    navigateToSection('upload-section');
+  } catch (error) {
+    console.error('Failed to create session:', error);
+    alert(error.message || 'Failed to create session');
+  }
+}
+
+function applySessionSourceMode(mode) {
+  if (mode === 'manual' && !mockRosterEnabled) {
+    mode = 'canvas';
+    const canvasRadio = document.querySelector('input[name="session-source"][value="canvas"]');
+    if (canvasRadio) {
+      canvasRadio.checked = true;
+    }
+  }
+  const courseSelect = document.getElementById('course-select');
+  const assignmentSelect = document.getElementById('assignment-select');
+  const courseInfo = document.getElementById('course-info');
+  const assignmentInfo = document.getElementById('assignment-info');
+  const mockFields = document.getElementById('manual-session-fields');
+  const canvasFields = document.getElementById('canvas-session-fields');
+  const sessionNameInput = document.getElementById('session-name-input');
+  const overrides = document.getElementById('canvas-overrides');
+
+  const isManual = mode === 'manual';
+
+  if (mockFields) {
+    mockFields.style.display = isManual ? 'block' : 'none';
+  }
+  if (canvasFields) {
+    canvasFields.style.display = isManual ? 'none' : 'block';
+  }
+
+  courseSelect.required = !isManual;
+  assignmentSelect.required = !isManual;
+  sessionNameInput.required = true;
+
+  courseSelect.disabled = isManual;
+  assignmentSelect.disabled = isManual;
+
+  if (isManual) {
+    courseSelect.innerHTML = '<option value="">Manual setup selected</option>';
+    assignmentSelect.innerHTML = '<option value="">Manual setup selected</option>';
+    courseInfo.textContent = '';
+    assignmentInfo.textContent = '';
+    if (overrides) {
+      overrides.open = false;
+    }
+  } else {
+    const useProd = document.getElementById('canvas-env-new').value === 'true';
+    loadCourses(useProd);
+  }
+}
+
+function maybeSuggestSessionName() {
+  const sessionNameInput = document.getElementById('session-name-input');
+  if (!sessionNameInput || sessionNameDirty) return;
+
+  const courseSelect = document.getElementById('course-select');
+  const assignmentSelect = document.getElementById('assignment-select');
+  const courseName = courseSelect.options[courseSelect.selectedIndex]?.textContent || '';
+  const assignmentName = assignmentSelect.options[assignmentSelect.selectedIndex]?.textContent || '';
+
+  if (courseName && assignmentName && !assignmentName.startsWith('Select')) {
+    sessionNameInput.value = `${courseName} - ${assignmentName}`;
+  }
 }
 
 // Upload files

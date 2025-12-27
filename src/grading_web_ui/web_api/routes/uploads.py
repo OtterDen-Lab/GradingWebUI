@@ -197,7 +197,9 @@ async def upload_exams(
       "file_metadata": {
         str(k): v
         for k, v in existing_metadata.items()
-      }
+      },
+      "mock_roster": existing_data.get("mock_roster", False),
+      "ai_name_extraction": existing_data.get("ai_name_extraction", True)
     }
 
     # Preserve split points and other settings from previous upload
@@ -230,7 +232,9 @@ async def upload_exams(
       "file_metadata": {
         str(k): v
         for k, v in file_metadata.items()
-      }
+      },
+      "mock_roster": existing_data.get("mock_roster", False) if existing_data else False,
+      "ai_name_extraction": existing_data.get("ai_name_extraction", True) if existing_data else True
     }
     total_files = len(saved_files)
 
@@ -447,26 +451,39 @@ async def process_exam_files(
     course_id = session.course_id
     assignment_id = session.assignment_id
     use_prod = session.use_prod_canvas
+    mock_roster = bool(session.metadata and session.metadata.get("mock_roster"))
+    ai_name_extraction = True
+    if session.metadata and "ai_name_extraction" in session.metadata:
+      ai_name_extraction = bool(session.metadata.get("ai_name_extraction"))
 
-    # Get Canvas students
-    canvas_interface = CanvasInterface(prod=use_prod)
-    course = canvas_interface.get_course(course_id)
-    assignment = course.get_assignment(assignment_id)
-    students = assignment.get_students()
-
-    # Get students who already have submissions in this session
     submission_repo = SubmissionRepository()
     existing_user_ids = submission_repo.get_existing_canvas_users(session_id)
 
-    # Convert to simple dicts for processor, excluding students who already have submissions
-    canvas_students = [{
-      "name": s.name,
-      "user_id": s.user_id
-    } for s in students if s.user_id not in existing_user_ids]
+    if mock_roster:
+      start_index = len(existing_user_ids) + 1
+      canvas_students = [{
+        "name": f"Mock Student {start_index + i}",
+        "user_id": -(start_index + i)
+      } for i in range(len(file_paths))]
+      log.info(
+        f"Mock roster enabled: generated {len(canvas_students)} students"
+      )
+    else:
+      # Get Canvas students
+      canvas_interface = CanvasInterface(prod=use_prod)
+      course = canvas_interface.get_course(course_id)
+      assignment = course.get_assignment(assignment_id)
+      students = assignment.get_students()
 
-    log.info(
-      f"Found {len(students)} total students, {len(existing_user_ids)} already have submissions, {len(canvas_students)} available for matching"
-    )
+      # Convert to simple dicts for processor, excluding students who already have submissions
+      canvas_students = [{
+        "name": s.name,
+        "user_id": s.user_id
+      } for s in students if s.user_id not in existing_user_ids]
+
+      log.info(
+        f"Found {len(students)} total students, {len(existing_user_ids)} already have submissions, {len(canvas_students)} available for matching"
+      )
 
     # Check for duplicate files (same hash already processed)
     submission_repo = SubmissionRepository()
@@ -582,7 +599,9 @@ async def process_exam_files(
         file_metadata=file_metadata,
         manual_split_points=manual_split_points,  # Use manual alignment (now percentage-based)
         skip_first_region=skip_first_region,  # Skip first region (header/title)
-        last_page_blank=last_page_blank  # Skip last page if blank
+        last_page_blank=last_page_blank,  # Skip last page if blank
+        skip_name_extraction=not ai_name_extraction,
+        mock_roster=mock_roster
       ))
 
     with with_transaction() as repos:
@@ -658,10 +677,10 @@ async def process_exam_files(
         repos.metadata.upsert_max_points(session_id, problem_num, max_pts)
 
       # Step 6: Update session status
-      repos.sessions.update_status(
-        session_id,
-        SessionStatus.NAME_MATCHING_NEEDED
-      )
+      next_status = SessionStatus.NAME_MATCHING_NEEDED
+      if mock_roster:
+        next_status = SessionStatus.READY
+      repos.sessions.update_status(session_id, next_status)
 
     log.info(
       f"Completed processing for session {session_id}: {len(matched)} matched, {len(unmatched)} unmatched"

@@ -1036,6 +1036,10 @@ async function loadStatistics() {
 // Change Canvas Target button
 document.getElementById('change-canvas-target-btn').onclick = async () => {
     if (!currentSession) return;
+    if (currentSession.mock_roster) {
+        showNotification('Mock roster sessions cannot update Canvas targets.');
+        return;
+    }
 
     const dialog = document.getElementById('canvas-target-dialog');
     const envSelect = document.getElementById('canvas-env-select');
@@ -1303,6 +1307,10 @@ document.getElementById('rescan-problem-qr-btn').onclick = async () => {
 // Finalize and upload to Canvas
 document.getElementById('finalize-btn').onclick = async () => {
     if (!currentSession) return;
+    if (currentSession.mock_roster) {
+        showNotification('Mock roster sessions cannot be finalized to Canvas.');
+        return;
+    }
 
     // Check if all grading is complete
     try {

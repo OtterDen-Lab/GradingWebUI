@@ -88,7 +88,9 @@ class ExamProcessor:
       file_metadata: Optional[Dict[Path, Dict]] = None,
       manual_split_points: Optional[Dict[int, List[int]]] = None,
       skip_first_region: bool = True,
-      last_page_blank: bool = False
+      last_page_blank: bool = False,
+      skip_name_extraction: bool = False,
+      mock_roster: bool = False
   ) -> Tuple[List[SubmissionDTO], List[SubmissionDTO]]:
     """
         Process exam PDFs.
@@ -102,6 +104,8 @@ class ExamProcessor:
             manual_split_points: Optional dict mapping page_number -> list of y-positions for manual splits
             skip_first_region: Whether to skip the first region (header/title area) when splitting (default True)
             last_page_blank: Whether to skip the last page (common with odd-numbered page counts, default False)
+            skip_name_extraction: Whether to skip AI name extraction and use mock names (default False)
+            mock_roster: Whether this is a mock roster session (default False)
 
         Returns:
             Tuple of (matched_submissions, unmatched_submissions)
@@ -139,15 +143,33 @@ class ExamProcessor:
         f"Processing exam {index + 1}/{len(input_files)}: {pdf_path.name}"
       )
       
-      # Extract name
-      approximate_name, name_image = self.extract_name(
-        pdf_path,
-        student_names=[s["name"] for s in unmatched_students]
-      )
-      log.info(f"  Extracted name: {approximate_name}")
+      if mock_roster:
+        name_image = self.extract_name_image(pdf_path)
+        if unmatched_students:
+          suggested_match = unmatched_students.pop(0)
+          approximate_name = suggested_match["name"]
+          match_confidence = 100
+        else:
+          suggested_match = None
+          approximate_name = ""
+          match_confidence = 0
+        log.info("  Skipping AI name extraction (mock roster)")
+      elif skip_name_extraction:
+        name_image = self.extract_name_image(pdf_path)
+        approximate_name = ""
+        suggested_match = None
+        match_confidence = 0
+        log.info("  Skipping AI name extraction (manual matching)")
+      else:
+        # Extract name
+        approximate_name, name_image = self.extract_name(
+          pdf_path,
+          student_names=[s["name"] for s in unmatched_students]
+        )
+        log.info(f"  Extracted name: {approximate_name}")
       
-      # Find suggested match
-      suggested_match, match_confidence = self._find_suggested_match(approximate_name, unmatched_students)
+        # Find suggested match
+        suggested_match, match_confidence = self._find_suggested_match(approximate_name, unmatched_students)
       
       # Extract problems from PDF
       pdf_data, problems = self.redact_and_extract_regions(
@@ -357,6 +379,20 @@ class ExamProcessor:
       if file_metadata and pdf_path in file_metadata else pdf_path.name
     )
   
+  def extract_name_image(self, pdf_path: Path) -> str:
+    """Extract name image from the first page of a PDF."""
+    name_image_base64 = ""
+    try:
+      document = fitz.open(str(pdf_path))
+      page = document[0]
+      pix = page.get_pixmap(clip=list(self.fitz_name_rect))
+      image_bytes = pix.tobytes("png")
+      name_image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+      document.close()
+    except Exception as e:
+      log.error(f"Failed to extract name image: {e}")
+    return name_image_base64
+
   def extract_name(
       self,
       pdf_path: Path,
@@ -368,17 +404,7 @@ class ExamProcessor:
             Tuple of (extracted_name, name_image_base64)
         """
     # First extract the name image (always do this)
-    name_image_base64 = ""
-    try:
-      document = fitz.open(str(pdf_path))
-      page = document[0]
-      pix = page.get_pixmap(clip=list(self.fitz_name_rect))
-      image_bytes = pix.tobytes("png")
-      name_image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-      document.close()
-    except Exception as e:
-      log.error(f"Failed to extract name image: {e}")
-      return "", ""
+    name_image_base64 = self.extract_name_image(pdf_path)
 
     # Then try AI name extraction (may fail if AI service unavailable)
     try:

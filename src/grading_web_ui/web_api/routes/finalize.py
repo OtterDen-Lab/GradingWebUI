@@ -54,6 +54,11 @@ async def finalize_session(
   session = session_repo.get_by_id(session_id)
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")
+  if session.metadata and session.metadata.get("mock_roster"):
+    raise HTTPException(
+      status_code=400,
+      detail="Mock roster sessions cannot be finalized to Canvas."
+    )
 
   # Check if all problems are graded
   ungraded_count = problem_repo.count_ungraded(session_id)

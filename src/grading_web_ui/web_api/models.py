@@ -26,8 +26,11 @@ class SessionCreate(BaseModel):
   assignment_id: int
   assignment_name: str
   course_name: Optional[str] = None
+  session_name: Optional[str] = None
   canvas_points: Optional[float] = None
   use_prod_canvas: bool = False
+  use_mock_roster: bool = False
+  use_ai_name_extraction: bool = True
 
 
 class SessionResponse(BaseModel):
@@ -37,6 +40,7 @@ class SessionResponse(BaseModel):
   assignment_name: str
   course_id: int
   course_name: Optional[str]
+  session_name: Optional[str] = None
   status: SessionStatus
   created_at: datetime
   updated_at: datetime
@@ -45,6 +49,8 @@ class SessionResponse(BaseModel):
   processed_exams: int = 0
   matched_exams: int = 0
   processing_message: Optional[str] = None
+  mock_roster: bool = False
+  ai_name_extraction: bool = True
 
   class Config:
     from_attributes = True

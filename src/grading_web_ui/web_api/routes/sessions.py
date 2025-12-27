@@ -33,6 +33,34 @@ from ..auth import get_current_user, require_instructor, require_session_access
 import os
 
 router = APIRouter()
+MOCK_ROSTER_ENV = "ALLOW_MOCK_ROSTER"
+
+
+def mock_roster_enabled() -> bool:
+  return os.getenv(MOCK_ROSTER_ENV, "").lower() in ("1", "true", "yes")
+
+
+def session_to_response(session: GradingSession) -> SessionResponse:
+  response = SessionResponse.model_validate(session)
+  is_mock = bool(session.metadata and session.metadata.get("mock_roster"))
+  ai_enabled = True
+  if session.metadata and "ai_name_extraction" in session.metadata:
+    ai_enabled = bool(session.metadata.get("ai_name_extraction"))
+  session_name = None
+  if session.metadata and session.metadata.get("session_name"):
+    session_name = session.metadata.get("session_name")
+  return response.model_copy(update={
+    "mock_roster": is_mock,
+    "ai_name_extraction": ai_enabled,
+    "session_name": session_name
+  })
+
+
+@router.get("/mock-roster-enabled")
+async def get_mock_roster_enabled(
+  current_user: dict = Depends(get_current_user)
+):
+  return {"enabled": mock_roster_enabled()}
 
 
 @router.post("", response_model=SessionResponse)
@@ -43,7 +71,21 @@ async def create_session(
   """Create a new grading session (instructor only)"""
   repo = SessionRepository()
 
+  if session.use_mock_roster and not mock_roster_enabled():
+    raise HTTPException(
+      status_code=400,
+      detail=f"Mock roster sessions are disabled. Set {MOCK_ROSTER_ENV}=true to enable."
+    )
+
   # Create domain object
+  metadata = {}
+  if session.use_mock_roster or not session.use_ai_name_extraction:
+    metadata["mock_roster"] = bool(session.use_mock_roster)
+    metadata["ai_name_extraction"] = bool(session.use_ai_name_extraction)
+  if session.session_name:
+    metadata["session_name"] = session.session_name
+  if not metadata:
+    metadata = None
   new_session = GradingSession(
     id=0,  # Will be set by DB
     assignment_id=session.assignment_id,
@@ -53,17 +95,17 @@ async def create_session(
     status=DomainSessionStatus.PREPROCESSING,
     canvas_points=session.canvas_points,
     use_prod_canvas=session.use_prod_canvas,
+    metadata=metadata,
     created_at=datetime.now(),
     updated_at=datetime.now(),
     total_exams=0,
     processed_exams=0,
     matched_exams=0,
-    processing_message=None,
-    metadata=None
+    processing_message=None
   )
 
   created_session = repo.create(new_session)
-  return SessionResponse.model_validate(created_session)
+  return session_to_response(created_session)
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -81,7 +123,7 @@ async def get_session(
     raise HTTPException(status_code=404, detail="Session not found")
 
   # Convert domain model to API response model
-  return SessionResponse.model_validate(session)
+  return session_to_response(session)
 
 
 @router.patch("/{session_id}/status")
@@ -151,7 +193,7 @@ async def list_sessions(current_user: dict = Depends(get_current_user)):
     sessions = [repo.get_by_id(sid) for sid in assigned_session_ids]
     sessions = [s for s in sessions if s is not None]  # Filter out None values
 
-  return [SessionResponse.model_validate(session) for session in sessions]
+  return [session_to_response(session) for session in sessions]
 
 
 @router.get("/{session_id}/stats", response_model=SessionStatsResponse)
@@ -357,6 +399,16 @@ async def get_canvas_info(
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")
 
+  if session.metadata and session.metadata.get("mock_roster"):
+    return {
+      "course_id": session.course_id,
+      "course_name": session.course_name,
+      "assignment_id": session.assignment_id,
+      "assignment_name": session.assignment_name,
+      "canvas_url": "",
+      "environment": "mock"
+    }
+
   use_prod = session.use_prod_canvas
   canvas = CanvasInterface(prod=use_prod)
 
@@ -393,6 +445,16 @@ async def update_canvas_config(
   current_user: dict = Depends(require_instructor)
 ):
   """Update Canvas configuration for a session (instructor only)"""
+  session_repo = SessionRepository()
+  session = session_repo.get_by_id(session_id)
+  if not session:
+    raise HTTPException(status_code=404, detail="Session not found")
+  if session.metadata and session.metadata.get("mock_roster"):
+    raise HTTPException(
+      status_code=400,
+      detail="Mock roster sessions cannot update Canvas configuration."
+    )
+
   # Get course and assignment details from Canvas
   canvas_interface = CanvasInterface(prod=use_prod)
   try:

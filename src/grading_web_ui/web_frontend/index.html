@@ -75,6 +75,94 @@
         </div>
     </div>
 
+    <!-- New Session Modal -->
+  <div id="new-session-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: white; border-radius: 8px; padding: 30px; max-width: 720px; width: 90%; max-height: 90vh; overflow-y: auto;">
+      <h2 style="margin-top: 0;">Create New Session</h2>
+
+      <form id="session-form">
+        <div style="margin-bottom: 20px;">
+          <strong>1. Session source</strong>
+          <div style="display: flex; gap: 24px; margin-top: 10px; flex-wrap: wrap;">
+            <label style="display: flex; align-items: center; gap: 8px; min-width: 220px;">
+              <input type="radio" name="session-source" value="canvas" checked>
+              <span style="white-space: nowrap;">Pull from Canvas</span>
+            </label>
+            <label id="manual-source-option" style="display: flex; align-items: center; gap: 8px; min-width: 260px;">
+              <input type="radio" name="session-source" value="manual">
+              <span style="white-space: nowrap;">Set up manually (mock roster)</span>
+            </label>
+          </div>
+          <small style="display: block; margin-top: 8px; color: var(--gray-600);">
+            Manual sessions skip Canvas and generate placeholder student names.
+          </small>
+        </div>
+
+        <div id="canvas-session-fields">
+          <label>
+            Canvas Environment:
+            <select id="canvas-env-new" required>
+              <option value="false">Development (Beta/Test)</option>
+              <option value="true">Production</option>
+            </select>
+          </label>
+
+          <label>
+            Course:
+            <select id="course-select" required>
+              <option value="">Loading courses...</option>
+            </select>
+          </label>
+          <div id="course-info" class="info-box"></div>
+
+          <label>
+            Assignment:
+            <select id="assignment-select" required disabled>
+              <option value="">Select a course first</option>
+            </select>
+          </label>
+          <div id="assignment-info" class="info-box"></div>
+        </div>
+
+        <div id="manual-session-fields" style="display: none;"></div>
+
+        <label>
+          Session Name:
+          <input type="text" id="session-name-input" placeholder="e.g., CST334 - Exam 1" required>
+        </label>
+
+        <details id="canvas-overrides" style="margin-top: 10px;">
+          <summary style="cursor: pointer; color: var(--gray-700);">Canvas overrides</summary>
+          <div style="margin-top: 10px;">
+            <label>
+              Canvas Points Override (optional):
+              <input type="number" id="canvas-points-input" step="0.5" min="0" placeholder="Leave blank to use assignment points">
+            </label>
+          </div>
+        </details>
+
+        <div style="margin: 20px 0;">
+          <strong>2. Name handling</strong>
+          <div style="display: flex; gap: 24px; margin-top: 10px; flex-wrap: wrap;">
+            <label style="display: flex; align-items: center; gap: 8px; min-width: 220px;">
+              <input type="radio" name="name-handling" value="ai" checked>
+              <span style="white-space: nowrap;">AI-assisted</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; min-width: 260px;">
+              <input type="radio" name="name-handling" value="manual">
+              <span style="white-space: nowrap;">Manual only (skip AI)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Create Session</button>
+          <button type="button" id="cancel-session-btn" class="btn">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
     <!-- Autograding Modal -->
     <div id="autograding-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
         <div style="background: white; border-radius: 8px; padding: 30px; max-width: 800px; width: 90%; max-height: 90vh; overflow-y: auto;">
@@ -197,46 +285,6 @@
                 <div id="existing-sessions">
                     <h3>Recent Sessions</h3>
                     <div id="session-list"></div>
-                </div>
-
-                <!-- New Session Form -->
-                <div id="new-session-form" class="instructor-only" style="display: none;">
-                    <h3>Create New Session</h3>
-                    <form id="session-form">
-                        <label>
-                            Canvas Environment:
-                            <select id="canvas-env-new" required>
-                                <option value="false">Development (Beta/Test)</option>
-                                <option value="true">Production</option>
-                            </select>
-                        </label>
-
-                        <label>
-                            Course:
-                            <select id="course-select" required>
-                                <option value="">Loading courses...</option>
-                            </select>
-                        </label>
-                        <div id="course-info" class="info-box"></div>
-
-                        <label>
-                            Assignment:
-                            <select id="assignment-select" required disabled>
-                                <option value="">Select a course first</option>
-                            </select>
-                        </label>
-                        <div id="assignment-info" class="info-box"></div>
-
-                        <label>
-                            Canvas Points Override (optional):
-                            <input type="number" id="canvas-points-input" step="0.5" min="0" placeholder="Leave blank to use assignment points">
-                        </label>
-
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary">Create Session</button>
-                            <button type="button" id="cancel-session-btn" class="btn">Cancel</button>
-                        </div>
-                    </form>
                 </div>
 
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
