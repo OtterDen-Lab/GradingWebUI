@@ -929,6 +929,9 @@ async def process_exam_names(
 
     for index, pdf_path in enumerate(file_paths):
       document_id = index + start_document_id
+      log.info(
+        f"Extracting name for exam {index + 1}/{len(file_paths)}: {pdf_path.name}"
+      )
       update_progress(index, matched_count,
                       f"Extracting name {index + 1}/{len(file_paths)}: {pdf_path.name}")
 

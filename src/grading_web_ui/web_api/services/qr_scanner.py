@@ -37,6 +37,78 @@ class QRScanner:
     if not PYZBAR_AVAILABLE:
       log.warning("QR scanner unavailable: pyzbar/zbar not available")
 
+  def _decode_qr_codes(self, image: Image.Image) -> List[Dict]:
+    """Decode QR codes from a PIL image into raw records."""
+    qr_codes = pyzbar.decode(image)
+    if not qr_codes:
+      return []
+
+    results = []
+    for qr in qr_codes:
+      try:
+        qr_data = qr.data.decode('utf-8')
+        qr_json = json.loads(qr_data)
+      except Exception:
+        continue
+
+      question_number = qr_json.get('q')
+      max_points = qr_json.get('pts')
+      if question_number is None or max_points is None:
+        continue
+
+      rect = qr.rect
+      results.append({
+        "question_number": int(question_number),
+        "max_points": float(max_points),
+        "encrypted_data": qr_json.get('s'),
+        "rect": rect
+      })
+
+    return results
+
+  def _scan_image_step_up(self, image: Image.Image,
+                          dpi_steps: Optional[List[int]] = None,
+                          debug_label: Optional[str] = None
+                          ) -> Optional[Dict]:
+    """
+        Scan a single image using step-up DPI heuristics.
+
+        Returns dict with keys:
+          - dpi_used
+          - scale_to_base
+          - qr_codes (list of decoded QR dicts with rects)
+    """
+    if dpi_steps is None:
+      dpi_steps = [150, 300, 600, 900]
+
+    for dpi in dpi_steps:
+      scaled = image
+      if dpi != 150:
+        scale = dpi / 150.0
+        new_size = (int(image.width * scale), int(image.height * scale))
+        scaled = image.resize(new_size, Image.Resampling.LANCZOS)
+
+      if scaled.mode != 'RGB':
+        scaled = scaled.convert('RGB')
+
+      decoded = self._decode_qr_codes(scaled)
+      if decoded:
+        if debug_label:
+          log.debug(
+            "QR scan: %s detected %s code(s) at %sdpi",
+            debug_label,
+            len(decoded),
+            dpi
+          )
+
+        return {
+          "dpi_used": dpi,
+          "scale_to_base": 150.0 / dpi,
+          "qr_codes": decoded
+        }
+
+    return None
+
   def _preprocess_image_for_qr(self, image: Image.Image) -> List[Image.Image]:
     """
         Apply multiple preprocessing strategies to improve QR detection.
@@ -109,55 +181,39 @@ class QRScanner:
       if image.mode != 'RGB':
         image = image.convert('RGB')
 
-      # Try multiple preprocessing strategies
       image_variants = self._preprocess_image_for_qr(image)
 
       for idx, variant in enumerate(image_variants):
-        # Scan for QR codes
-        qr_codes = pyzbar.decode(variant)
+        scan_result = self._scan_image_step_up(variant)
+        if not scan_result:
+          continue
 
-        if qr_codes:
-          if idx > 0:
-            log.info(f"QR code found using preprocessing strategy #{idx}")
+        if idx > 0:
+          log.info(f"QR code found using preprocessing strategy #{idx}")
 
-          # Process first QR code found
-          qr_data = qr_codes[0].data.decode('utf-8')
-          log.debug(f"Found QR code data: {qr_data[:100]}...")
+        qr_codes = scan_result["qr_codes"]
+        qr_code = qr_codes[0]
+        question_number = qr_code["question_number"]
+        max_points = qr_code["max_points"]
+        encrypted_metadata = qr_code.get("encrypted_data")
 
-          # Parse JSON from QR code
-          qr_json = json.loads(qr_data)
+        result = {
+          "question_number": question_number,
+          "max_points": float(max_points),
+          "encrypted_data": encrypted_metadata
+        }
 
-          # Extract basic fields
-          question_number = qr_json.get('q')
-          max_points = qr_json.get('pts')
-          encrypted_metadata = qr_json.get('s')
+        if encrypted_metadata:
+          log.info(
+            f"Successfully scanned QR code: Q{question_number}, {max_points} pts (has encrypted metadata) : \"{encrypted_metadata}\""
+          )
+        else:
+          log.info(
+            f"Successfully scanned QR code: Q{question_number}, {max_points} pts (no metadata)"
+          )
 
-          # At minimum we need question number and points
-          if question_number is None or max_points is None:
-            log.warning(
-              f"QR code missing required fields (q or pts): {qr_json}")
-            continue  # Try next variant
+        return result
 
-          result = {
-            "question_number": question_number,
-            "max_points": float(max_points),
-            "encrypted_data":
-            encrypted_metadata  # Store encrypted string directly
-          }
-
-          # Log what we found
-          if encrypted_metadata:
-            log.info(
-              f"Successfully scanned QR code: Q{question_number}, {max_points} pts (has encrypted metadata) : \"{encrypted_metadata}\""
-            )
-          else:
-            log.info(
-              f"Successfully scanned QR code: Q{question_number}, {max_points} pts (no metadata)"
-            )
-
-          return result
-
-      # No QR codes found in any variant
       log.debug(
         "No QR codes found in image after trying all preprocessing strategies")
       return None
@@ -260,52 +316,33 @@ class QRScanner:
       pdf_document = fitz.open(str(pdf_path))
       for page_number in range(pdf_document.page_count):
         page = pdf_document[page_number]
+        pix = page.get_pixmap(dpi=150)
+        img_bytes = pix.tobytes("png")
+        image = Image.open(io.BytesIO(img_bytes))
+        if image.mode != 'RGB':
+          image = image.convert('RGB')
+
+        scan_result = self._scan_image_step_up(
+          image,
+          dpi_steps=dpi_steps,
+          debug_label=f"{pdf_path.name} page {page_number}"
+        )
+
+        if not scan_result:
+          continue
+
+        scale = scan_result["scale_to_base"]
         page_results: List[Dict] = []
-
-        for dpi in dpi_steps:
-          pix = page.get_pixmap(dpi=dpi)
-          img_bytes = pix.tobytes("png")
-          image = Image.open(io.BytesIO(img_bytes))
-          if image.mode != 'RGB':
-            image = image.convert('RGB')
-
-          qr_codes = pyzbar.decode(image)
-          if not qr_codes:
-            continue
-
-          log.debug(
-            "QR scan: %s page %s detected %s code(s) at %sdpi",
-            pdf_path.name,
-            page_number,
-            len(qr_codes),
-            dpi
-          )
-
-          for qr in qr_codes:
-            try:
-              qr_data = qr.data.decode('utf-8')
-              qr_json = json.loads(qr_data)
-            except Exception:
-              continue
-
-            question_number = qr_json.get('q')
-            max_points = qr_json.get('pts')
-            if question_number is None or max_points is None:
-              continue
-
-            rect = qr.rect
-            scale = 150.0 / dpi
-            page_results.append({
-              "question_number": int(question_number),
-              "max_points": float(max_points),
-              "x": rect.left * scale,
-              "y": rect.top * scale,
-              "width": rect.width * scale,
-              "height": rect.height * scale
-            })
-
-          if page_results:
-            break
+        for qr_code in scan_result["qr_codes"]:
+          rect = qr_code["rect"]
+          page_results.append({
+            "question_number": qr_code["question_number"],
+            "max_points": qr_code["max_points"],
+            "x": rect.left * scale,
+            "y": rect.top * scale,
+            "width": rect.width * scale,
+            "height": rect.height * scale
+          })
 
         if page_results:
           results[page_number] = page_results

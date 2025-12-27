@@ -815,6 +815,9 @@ class ExamProcessor:
       log.debug(
         f"Problem {problem_number}: from ({start_page}, {start_y}) to ({end_page}, {end_y})"
       )
+      log.info(
+        f"Exam region {problem_number}: pages {start_page + 1}-{end_page + 1}"
+      )
 
       # Extract region(s) and create merged image
       problem_image_base64, region_height = self._extract_cross_page_region(
