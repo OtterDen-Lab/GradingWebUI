@@ -818,7 +818,7 @@ class ProblemRepository(BaseRepository[Problem]):
     with self._get_connection() as conn:
       cursor = conn.cursor()
       cursor.execute("""
-        SELECT p.id, p.image_data, p.region_coords, p.submission_id, p.score, p.feedback
+        SELECT p.id, p.region_coords, p.submission_id, p.score, p.feedback
         FROM problems p
         WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 1
               AND p.is_blank = 0 AND p.feedback IS NOT NULL AND p.feedback != ''
@@ -830,7 +830,6 @@ class ProblemRepository(BaseRepository[Problem]):
       for row in cursor.fetchall():
         results.append({
           "id": row["id"],
-          "image_data": row["image_data"],
           "region_coords": row["region_coords"],
           "submission_id": row["submission_id"],
           "score": row["score"],
@@ -850,12 +849,12 @@ class ProblemRepository(BaseRepository[Problem]):
       problem_number: Problem number
 
     Returns:
-      List of dicts with problem fields (id, image_data, region_coords, submission_id, is_blank)
+      List of dicts with problem fields (id, region_coords, submission_id, is_blank)
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
       cursor.execute("""
-        SELECT id, image_data, region_coords, submission_id, is_blank
+        SELECT id, region_coords, submission_id, is_blank, qr_encrypted_data, max_points
         FROM problems
         WHERE session_id = ? AND problem_number = ? AND graded = 0
         ORDER BY id
@@ -865,10 +864,11 @@ class ProblemRepository(BaseRepository[Problem]):
       for row in cursor.fetchall():
         results.append({
           "id": row["id"],
-          "image_data": row["image_data"],
           "region_coords": row["region_coords"],
           "submission_id": row["submission_id"],
-          "is_blank": row["is_blank"]
+          "is_blank": row["is_blank"],
+          "qr_encrypted_data": row["qr_encrypted_data"],
+          "max_points": row["max_points"]
         })
 
       return results

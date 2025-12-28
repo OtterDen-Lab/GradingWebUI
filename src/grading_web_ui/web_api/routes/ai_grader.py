@@ -35,6 +35,7 @@ class ImageAutogradeSettings(BaseModel):
   image_quality: str
   include_answer: bool = False
   include_default_feedback: bool = False
+  dry_run: bool = False
 
 
 class AutogradeRequest(BaseModel):
@@ -242,6 +243,7 @@ async def _start_autograde_text(session_id: int, request: AutogradeRequest,
 async def _start_autograde_image(session_id: int, request: AutogradeRequest,
                                  background_tasks: BackgroundTasks):
   session_repo = SessionRepository()
+  problem_repo = ProblemRepository()
 
   # Verify session exists
   if not session_repo.exists(session_id):
@@ -251,10 +253,90 @@ async def _start_autograde_image(session_id: int, request: AutogradeRequest,
     raise HTTPException(status_code=400,
                         detail="settings are required for image-only mode")
 
+  ungraded_count = problem_repo.count_ungraded_for_problem_number(
+    session_id, request.problem_number)
+
+  if ungraded_count == 0:
+    raise HTTPException(
+      status_code=400,
+      detail=
+      f"No ungraded problems found for problem number {request.problem_number}"
+    )
+
+  stream_id = sse.make_stream_id("autograde", session_id)
+  sse.create_stream(stream_id)
+
+  settings = request.settings.model_dump()
+  background_tasks.add_task(run_autograding_image, session_id,
+                            request.problem_number, settings, stream_id)
+
+  start_message = "Image-only autograding started"
+  if settings.get("dry_run"):
+    start_message = "Image-only autograding dry run started"
+
   return AutogradeResponse(
-    status="not_implemented",
+    status="started",
     problem_number=request.problem_number,
-    message="Image-only autograding settings captured. Backend execution is not wired up yet.")
+    message=f"{start_message} for {ungraded_count} problems")
+
+
+async def run_autograding_image(session_id: int, problem_number: int,
+                                settings: dict, stream_id: str):
+  """Background task to autograde problems from images with SSE updates."""
+  try:
+    log.info(
+      f"Starting image-only autograding for session {session_id}, problem {problem_number}"
+    )
+
+    await sse.send_event(
+      stream_id, "start",
+      {"message": f"Starting image-only autograding for problem {problem_number}..."})
+
+    loop = asyncio.get_event_loop()
+    ai_grader = AIGraderService()
+
+    def update_progress(current, total, message):
+      progress_percent = min(100, int(
+        (current / total) * 100)) if total > 0 else 0
+      try:
+        asyncio.run_coroutine_threadsafe(
+          sse.send_event(
+            stream_id, "progress", {
+              "current": current,
+              "total": total,
+              "progress": progress_percent,
+              "message": message
+            }), loop)
+      except Exception as e:
+        log.error(f"Failed to send SSE event: {e}")
+
+    result = await loop.run_in_executor(
+      None,
+      lambda: ai_grader.autograde_problem_image_only(session_id,
+                                                     problem_number,
+                                                     settings=settings,
+                                                     progress_callback=update_progress))
+
+    log.info(
+      f"Image-only autograding complete for session {session_id}, problem {problem_number}: {result}"
+    )
+
+    await sse.send_event(
+      stream_id, "complete", {
+        "graded": result["graded"],
+        "total": result["total"],
+        "message": result["message"]
+      })
+
+  except Exception as e:
+    log.error(
+      f"Image-only autograding failed for session {session_id}, problem {problem_number}: {e}",
+      exc_info=True)
+
+    await sse.send_event(stream_id, "error", {
+      "error": str(e),
+      "message": f"Autograding failed: {str(e)}"
+    })
 
 
 async def run_autograding(session_id: int, problem_number: int,

@@ -1967,6 +1967,7 @@ const autogradingModeCancelBtn = document.getElementById('autograding-mode-cance
 const autogradingModeContinueBtn = document.getElementById('autograding-mode-continue-btn');
 const autogradingImageModal = document.getElementById('autograding-image-modal');
 const autogradingImageCancelBtn = document.getElementById('autograding-image-cancel-btn');
+const autogradingImageDryRunBtn = document.getElementById('autograding-image-dry-run-btn');
 const autogradingImageStartBtn = document.getElementById('autograding-image-start-btn');
 const autogradingImageBatchSize = document.getElementById('autograding-image-batch-size');
 const autogradingImageQuality = document.getElementById('autograding-image-quality');
@@ -2056,19 +2057,38 @@ autogradingImageCancelBtn.addEventListener('click', () => {
     autogradingImageModal.style.display = 'none';
 });
 
-autogradingImageStartBtn.addEventListener('click', async () => {
+async function startImageOnlyAutograding(dryRun) {
     if (!currentSession || !currentProblemNumber) return;
 
     const settings = {
         batch_size: autogradingImageBatchSize.value,
         image_quality: autogradingImageQuality.value,
         include_answer: autogradingImageIncludeAnswer.checked,
-        include_default_feedback: autogradingImageIncludeFeedback.checked
+        include_default_feedback: autogradingImageIncludeFeedback.checked,
+        dry_run: dryRun
     };
 
     autogradingImageModal.style.display = 'none';
 
     try {
+        const modal = document.getElementById('autograding-modal');
+        const extractPhase = document.getElementById('autograding-extract-phase');
+        const verifyPhase = document.getElementById('autograding-verify-phase');
+        const progressPhase = document.getElementById('autograding-progress-phase');
+
+        modal.style.display = 'flex';
+        extractPhase.style.display = 'none';
+        verifyPhase.style.display = 'none';
+        progressPhase.style.display = 'block';
+
+        document.getElementById('autograding-progress-message').textContent =
+            dryRun ? 'Starting image-only autograding dry run...' : 'Starting image-only autograding...';
+        document.getElementById('autograding-progress-bar').style.width = '0%';
+        document.getElementById('autograding-current').textContent = '0';
+        document.getElementById('autograding-total').textContent = '0';
+
+        connectToAutogradingStream();
+
         const response = await fetch(`${API_BASE}/ai-grader/${currentSession.id}/autograde`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2086,15 +2106,22 @@ autogradingImageStartBtn.addEventListener('click', async () => {
 
         const data = await response.json();
         if (data.status === 'not_implemented') {
+            modal.style.display = 'none';
             showNotification(data.message);
-            return;
         }
-
-        showNotification(data.message || 'Image-only autograding started.');
     } catch (error) {
         console.error('Failed to start image-only autograding:', error);
+        document.getElementById('autograding-modal').style.display = 'none';
         showNotification(`Failed to start image-only autograding: ${error.message}`);
     }
+}
+
+autogradingImageStartBtn.addEventListener('click', () => {
+    startImageOnlyAutograding(false);
+});
+
+autogradingImageDryRunBtn.addEventListener('click', () => {
+    startImageOnlyAutograding(true);
 });
 
 // Cancel autograding

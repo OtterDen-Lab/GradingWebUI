@@ -2,6 +2,7 @@
 Service for AI-assisted grading of exam problems.
 """
 import logging
+import json
 from typing import Dict, List, Optional, Tuple
 from grading_web_ui.lms_interface.ai_helper import AI_Helper__Anthropic
 
@@ -556,9 +557,312 @@ class AIGraderService:
         progress_callback(total, total,
                           f"Completed autograding {graded_count} problems")
 
-      return {
-        "graded": graded_count,
+    return {
+      "graded": graded_count,
+      "total": total,
+      "question_text": question_text,
+      "message": f"AI graded {graded_count}/{total} problems"
+    }
+
+  def autograde_problem_image_only(self,
+                                   session_id: int,
+                                   problem_number: int,
+                                   settings: Dict,
+                                   progress_callback=None) -> Dict:
+    """Autograde submissions using images directly (no text extraction)."""
+    metadata_repo = ProblemMetadataRepository()
+    problem_repo = ProblemRepository()
+    submission_repo = SubmissionRepository()
+
+    max_points = metadata_repo.get_max_points(session_id, problem_number)
+    if not max_points:
+      sample_problem = problem_repo.get_sample_for_problem_number(
+        session_id, problem_number)
+      if sample_problem and sample_problem.max_points:
+        max_points = sample_problem.max_points
+        metadata_repo.upsert_max_points(session_id, problem_number, max_points)
+
+    if not max_points:
+      raise ValueError(f"Max points not set for problem {problem_number}")
+
+    question_text = metadata_repo.get_question_text(session_id, problem_number)
+    default_feedback = None
+    if settings.get("include_default_feedback"):
+      feedback, _ = metadata_repo.get_default_feedback(session_id,
+                                                       problem_number)
+      default_feedback = feedback
+
+    problems = problem_repo.get_ungraded_for_problem_number(
+      session_id, problem_number)
+    total = len(problems)
+    if total == 0:
+      return {"graded": 0, "total": 0, "message": "No ungraded problems found"}
+
+    batch_size = self._parse_batch_size(settings.get("batch_size"), total)
+    dpi = self._map_image_quality(settings.get("image_quality"))
+    dry_run = bool(settings.get("dry_run"))
+
+    if progress_callback:
+      progress_callback(
+        0, total,
+        f"Image-only autograding for problem {problem_number} (batch size {batch_size})"
+      )
+
+    graded_count = 0
+    processed = 0
+
+    if dry_run:
+      sample_count = min(10, total)
+      summary = {
         "total": total,
-        "question_text": question_text,
-        "message": f"AI graded {graded_count}/{total} problems"
+        "batch_size": batch_size,
+        "image_quality": settings.get("image_quality"),
+        "dpi": dpi,
+        "include_answer": bool(settings.get("include_answer")),
+        "include_default_feedback": bool(settings.get("include_default_feedback")),
+        "sample_count": sample_count,
+        "items": [{
+          "problem_id": row["id"],
+          "submission_id": row["submission_id"],
+          "answer_available": bool(row.get("qr_encrypted_data"))
+        } for row in problems[:sample_count]]
       }
+      log.info("Image-only autograding dry run: %s", summary)
+      if progress_callback:
+        progress_callback(total, total,
+                          f"Dry run complete for {total} submissions")
+      return {
+        "graded": 0,
+        "total": total,
+        "message": f"Dry run complete for {total} submissions"
+      }
+
+    for batch_start in range(0, total, batch_size):
+      batch = problems[batch_start:batch_start + batch_size]
+      batch_items = []
+      attachments = []
+
+      for row in batch:
+        image_data = self._extract_problem_image(row, submission_repo, dpi)
+        if not image_data:
+          log.warning(
+            f"No image data available for problem {row['id']}, skipping")
+          processed += 1
+          if progress_callback:
+            progress_callback(
+              processed, total,
+              f"Skipped problem {row['id']} (no image data)")
+          continue
+
+        answer_text = None
+        if settings.get("include_answer"):
+          answer_text = self._get_reference_answer(row)
+
+        batch_items.append({
+          "problem_id": row["id"],
+          "submission_id": row["submission_id"],
+          "answer_text": answer_text
+        })
+        attachments.append(("png", image_data))
+
+      if not batch_items:
+        continue
+
+      if progress_callback:
+        progress_callback(
+          processed, total,
+          f"Submitting batch {batch_start // batch_size + 1} ({len(batch_items)} items)"
+        )
+
+      results = self._grade_image_batch(problem_number, max_points,
+                                        question_text, default_feedback,
+                                        batch_items, attachments)
+
+      seen_ids = set()
+      for result in results:
+        problem_id = result.get("problem_id")
+        if not problem_id:
+          continue
+        seen_ids.add(problem_id)
+        score = self._coerce_score(result.get("score"), max_points)
+        feedback = (result.get("feedback") or "").strip()
+        problem_repo.update_ai_grade(problem_id, score, feedback)
+        graded_count += 1
+        processed += 1
+        if progress_callback:
+          progress_callback(
+            processed, total,
+            f"Image-only autograding {processed}/{total}")
+
+      for item in batch_items:
+        if item["problem_id"] not in seen_ids:
+          processed += 1
+          if progress_callback:
+            progress_callback(
+              processed, total,
+              f"No AI result for problem {item['problem_id']}, skipping")
+
+    if progress_callback:
+      progress_callback(total, total,
+                        f"Completed image-only autograding {graded_count} problems")
+
+    return {
+      "graded": graded_count,
+      "total": total,
+      "message": f"AI graded {graded_count}/{total} problems (image-only)"
+    }
+
+  def _extract_problem_image(self, problem_row: Dict,
+                             submission_repo: SubmissionRepository,
+                             dpi: int) -> Optional[str]:
+    if problem_row.get("image_data"):
+      return problem_row["image_data"]
+    if problem_row.get("region_coords"):
+      region_data = problem_row["region_coords"]
+      if isinstance(region_data, str):
+        region_data = json.loads(region_data)
+
+      submission = submission_repo.get_by_id(problem_row["submission_id"])
+      if submission and submission.exam_pdf_data:
+        return self.problem_service.extract_image_from_pdf_data(
+          pdf_base64=submission.exam_pdf_data,
+          page_number=region_data["page_number"],
+          region_y_start=region_data["region_y_start"],
+          region_y_end=region_data["region_y_end"],
+          end_page_number=region_data.get("end_page_number"),
+          end_region_y=region_data.get("end_region_y"),
+          region_y_start_pct=region_data.get("region_y_start_pct"),
+          region_y_end_pct=region_data.get("region_y_end_pct"),
+          end_region_y_pct=region_data.get("end_region_y_pct"),
+          page_transforms=region_data.get("page_transforms"),
+          dpi=dpi
+        )
+    return None
+
+  def _get_reference_answer(self, problem_row: Dict) -> Optional[str]:
+    encrypted_data = problem_row.get("qr_encrypted_data")
+    if not encrypted_data:
+      return None
+
+    try:
+      from QuizGenerator.regenerate import regenerate_from_encrypted
+    except ImportError:
+      log.warning("QuizGenerator not available; skipping reference answer")
+      return None
+
+    try:
+      result = regenerate_from_encrypted(
+        encrypted_data=encrypted_data,
+        points=problem_row.get("max_points") or 0.0)
+    except Exception as e:
+      log.warning(f"Failed to regenerate answer: {e}")
+      return None
+
+    answers = []
+    for key, answer_obj in result.get("answer_objects", {}).items():
+      value = str(answer_obj.value)
+      if hasattr(answer_obj, "tolerance") and answer_obj.tolerance is not None:
+        value = f"{value} (tol={answer_obj.tolerance})"
+      answers.append(f"{key}: {value}")
+    if not answers:
+      return None
+    return "; ".join(answers)
+
+  def _grade_image_batch(self, problem_number: int, max_points: float,
+                         question_text: Optional[str],
+                         default_feedback: Optional[str],
+                         batch_items: List[Dict],
+                         attachments: List[Tuple[str, str]]) -> List[Dict]:
+    message_lines = [
+      f"You are grading {len(batch_items)} student submissions for problem {problem_number}.",
+      f"The problem is worth {int(max_points)} points.",
+      "Each submission is provided as an image attachment.",
+      "Return ONLY valid JSON with this shape:",
+      '{"results":[{"problem_id":123,"score":4,"feedback":"..."}]}',
+      "Scores must be integers between 0 and the max points.",
+      "If the answer is blank or minimal, score 0 and give brief constructive feedback."
+    ]
+
+    if question_text:
+      message_lines.append(f"\nQuestion text (if helpful):\n{question_text}")
+
+    if default_feedback:
+      message_lines.append(
+        f"\nDefault feedback (use if appropriate):\n{default_feedback}")
+
+    message_lines.append("\nSubmission mapping:")
+    for idx, item in enumerate(batch_items, 1):
+      answer_text = item.get("answer_text")
+      answer_line = "Reference answer: unavailable"
+      if answer_text:
+        answer_line = f"Reference answer: {answer_text}"
+      message_lines.append(
+        f"{idx}. problem_id={item['problem_id']} submission_id={item['submission_id']} ({answer_line})"
+      )
+
+    response, usage = self.ai_helper.query_ai("\n".join(message_lines),
+                                              attachments,
+                                              max_response_tokens=2000)
+    log.info(
+      f"Image-only grading response ({usage['total_tokens']} tokens): {response[:200]}..."
+    )
+
+    parsed = self._parse_json_response(response)
+    results = parsed.get("results", []) if isinstance(parsed, dict) else []
+    if not isinstance(results, list):
+      return []
+    return results
+
+  def _parse_json_response(self, response: str) -> Dict:
+    response_clean = response.strip()
+    if response_clean.startswith("```"):
+      lines = response_clean.split("\n")
+      json_lines = []
+      in_code_block = False
+      for line in lines:
+        if line.startswith("```"):
+          in_code_block = not in_code_block
+          continue
+        if in_code_block:
+          json_lines.append(line)
+      response_clean = "\n".join(json_lines)
+
+    try:
+      return json.loads(response_clean)
+    except json.JSONDecodeError:
+      start = response_clean.find("{")
+      end = response_clean.rfind("}")
+      if start != -1 and end != -1 and end > start:
+        try:
+          return json.loads(response_clean[start:end + 1])
+        except json.JSONDecodeError:
+          pass
+    log.warning(f"Failed to parse JSON response: {response[:200]}")
+    return {}
+
+  def _parse_batch_size(self, value: Optional[str], total: int) -> int:
+    if not value:
+      return 1
+    if isinstance(value, str) and value.lower() == "all":
+      return max(1, total)
+    try:
+      parsed = int(value)
+      return max(1, parsed)
+    except (TypeError, ValueError):
+      return 1
+
+  def _map_image_quality(self, value: Optional[str]) -> int:
+    quality = (value or "medium").lower()
+    if quality == "low":
+      return 150
+    if quality == "high":
+      return 600
+    return 300
+
+  def _coerce_score(self, score_value: Optional[object],
+                    max_points: float) -> int:
+    try:
+      score = int(round(float(score_value)))
+    except (TypeError, ValueError):
+      score = 0
+    return max(0, min(int(max_points), score))
