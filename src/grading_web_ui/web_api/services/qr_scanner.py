@@ -63,6 +63,10 @@ class QRScanner:
       except Exception:
         continue
 
+      if not isinstance(qr_json, dict):
+        log.debug("Unexpected QR payload type: %s", type(qr_json).__name__)
+        continue
+
       question_number = qr_json.get('q')
       max_points = qr_json.get('pts')
       if question_number is None or max_points is None:

@@ -16,10 +16,13 @@ import base64
 import collections
 import PIL.Image
 import PIL.ImageFilter
+import PIL.ImageOps
+import threading
 import fitz  # PyMuPDF
 import fuzzywuzzy.fuzz
 import numpy as np
 import cv2
+import concurrent.futures
 
 from grading_web_ui.lms_interface import ai_helper
 
@@ -232,8 +235,9 @@ class ExamProcessor:
       )
       return
 
-    diff_threshold = 25
-    ink_threshold = 200
+    diff_threshold = 12
+    ink_threshold = 230
+    border_component_area = 0.01
 
     grayscale_images = []
     widths = []
@@ -241,6 +245,7 @@ class ExamProcessor:
 
     for problem in problems:
       img = problem.get_grayscale_image()
+      img = PIL.ImageOps.autocontrast(img, cutoff=2)
       widths.append(img.width)
       heights.append(img.height)
       grayscale_images.append(img)
@@ -261,7 +266,19 @@ class ExamProcessor:
     for img_array in normalized_arrays:
       diff = np.abs(img_array - median_image)
       ink_mask = (diff > diff_threshold) & (img_array < ink_threshold)
-      ink_ratio = float(np.sum(ink_mask)) / float(ink_mask.size)
+      mask = ink_mask.astype(np.uint8)
+
+      if mask.any():
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+        max_area = int(border_component_area * mask.size)
+        for label in range(1, num_labels):
+          x, y, w, h, area = stats[label]
+          touches_border = (x == 0 or y == 0 or (x + w) >= mask.shape[1]
+                            or (y + h) >= mask.shape[0])
+          if touches_border and area >= max_area:
+            mask[labels == label] = 0
+
+      ink_ratio = float(np.sum(mask)) / float(mask.size)
       ink_ratios.append(ink_ratio)
 
     threshold = float(np.percentile(ink_ratios, 5.0))
@@ -838,6 +855,7 @@ class ExamProcessor:
       problem_number_prescan = 1
       total_prescan = len(linear_splits) - 1 - start_index
 
+      regions = []
       for i in range(start_index, len(linear_splits) - 1):
         start_page, start_y, _ = linear_splits[i]
         end_page, end_y, end_pct = linear_splits[i + 1]
@@ -847,53 +865,59 @@ class ExamProcessor:
           end_page = end_page - 1
           end_y = pdf_document_original[end_page].rect.height
           end_pct = 1.0
+        regions.append((problem_number_prescan, start_page, start_y, end_page, end_y))
+        problem_number_prescan += 1
 
-        # Extract region from ORIGINAL unredacted PDF for QR detection
-        # Use progressive DPI: start low (fast), increase only if needed
-        # Since PDF is vector, higher DPI doesn't lose quality, just takes more time
+      callback_lock = threading.Lock()
+
+      def safe_message(message: str, step_increment: int = 1) -> None:
+        if message_callback:
+          with callback_lock:
+            message_callback(message, step_increment=step_increment)
+
+      def scan_region(region: Tuple[int, int, float, int, float]) -> Tuple[int, Optional[dict]]:
+        problem_num, start_page, start_y, end_page, end_y = region
         qr_data = None
-        for dpi_index, dpi in enumerate(PRESCAN_DPI_STEPS):
-          log.info(
-            f"Pre-scan problem {problem_number_prescan}/{total_prescan} at {dpi} DPI"
-          )
-          problem_image_base64, _ = self._extract_cross_page_region(
-            pdf_document_original,
-            start_page,
-            start_y,
-            end_page,
-            end_y,
-            dpi=dpi)
+        try:
+          local_doc = fitz.open(str(pdf_path))
+          for dpi_index, dpi in enumerate(PRESCAN_DPI_STEPS):
+            log.info(
+              f"Pre-scan problem {problem_num}/{total_prescan} at {dpi} DPI"
+            )
+            problem_image_base64, _ = self._extract_cross_page_region(
+              local_doc,
+              start_page,
+              start_y,
+              end_page,
+              end_y,
+              dpi=dpi)
 
-          # Try scanning at this resolution
-          qr_data = self.qr_scanner.scan_qr_from_image(problem_image_base64)
-          step_increment = 1
-          remaining_steps = len(PRESCAN_DPI_STEPS) - dpi_index - 1
-          if qr_data and remaining_steps > 0:
-            step_increment += remaining_steps
-          if message_callback:
-            message_callback(
-              f"Pre-scan problem {problem_number_prescan}/{total_prescan} at {dpi} DPI",
+            qr_data = self.qr_scanner.scan_qr_from_image(problem_image_base64)
+            step_increment = 1
+            remaining_steps = len(PRESCAN_DPI_STEPS) - dpi_index - 1
+            if qr_data and remaining_steps > 0:
+              step_increment += remaining_steps
+            safe_message(
+              f"Pre-scan problem {problem_num}/{total_prescan} at {dpi} DPI",
               step_increment=step_increment
             )
-          if qr_data:
-            if dpi > 150:
-              log.info(
-                f"QR code found at {dpi} DPI (after trying lower resolutions)")
-            elif message_callback:
-              message_callback(
-                f"QR code found at {dpi} DPI for problem {problem_number_prescan}/{total_prescan}",
-                step_increment=0
-              )
-            break  # Found it, no need to try higher DPI
-        if qr_data:
-          log.info(f"Pre-scan: Problem {problem_number_prescan}: "
-                   f"Found QR code with max_points={qr_data['max_points']}")
-          qr_data_by_problem[problem_number_prescan] = qr_data
-        else:
-          log.debug(
-            f"Pre-scan: Problem {problem_number_prescan}: No QR code found")
+            if qr_data:
+              if dpi > 150:
+                log.info(
+                  f"QR code found at {dpi} DPI (after trying lower resolutions)")
+              else:
+                safe_message(
+                  f"QR code found at {dpi} DPI for problem {problem_num}/{total_prescan}",
+                  step_increment=0
+                )
+              break
+        finally:
+          try:
+            local_doc.close()
+          except Exception:
+            pass
+        return problem_num, qr_data
 
-        problem_number_prescan += 1
       max_workers = min(6, os.cpu_count() or 1)
       with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(scan_region, region) for region in regions]
