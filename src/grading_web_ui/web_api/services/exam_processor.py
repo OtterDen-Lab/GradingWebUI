@@ -281,7 +281,6 @@ class ExamProcessor:
       ink_ratio = float(np.sum(mask)) / float(mask.size)
       ink_ratios.append(ink_ratio)
 
-    threshold = float(np.percentile(ink_ratios, 5.0))
     hist_counts, bin_edges = np.histogram(ink_ratios, bins=20)
     log.info(
       "Problem %s ink_ratio histogram: counts=%s edges=%s",
@@ -289,6 +288,41 @@ class ExamProcessor:
       hist_counts,
       bin_edges
     )
+
+    threshold_found = False
+    threshold = None
+    min_submissions_pct = 0.03
+    min_submissions = max(1, int(len(ink_ratios) * min_submissions_pct))
+    cumulative_count = 0
+    seen_minimum = False
+
+    for i in range(len(hist_counts) - 1):
+      cumulative_count += hist_counts[i]
+      if cumulative_count >= min_submissions:
+        seen_minimum = True
+      if seen_minimum:
+        current_count = hist_counts[i]
+        next_count = hist_counts[i + 1]
+        if next_count == 0 or (current_count - next_count >= 2):
+          threshold = bin_edges[i + 1]
+          threshold_found = True
+          log.info(
+            "Problem %s ink_ratio gap: drop from %s to %s at bin %s, threshold=%.5f",
+            problem_number,
+            current_count,
+            next_count,
+            i + 1,
+            threshold
+          )
+          break
+
+    if not threshold_found:
+      threshold = float(np.percentile(ink_ratios, 5.0))
+      log.info(
+        "Problem %s ink_ratio fallback to 5th percentile: threshold=%.5f",
+        problem_number,
+        threshold
+      )
     max_distance = max(
       abs(max(ink_ratios) - threshold),
       abs(min(ink_ratios) - threshold)
