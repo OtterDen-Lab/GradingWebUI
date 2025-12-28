@@ -14,6 +14,7 @@ import os
 import random
 import base64
 import collections
+import PIL.Image
 import PIL.ImageFilter
 import fitz  # PyMuPDF
 import fuzzywuzzy.fuzz
@@ -221,9 +222,76 @@ class ExamProcessor:
   
   @staticmethod
   def identify_blanks(problem_number: int, problems: List[ProblemDTO]):
-    for p in problems:
-      hist = p.get_grayscale_image().convert("1").filter(PIL.ImageFilter.ModeFilter).histogram()
-      
+    if not problems:
+      return
+
+    if len(problems) < 2:
+      log.info(
+        "Skipping template blank detection for problem %s: need at least 2 submissions",
+        problem_number
+      )
+      return
+
+    diff_threshold = 25
+    ink_threshold = 200
+
+    grayscale_images = []
+    widths = []
+    heights = []
+
+    for problem in problems:
+      img = problem.get_grayscale_image()
+      widths.append(img.width)
+      heights.append(img.height)
+      grayscale_images.append(img)
+
+    target_width = min(widths)
+    target_height = min(heights)
+
+    normalized_arrays = []
+    for img in grayscale_images:
+      if img.width != target_width or img.height != target_height:
+        img = img.resize((target_width, target_height), PIL.Image.Resampling.BILINEAR)
+      normalized_arrays.append(np.array(img, dtype=np.float32))
+
+    stack = np.stack(normalized_arrays, axis=0)
+    median_image = np.median(stack, axis=0)
+
+    ink_ratios = []
+    for img_array in normalized_arrays:
+      diff = np.abs(img_array - median_image)
+      ink_mask = (diff > diff_threshold) & (img_array < ink_threshold)
+      ink_ratio = float(np.sum(ink_mask)) / float(ink_mask.size)
+      ink_ratios.append(ink_ratio)
+
+    threshold = float(np.percentile(ink_ratios, 5.0))
+    hist_counts, bin_edges = np.histogram(ink_ratios, bins=20)
+    log.info(
+      "Problem %s ink_ratio histogram: counts=%s edges=%s",
+      problem_number,
+      hist_counts,
+      bin_edges
+    )
+    max_distance = max(
+      abs(max(ink_ratios) - threshold),
+      abs(min(ink_ratios) - threshold)
+    )
+
+    for problem, ratio in zip(problems, ink_ratios):
+      is_blank = ratio <= threshold
+      if max_distance > 0:
+        confidence = min(1.0, abs(ratio - threshold) / max_distance)
+      else:
+        confidence = 0.5
+
+      if is_blank:
+        problem.mark_blank(
+          confidence,
+          "template-diff",
+          f"Ink ratio: {ratio:.5f}, threshold: {threshold:.5f}, diff_thr: {diff_threshold}"
+        )
+      else:
+        problem.mark_not_blank()
   
   
   def post_process_submissions(
