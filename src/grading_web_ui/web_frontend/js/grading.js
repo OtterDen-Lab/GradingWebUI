@@ -1965,6 +1965,13 @@ const startAutogradeBtn = document.getElementById('start-autograde-btn');
 const autogradingModeModal = document.getElementById('autograding-mode-modal');
 const autogradingModeCancelBtn = document.getElementById('autograding-mode-cancel-btn');
 const autogradingModeContinueBtn = document.getElementById('autograding-mode-continue-btn');
+const autogradingImageModal = document.getElementById('autograding-image-modal');
+const autogradingImageCancelBtn = document.getElementById('autograding-image-cancel-btn');
+const autogradingImageStartBtn = document.getElementById('autograding-image-start-btn');
+const autogradingImageBatchSize = document.getElementById('autograding-image-batch-size');
+const autogradingImageQuality = document.getElementById('autograding-image-quality');
+const autogradingImageIncludeAnswer = document.getElementById('autograding-image-include-answer');
+const autogradingImageIncludeFeedback = document.getElementById('autograding-image-include-feedback');
 
 async function startAutogradingTextRubricFlow() {
     if (!currentSession || !currentProblemNumber) return;
@@ -2041,7 +2048,52 @@ autogradingModeContinueBtn.addEventListener('click', () => {
     if (mode === 'text-rubric') {
         startAutogradingTextRubricFlow();
     } else {
-        showNotification('Image-only autograding is not wired up yet.');
+        autogradingImageModal.style.display = 'flex';
+    }
+});
+
+autogradingImageCancelBtn.addEventListener('click', () => {
+    autogradingImageModal.style.display = 'none';
+});
+
+autogradingImageStartBtn.addEventListener('click', async () => {
+    if (!currentSession || !currentProblemNumber) return;
+
+    const settings = {
+        batch_size: autogradingImageBatchSize.value,
+        image_quality: autogradingImageQuality.value,
+        include_answer: autogradingImageIncludeAnswer.checked,
+        include_default_feedback: autogradingImageIncludeFeedback.checked
+    };
+
+    autogradingImageModal.style.display = 'none';
+
+    try {
+        const response = await fetch(`${API_BASE}/ai-grader/${currentSession.id}/autograde`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mode: 'image-only',
+                problem_number: currentProblemNumber,
+                settings
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to start image-only autograding');
+        }
+
+        const data = await response.json();
+        if (data.status === 'not_implemented') {
+            showNotification(data.message);
+            return;
+        }
+
+        showNotification(data.message || 'Image-only autograding started.');
+    } catch (error) {
+        console.error('Failed to start image-only autograding:', error);
+        showNotification(`Failed to start image-only autograding: ${error.message}`);
     }
 });
 
@@ -2145,6 +2197,7 @@ document.getElementById('autograding-confirm-btn').onclick = async () => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                mode: 'text-rubric',
                 problem_number: currentProblemNumber,
                 question_text: questionText,
                 max_points: maxPoints

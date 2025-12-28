@@ -4,6 +4,7 @@ AI grading endpoints for AI-assisted grading.
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from typing import Optional
 import logging
 import asyncio
 
@@ -28,11 +29,21 @@ class ExtractQuestionResponse(BaseModel):
   message: str
 
 
+class ImageAutogradeSettings(BaseModel):
+  """Settings for image-only autograding."""
+  batch_size: str
+  image_quality: str
+  include_answer: bool = False
+  include_default_feedback: bool = False
+
+
 class AutogradeRequest(BaseModel):
   """Request to autograde a problem"""
+  mode: str = "text-rubric"
   problem_number: int
-  question_text: str  # User-verified question text
-  max_points: float  # Maximum points for this problem
+  question_text: Optional[str] = None  # User-verified question text
+  max_points: Optional[float] = None  # Maximum points for this problem
+  settings: Optional[ImageAutogradeSettings] = None
 
 
 class AutogradeResponse(BaseModel):
@@ -171,6 +182,19 @@ async def start_autograde(
 ):
   """Start autograding process for a problem (instructor only)"""
 
+  mode_handlers = {
+    "text-rubric": _start_autograde_text,
+    "image-only": _start_autograde_image,
+  }
+  handler = mode_handlers.get(request.mode)
+  if not handler:
+    raise HTTPException(status_code=400,
+                        detail=f"Unsupported autograding mode: {request.mode}")
+  return await handler(session_id, request, background_tasks)
+
+
+async def _start_autograde_text(session_id: int, request: AutogradeRequest,
+                                background_tasks: BackgroundTasks):
   session_repo = SessionRepository()
   problem_repo = ProblemRepository()
   metadata_repo = ProblemMetadataRepository()
@@ -178,6 +202,10 @@ async def start_autograde(
   # Verify session exists
   if not session_repo.exists(session_id):
     raise HTTPException(status_code=404, detail="Session not found")
+
+  if not request.question_text or request.max_points is None:
+    raise HTTPException(status_code=400,
+                        detail="question_text and max_points are required")
 
   # Count ungraded problems (include blank submissions for feedback)
   ungraded_count = problem_repo.count_ungraded_for_problem_number(
@@ -209,6 +237,24 @@ async def start_autograde(
     status="started",
     problem_number=request.problem_number,
     message=f"Autograding started for {ungraded_count} problems")
+
+
+async def _start_autograde_image(session_id: int, request: AutogradeRequest,
+                                 background_tasks: BackgroundTasks):
+  session_repo = SessionRepository()
+
+  # Verify session exists
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  if not request.settings:
+    raise HTTPException(status_code=400,
+                        detail="settings are required for image-only mode")
+
+  return AutogradeResponse(
+    status="not_implemented",
+    problem_number=request.problem_number,
+    message="Image-only autograding settings captured. Backend execution is not wired up yet.")
 
 
 async def run_autograding(session_id: int, problem_number: int,

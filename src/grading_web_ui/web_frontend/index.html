@@ -197,6 +197,48 @@
         </div>
     </div>
 
+    <!-- Autograding Image Settings Modal -->
+    <div id="autograding-image-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+        <div style="background: white; border-radius: 8px; padding: 24px; max-width: 520px; width: 90%; max-height: 90vh; overflow-y: auto;">
+            <h2 style="margin-top: 0;">Image-only Settings</h2>
+            <p style="color: var(--gray-700); margin-bottom: 15px;">
+                Configure how batches are sent for image-based grading.
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px;">
+                <label style="display: flex; flex-direction: column; gap: 6px;">
+                    <strong>Batch size</strong>
+                    <select id="autograding-image-batch-size" style="padding: 8px; border-radius: 4px; border: 1px solid var(--gray-300);">
+                        <option value="1">1 submission at a time</option>
+                        <option value="2">2 submissions</option>
+                        <option value="5">5 submissions</option>
+                        <option value="10">10 submissions</option>
+                        <option value="all">All submissions</option>
+                    </select>
+                </label>
+                <label style="display: flex; flex-direction: column; gap: 6px;">
+                    <strong>Image quality</strong>
+                    <select id="autograding-image-quality" style="padding: 8px; border-radius: 4px; border: 1px solid var(--gray-300);">
+                        <option value="low">Low (fast)</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High (slow)</option>
+                    </select>
+                </label>
+                <label style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="autograding-image-include-answer">
+                    <span>Include auto-generated answer (if available)</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="autograding-image-include-feedback">
+                    <span>Include default feedback (if available)</span>
+                </label>
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button id="autograding-image-cancel-btn" class="btn">Cancel</button>
+                <button id="autograding-image-start-btn" class="btn btn-primary">Start Autograding</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Autograding Modal -->
     <div id="autograding-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
         <div style="background: white; border-radius: 8px; padding: 30px; max-width: 800px; width: 90%; max-height: 90vh; overflow-y: auto;">
