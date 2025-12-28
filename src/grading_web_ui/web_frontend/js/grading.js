@@ -19,6 +19,9 @@ function initializeGrading() {
     setupProblemImageResize();
 }
 
+// Ensure global access for navigation hooks.
+window.initializeGrading = initializeGrading;
+
 // Load max points metadata for all problems
 async function loadProblemMaxPoints() {
     try {
@@ -81,15 +84,29 @@ async function loadProblemNumbers() {
             fetch(`${API_BASE}/sessions/${currentSession.id}/stats`)
         ]);
 
+        if (!numbersResponse.ok) {
+            const message = await numbersResponse.text();
+            console.error('Failed to load problem numbers:', numbersResponse.status, message);
+            return;
+        }
+
         const data = await numbersResponse.json();
-        const stats = await statsResponse.json();
+        let stats = { problem_stats: [] };
+        if (statsResponse.ok) {
+            stats = await statsResponse.json();
+        } else {
+            const message = await statsResponse.text();
+            console.warn('Failed to load stats for problem counts:', statsResponse.status, message);
+        }
         availableProblemNumbers = data.problem_numbers;
 
         // Build a map of problem number -> ungraded count
         const ungradedCounts = {};
-        stats.problem_stats.forEach(ps => {
-            ungradedCounts[ps.problem_number] = ps.num_total - ps.num_graded;
-        });
+        if (Array.isArray(stats.problem_stats)) {
+            stats.problem_stats.forEach(ps => {
+                ungradedCounts[ps.problem_number] = ps.num_total - ps.num_graded;
+            });
+        }
 
         const select = document.getElementById('problem-select');
         select.innerHTML = '';
@@ -121,6 +138,12 @@ async function loadProblemNumbers() {
 async function updateOverallProgress() {
     try {
         const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/stats`);
+        if (!response.ok) {
+            const message = await response.text();
+            console.error('Failed to load stats for progress:', response.status, message);
+            return;
+        }
+
         const stats = await response.json();
 
         const percentage = stats.progress_percentage || 0;
@@ -1938,9 +1961,12 @@ answerDialog.addEventListener('click', (e) => {
 
 let autogradingEventSource = null;
 
-// Start Autograding button
 const startAutogradeBtn = document.getElementById('start-autograde-btn');
-startAutogradeBtn.addEventListener('click', async () => {
+const autogradingModeModal = document.getElementById('autograding-mode-modal');
+const autogradingModeCancelBtn = document.getElementById('autograding-mode-cancel-btn');
+const autogradingModeContinueBtn = document.getElementById('autograding-mode-continue-btn');
+
+async function startAutogradingTextRubricFlow() {
     if (!currentSession || !currentProblemNumber) return;
 
     // Show modal with extract phase
@@ -1993,6 +2019,29 @@ startAutogradeBtn.addEventListener('click', async () => {
         console.error('Failed to extract question:', error);
         modal.style.display = 'none';
         showNotification(`Failed to extract question: ${error.message}`);
+    }
+}
+
+// Start Autograding button: choose mode first
+startAutogradeBtn.addEventListener('click', () => {
+    if (!currentSession || !currentProblemNumber) return;
+    autogradingModeModal.style.display = 'flex';
+});
+
+autogradingModeCancelBtn.addEventListener('click', () => {
+    autogradingModeModal.style.display = 'none';
+});
+
+autogradingModeContinueBtn.addEventListener('click', () => {
+    const selected = document.querySelector('input[name="autograding-mode"]:checked');
+    const mode = selected ? selected.value : 'text-rubric';
+
+    autogradingModeModal.style.display = 'none';
+
+    if (mode === 'text-rubric') {
+        startAutogradingTextRubricFlow();
+    } else {
+        showNotification('Image-only autograding is not wired up yet.');
     }
 });
 

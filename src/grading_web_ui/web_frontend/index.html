@@ -163,6 +163,40 @@
     </div>
   </div>
 
+    <!-- Autograding Mode Modal -->
+    <div id="autograding-mode-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+        <div style="background: white; border-radius: 8px; padding: 24px; max-width: 520px; width: 90%; max-height: 90vh; overflow-y: auto;">
+            <h2 style="margin-top: 0;">Autograding Mode</h2>
+            <p style="color: var(--gray-700); margin-bottom: 15px;">
+                Choose how you want to run autograding for this problem.
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+                <label style="display: flex; gap: 10px; cursor: pointer;">
+                    <input type="radio" name="autograding-mode" value="text-rubric" checked>
+                    <div>
+                        <strong>Text extraction + rubric</strong>
+                        <div style="color: var(--gray-600); font-size: 13px;">
+                            Extract question text, build/verify a rubric, then grade all answers.
+                        </div>
+                    </div>
+                </label>
+                <label style="display: flex; gap: 10px; cursor: pointer;">
+                    <input type="radio" name="autograding-mode" value="image-only">
+                    <div>
+                        <strong>Image-only grading</strong>
+                        <div style="color: var(--gray-600); font-size: 13px;">
+                            Grade using the question image only (no text extraction).
+                        </div>
+                    </div>
+                </label>
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button id="autograding-mode-cancel-btn" class="btn">Cancel</button>
+                <button id="autograding-mode-continue-btn" class="btn btn-primary">Continue</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Autograding Modal -->
     <div id="autograding-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
         <div style="background: white; border-radius: 8px; padding: 30px; max-width: 800px; width: 90%; max-height: 90vh; overflow-y: auto;">

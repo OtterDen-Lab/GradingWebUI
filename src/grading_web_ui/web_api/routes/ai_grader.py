@@ -112,46 +112,33 @@ async def extract_question(
 
   # Get image data - either directly or extract from PDF
   image_data = None
-  if problem.image_data:
+  if getattr(problem, "image_data", None):
     # Legacy: image_data is stored
     image_data = problem.image_data
   elif problem.region_coords:
     # New: extract from PDF using region_coords
     import json
-    import base64
-    import fitz
 
     region_data = problem.region_coords
+    if isinstance(region_data, str):
+      region_data = json.loads(region_data)
 
-    # Get PDF data from submission
     submission = submission_repo.get_by_id(problem.submission_id)
 
     if submission and submission.exam_pdf_data:
-      # Extract region from PDF
-      pdf_bytes = base64.b64decode(submission.exam_pdf_data)
-      pdf_document = fitz.open("pdf", pdf_bytes)
-      page = pdf_document[region_data["page_number"]]
-
-      region = fitz.Rect(0, region_data["region_y_start"], page.rect.width,
-                         region_data["region_y_end"])
-
-      # Extract region as new PDF page
-      problem_pdf = fitz.open()
-      problem_page = problem_pdf.new_page(width=region.width,
-                                          height=region.height)
-      problem_page.show_pdf_page(problem_page.rect,
-                                 pdf_document,
-                                 region_data["page_number"],
-                                 clip=region)
-
-      # Convert to PNG
-      pix = problem_page.get_pixmap(dpi=150)
-      img_bytes = pix.tobytes("png")
-      image_data = base64.b64encode(img_bytes).decode("utf-8")
-
-      # Cleanup
-      problem_pdf.close()
-      pdf_document.close()
+      image_data = AIGraderService().problem_service.extract_image_from_pdf_data(
+        pdf_base64=submission.exam_pdf_data,
+        page_number=region_data["page_number"],
+        region_y_start=region_data["region_y_start"],
+        region_y_end=region_data["region_y_end"],
+        end_page_number=region_data.get("end_page_number"),
+        end_region_y=region_data.get("end_region_y"),
+        region_y_start_pct=region_data.get("region_y_start_pct"),
+        region_y_end_pct=region_data.get("region_y_end_pct"),
+        end_region_y_pct=region_data.get("end_region_y_pct"),
+        page_transforms=region_data.get("page_transforms"),
+        dpi=150
+      )
 
   if not image_data:
     raise HTTPException(status_code=500,

@@ -212,7 +212,18 @@ async def get_session_stats(
   # Get overall stats
   overall_stats = problem_repo.get_session_overall_stats(session_id)
   if overall_stats["total_problems"] == 0:
-    raise HTTPException(status_code=404, detail="Session not found")
+    session_repo = SessionRepository()
+    if not session_repo.exists(session_id):
+      raise HTTPException(status_code=404, detail="Session not found")
+    return SessionStatsResponse(
+      session_id=session_id,
+      total_submissions=0,
+      total_problems=0,
+      problems_graded=0,
+      problems_remaining=0,
+      progress_percentage=0,
+      problem_stats=[],
+    )
 
   total_submissions = overall_stats["total_submissions"]
   total_problems = overall_stats["total_problems"]
