@@ -238,6 +238,7 @@ class ExamProcessor:
     diff_threshold = 12
     ink_threshold = 230
     border_component_area = 0.01
+    line_kernel_len = 40
 
     grayscale_images = []
     widths = []
@@ -267,6 +268,15 @@ class ExamProcessor:
       diff = np.abs(img_array - median_image)
       ink_mask = (diff > diff_threshold) & (img_array < ink_threshold)
       mask = ink_mask.astype(np.uint8)
+
+      if mask.any():
+        kernel_h = np.ones((1, line_kernel_len), np.uint8)
+        kernel_v = np.ones((line_kernel_len, 1), np.uint8)
+        line_h = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_h)
+        line_v = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_v)
+        line_mask = (line_h | line_v)
+        if line_mask.any():
+          mask[line_mask > 0] = 0
 
       if mask.any():
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
