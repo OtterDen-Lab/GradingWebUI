@@ -894,6 +894,19 @@ class ExamProcessor:
             f"Pre-scan: Problem {problem_number_prescan}: No QR code found")
 
         problem_number_prescan += 1
+      max_workers = min(6, os.cpu_count() or 1)
+      with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(scan_region, region) for region in regions]
+        for future in concurrent.futures.as_completed(futures):
+          problem_num, qr_data = future.result()
+          if qr_data:
+            log.info(
+              f"Pre-scan: Problem {problem_num}: Found QR code with max_points={qr_data['max_points']}"
+            )
+            qr_data_by_problem[problem_num] = qr_data
+          else:
+            log.debug(
+              f"Pre-scan: Problem {problem_num}: No QR code found")
 
       log.info(
         f"Pre-scan complete: Found {len(qr_data_by_problem)} QR codes out of {problem_number_prescan - 1} problems"
