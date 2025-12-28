@@ -892,3 +892,24 @@ class ProblemRepository(BaseRepository[Problem]):
         SET score = ?, feedback = ?, graded = 0
         WHERE id = ?
       """, (score, feedback, problem_id))
+
+  def update_ai_blank(self, problem_id: int, feedback: str) -> None:
+    """
+    Mark a problem as blank based on AI detection but keep it ungraded.
+
+    Args:
+      problem_id: Problem primary key
+      feedback: Feedback addressed to the student
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        UPDATE problems
+        SET score = 0,
+            feedback = ?,
+            graded = 0,
+            is_blank = 1,
+            blank_method = 'ai',
+            blank_reasoning = 'Marked blank by AI autograder'
+        WHERE id = ?
+      """, (feedback, problem_id))

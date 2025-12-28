@@ -213,7 +213,7 @@ class AIGraderService:
       f"1. An INTEGER score out of {max_points} points (no decimals, round to nearest integer)\n"
       f"2. Clear and constructive feedback for the student\n\n"
       f"IMPORTANT: The score must be a whole number (integer) between 0 and {int(max_points)}.\n"
-      f"IMPORTANT: The feedback should be concise, direct, constructive, and helpful for the student to understand what they did well and what could be improved.\n"
+      f"IMPORTANT: The feedback should be addressed to the student, explain where their work went wrong, and suggest how to improve. Do NOT provide a full solution.\n"
       f"IMPORTANT: If the answer is blank, minimal, or shows no understanding, score it 0 and provide constructive feedback on how to approach the problem correctly. Focus on what a correct answer would include.\n\n"
       f"Format your response as:\n"
       f"SCORE: [integer]\n"
@@ -624,7 +624,8 @@ class AIGraderService:
         "items": [{
           "problem_id": row["id"],
           "submission_id": row["submission_id"],
-          "answer_available": bool(row.get("qr_encrypted_data"))
+          "answer_available": bool(row.get("qr_encrypted_data")),
+          "is_blank": bool(row.get("is_blank"))
         } for row in problems[:sample_count]]
       }
       log.info("Image-only autograding dry run: %s", summary)
@@ -684,9 +685,17 @@ class AIGraderService:
         if not problem_id:
           continue
         seen_ids.add(problem_id)
-        score = self._coerce_score(result.get("score"), max_points)
-        feedback = (result.get("feedback") or "").strip()
-        problem_repo.update_ai_grade(problem_id, score, feedback)
+        is_blank = bool(result.get("is_blank"))
+        score_value = result.get("score")
+        if score_value == "-":
+          is_blank = True
+        if is_blank:
+          feedback = (result.get("feedback") or "").strip() or "No answer detected. Please show your work."
+          problem_repo.update_ai_blank(problem_id, feedback=feedback)
+        else:
+          score = self._coerce_score(score_value, max_points)
+          feedback = (result.get("feedback") or "").strip()
+          problem_repo.update_ai_grade(problem_id, score, feedback)
         graded_count += 1
         processed += 1
         if progress_callback:
@@ -778,9 +787,10 @@ class AIGraderService:
       f"The problem is worth {int(max_points)} points.",
       "Each submission is provided as an image attachment.",
       "Return ONLY valid JSON with this shape:",
-      '{"results":[{"problem_id":123,"score":4,"feedback":"..."}]}',
+      '{"results":[{"problem_id":123,"score":4,"feedback":"...","is_blank":false}]}',
       "Scores must be integers between 0 and the max points.",
-      "If the answer is blank or minimal, score 0 and give brief constructive feedback."
+      "If the answer is blank or minimal, set is_blank=true and set score to \"-\".",
+      "Feedback must be addressed to the student, explain where their reasoning went wrong, and suggest how to improve (no full solution)."
     ]
 
     if question_text:

@@ -413,9 +413,15 @@ function displayCurrentProblem() {
         const oldAiIndicator = document.getElementById('ai-graded-indicator');
         if (oldAiIndicator) oldAiIndicator.remove();
     } else if (currentProblem.is_blank) {
-        // Don't auto-populate score for heuristically detected blanks - let user verify
-        document.getElementById('score-input').value = '';
-        document.getElementById('feedback-input').value = '';
+        const isAiBlank = currentProblem.blank_method === 'ai' || currentProblem.feedback;
+        if (isAiBlank) {
+            document.getElementById('score-input').value = '-';
+            document.getElementById('feedback-input').value = currentProblem.feedback || '';
+        } else {
+            // Don't auto-populate score for heuristically detected blanks - let user verify
+            document.getElementById('score-input').value = '';
+            document.getElementById('feedback-input').value = '';
+        }
 
         // Show blank detection indicator
         const blankIndicator = document.createElement('div');
@@ -433,9 +439,11 @@ function displayCurrentProblem() {
         const oldIndicator = document.getElementById('blank-indicator');
         if (oldIndicator) oldIndicator.remove();
 
-        // Insert before the problem image
-        const problemContainer = document.querySelector('.problem-container');
-        problemContainer.parentNode.insertBefore(blankIndicator, problemContainer);
+        // Insert in the grading indicators area
+        const indicatorContainer = document.getElementById('grading-indicators');
+        if (indicatorContainer) {
+            indicatorContainer.appendChild(blankIndicator);
+        }
     } else {
         // Remove blank indicator if it exists
         const oldBlankIndicator = document.getElementById('blank-indicator');
@@ -469,9 +477,11 @@ function displayCurrentProblem() {
             const oldAiIndicator = document.getElementById('ai-graded-indicator');
             if (oldAiIndicator) oldAiIndicator.remove();
 
-            // Insert before the problem image
-            const problemContainer = document.querySelector('.problem-container');
-            problemContainer.parentNode.insertBefore(aiIndicator, problemContainer);
+            // Insert in the grading indicators area
+            const indicatorContainer = document.getElementById('grading-indicators');
+            if (indicatorContainer) {
+                indicatorContainer.appendChild(aiIndicator);
+            }
         } else {
             // Clear form for non-AI-graded problems
             document.getElementById('score-input').value = '';
@@ -1239,91 +1249,6 @@ document.getElementById('export-session-btn').onclick = async () => {
     } catch (error) {
         console.error('Export failed:', error);
         alert('Failed to export session. Please try again.');
-    }
-};
-
-// Re-scan QR code button (for current problem instance only)
-document.getElementById('rescan-problem-qr-btn').onclick = async () => {
-    if (!currentProblem) {
-        alert('No problem loaded');
-        return;
-    }
-
-    // Ask user for confirmation and DPI selection
-    const dpiInput = prompt(
-        `Re-scan QR code for this submission's Problem ${currentProblem.problem_number} at higher DPI?\n\n` +
-        'Enter DPI value (default: 600, higher = better for complex QR codes):\n' +
-        'Recommended values:\n' +
-        '  - 600 (default): Good for 2x upsampling from 300 DPI scans\n' +
-        '  - 450: Lighter, faster processing\n' +
-        '  - 900: Very high quality, slower (3x upsampling)',
-        '600'
-    );
-
-    if (!dpiInput) {
-        // User cancelled
-        return;
-    }
-
-    const dpi = parseInt(dpiInput);
-    if (isNaN(dpi) || dpi < 72 || dpi > 1200) {
-        alert('Invalid DPI value. Please enter a number between 72 and 1200.');
-        return;
-    }
-
-    try {
-        // Disable button during processing
-        const rescanBtn = document.getElementById('rescan-problem-qr-btn');
-        const originalText = rescanBtn.textContent;
-        rescanBtn.disabled = true;
-        rescanBtn.textContent = '🔄 Scanning...';
-
-        // Make API call to rescan QR code for this specific problem instance
-        const response = await fetch(`${API_BASE}/problems/${currentProblem.id}/rescan-qr?dpi=${dpi}`, {
-            method: 'POST'
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'QR re-scan failed');
-        }
-
-        const result = await response.json();
-
-        // Show results
-        if (result.qr_found) {
-            alert(`QR Code Found!\n\n` +
-                  `Problem ${result.problem_number}\n` +
-                  `Max Points: ${result.max_points}\n` +
-                  `DPI: ${result.dpi_used}`);
-
-            // Reload max points and update UI
-            await loadProblemMaxPoints();
-            updateMaxPointsDropdown();
-
-            // Update the current problem's has_qr_data flag
-            currentProblem.has_qr_data = true;
-
-            // Show the "Show Answer" button now that we have QR data
-            const showAnswerBtn = document.getElementById('show-answer-btn');
-            if (showAnswerBtn) {
-                showAnswerBtn.style.display = 'inline-block';
-            }
-        } else {
-            alert(`No QR Code Found\n\n` +
-                  `Problem ${result.problem_number}\n` +
-                  `DPI Used: ${result.dpi_used}\n\n` +
-                  `Try increasing the DPI or check if the QR code is present on the exam.`);
-        }
-
-    } catch (error) {
-        console.error('QR re-scan failed:', error);
-        alert(`Failed to re-scan QR code: ${error.message}`);
-    } finally {
-        // Re-enable button
-        const rescanBtn = document.getElementById('rescan-problem-qr-btn');
-        rescanBtn.disabled = false;
-        rescanBtn.textContent = originalText;
     }
 };
 
@@ -2469,39 +2394,35 @@ let explanationCache = {};
 
 // Load explanation from QR code if available
 async function loadExplanation() {
-    const container = document.getElementById('explanation-container');
-    const content = document.getElementById('explanation-content');
+    const controls = document.getElementById('explanation-controls');
+    const viewBtn = document.getElementById('view-explanation-btn');
 
     if (!currentProblem || !currentProblem.has_qr_data) {
-        // No QR data - hide explanation container
-        container.style.display = 'none';
+        // No QR data - hide explanation controls
+        if (controls) controls.style.display = 'none';
         return;
+    }
+
+    if (controls) controls.style.display = 'block';
+    if (viewBtn) {
+        viewBtn.disabled = true;
+        viewBtn.textContent = 'Loading...';
     }
 
     // Check cache first
     if (explanationCache[currentProblem.id]) {
-        // Parse cached markdown to HTML
-        const htmlContent = marked.parse(explanationCache[currentProblem.id]);
-        content.innerHTML = htmlContent;
-        container.style.display = 'block';
-
-        // Render MathJax if available
-        if (typeof MathJax !== 'undefined') {
-            MathJax.typesetPromise([content]).catch((err) => console.error('MathJax typesetting failed:', err));
+        if (viewBtn) {
+            viewBtn.disabled = false;
+            viewBtn.textContent = 'View Explanation';
         }
         return;
     }
-
-    // Show loading state
-    container.style.display = 'block';
-    content.innerHTML = '<span class="explanation-placeholder">Loading explanation...</span>';
 
     try {
         const response = await fetch(`${API_BASE}/problems/${currentProblem.id}/regenerate-answer`);
 
         if (!response.ok) {
-            // Failed to load - hide container
-            container.style.display = 'none';
+            if (controls) controls.style.display = 'none';
             return;
         }
 
@@ -2510,22 +2431,44 @@ async function loadExplanation() {
         if (data.explanation_markdown) {
             // Cache explanation
             explanationCache[currentProblem.id] = data.explanation_markdown;
-
-            // Convert markdown to HTML using marked.js
-            const htmlContent = marked.parse(data.explanation_markdown);
-            content.innerHTML = htmlContent;
-
-            // Render MathJax if available (after markdown conversion)
-            if (typeof MathJax !== 'undefined') {
-                MathJax.typesetPromise([content]).catch((err) => console.error('MathJax typesetting failed:', err));
+            if (viewBtn) {
+                viewBtn.disabled = false;
+                viewBtn.textContent = 'View Explanation';
             }
         } else {
             // No explanation available
-            container.style.display = 'none';
+            if (controls) controls.style.display = 'none';
         }
 
     } catch (error) {
         console.error('Failed to load explanation:', error);
-        container.style.display = 'none';
+        if (controls) controls.style.display = 'none';
     }
 }
+
+function showExplanationDialog() {
+    const dialog = document.getElementById('explanation-dialog');
+    const content = document.getElementById('explanation-dialog-content');
+
+    if (!currentProblem || !explanationCache[currentProblem.id]) {
+        showNotification('Explanation not available for this problem.');
+        return;
+    }
+
+    const htmlContent = marked.parse(explanationCache[currentProblem.id]);
+    content.innerHTML = htmlContent;
+    dialog.style.display = 'flex';
+
+    if (typeof MathJax !== 'undefined') {
+        MathJax.typesetPromise([content]).catch((err) => console.error('MathJax typesetting failed:', err));
+    }
+}
+
+document.getElementById('view-explanation-btn')?.addEventListener('click', () => {
+    showExplanationDialog();
+});
+
+document.getElementById('close-explanation-x')?.addEventListener('click', () => {
+    const dialog = document.getElementById('explanation-dialog');
+    dialog.style.display = 'none';
+});

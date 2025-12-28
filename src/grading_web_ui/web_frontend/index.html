@@ -527,16 +527,22 @@
                                 <textarea id="feedback-input" rows="3" placeholder="Optional feedback for student" style="margin-top: 5px;"></textarea>
                             </label>
                         </div>
-                        <div style="display: flex; gap: 10px; margin-bottom: 5px; flex-wrap: wrap;">
+                        <div id="grading-indicators" style="display: flex; flex-direction: column; gap: 10px; margin-top: 12px;"></div>
+                        <div style="display: flex; gap: 10px; margin-bottom: 6px; flex-wrap: wrap;">
                             <button id="submit-grade-btn" class="btn btn-primary">Submit & Next</button>
                             <button id="back-problem-btn" class="btn">← Back</button>
                             <button id="next-problem-btn" class="btn">Skip</button>
-                            <button id="show-context-btn" class="btn btn-secondary">Show in Context</button>
-                            <button id="decipher-btn" class="btn btn-secondary">Decipher Handwriting</button>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-bottom: 6px; flex-wrap: wrap;">
                             <button id="show-answer-btn" class="btn btn-secondary" style="display: none;">Show Answer</button>
-                            <button id="rescan-problem-qr-btn" class="btn btn-secondary" title="Re-scan QR code for this problem at higher DPI">🔄 Re-scan QR</button>
-                            <button id="start-autograde-btn" class="btn btn-success instructor-only">Start Autograding</button>
+                            <button id="decipher-btn" class="btn btn-secondary">Decipher Handwriting</button>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-bottom: 6px; flex-wrap: wrap;">
                             <button id="review-grades-btn" class="btn btn-secondary">Review Graded</button>
+                            <button id="show-context-btn" class="btn btn-secondary">Show in Context</button>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-bottom: 5px; flex-wrap: wrap;">
+                            <button id="start-autograde-btn" class="btn btn-success instructor-only">Start Autograding</button>
                         </div>
                         <div style="text-align: center; padding: 5px 0;">
                             <small style="color: var(--gray-600);">Shortcuts: <strong>0-9</strong> to enter score | <strong>Enter</strong> to submit</small>
@@ -565,17 +571,14 @@
                             </div>
                         </div>
 
-                        <!-- Explanation from QR Code -->
-                        <div id="explanation-container" class="explanation-container" style="display: none; background: #f0fdf4; border: 2px solid #10b981; border-radius: 8px; padding: 15px; margin-top: 15px;">
-                            <div class="explanation-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                                <strong style="color: #047857;">📝 Explanation:</strong>
+                        <!-- Explanation controls -->
+                        <div id="explanation-controls" style="display: none; margin-top: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
                                 <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; font-size: 14px; cursor: pointer;">
                                     <input type="checkbox" id="include-explanation-checkbox" checked style="cursor: pointer;">
-                                    <span>Include in student feedback</span>
+                                    <span>Include explanation in student feedback</span>
                                 </label>
-                            </div>
-                            <div id="explanation-content" class="explanation-content" style="line-height: 1.6; color: #064e3b;">
-                                <span class="explanation-placeholder">Loading explanation...</span>
+                                <button id="view-explanation-btn" class="btn btn-secondary btn-small">View Explanation</button>
                             </div>
                         </div>
                     </div>
@@ -885,6 +888,20 @@
             </div>
 
             <div id="answer-error" style="display: none; background: #fee; padding: 15px; border-radius: 6px; border: 1px solid #f88; color: #c00; margin-top: 15px;"></div>
+        </div>
+        <div class="answer-resize-handle"></div>
+    </div>
+
+    <!-- Explanation Dialog -->
+    <div id="explanation-dialog" class="answer-dialog" style="display: none;">
+        <div class="answer-header">
+            <span class="answer-title">Explanation</span>
+            <button id="close-explanation-x" class="answer-close">&times;</button>
+        </div>
+        <div class="answer-content-wrapper">
+            <div id="explanation-dialog-content" style="background: #f0fdf4; padding: 20px; border-radius: 6px; border: 2px solid #10b981; color: #064e3b;">
+                <span class="explanation-placeholder">Loading explanation...</span>
+            </div>
         </div>
         <div class="answer-resize-handle"></div>
     </div>
