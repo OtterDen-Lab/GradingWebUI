@@ -228,12 +228,33 @@ class ExamProcessor:
     if not problems:
       return
 
+    results = ExamProcessor._detect_blanks_template_diff(problem_number, problems)
+    for problem, result in zip(problems, results):
+      if result["is_blank"]:
+        problem.mark_blank(
+          result["confidence"],
+          result["method"],
+          result["reasoning"]
+        )
+      else:
+        problem.mark_not_blank()
+
+  @staticmethod
+  def _detect_blanks_template_diff(
+      problem_number: int,
+      problems: List[ProblemDTO]
+  ) -> List[Dict]:
     if len(problems) < 2:
       log.info(
         "Skipping template blank detection for problem %s: need at least 2 submissions",
         problem_number
       )
-      return
+      return [{
+        "is_blank": False,
+        "confidence": 0.0,
+        "method": "template-diff",
+        "reasoning": "Insufficient submissions for blank detection"
+      } for _ in problems]
 
     diff_threshold = 12
     ink_threshold = 230
@@ -333,26 +354,27 @@ class ExamProcessor:
         problem_number,
         threshold
       )
+
     max_distance = max(
       abs(max(ink_ratios) - threshold),
       abs(min(ink_ratios) - threshold)
     )
 
-    for problem, ratio in zip(problems, ink_ratios):
+    results = []
+    for ratio in ink_ratios:
       is_blank = ratio <= threshold
       if max_distance > 0:
         confidence = min(1.0, abs(ratio - threshold) / max_distance)
       else:
         confidence = 0.5
+      results.append({
+        "is_blank": is_blank,
+        "confidence": confidence,
+        "method": "template-diff",
+        "reasoning": f"Ink ratio: {ratio:.5f}, threshold: {threshold:.5f}, diff_thr: {diff_threshold}"
+      })
 
-      if is_blank:
-        problem.mark_blank(
-          confidence,
-          "template-diff",
-          f"Ink ratio: {ratio:.5f}, threshold: {threshold:.5f}, diff_thr: {diff_threshold}"
-        )
-      else:
-        problem.mark_not_blank()
+    return results
   
   
   def post_process_submissions(
