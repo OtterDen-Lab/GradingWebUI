@@ -569,6 +569,34 @@ async def get_default_feedback(
   }
 
 
+@router.get("/{session_id}/ai-grading-notes/{problem_number}")
+async def get_ai_grading_notes(
+  session_id: int,
+  problem_number: int,
+  current_user: dict = Depends(require_session_access())
+):
+  """Get AI grading notes for a problem (requires session access)"""
+  metadata_repo = ProblemMetadataRepository()
+  notes = metadata_repo.get_ai_grading_notes(session_id, problem_number)
+  return {"ai_grading_notes": notes}
+
+
+@router.put("/{session_id}/ai-grading-notes")
+async def update_ai_grading_notes(
+  session_id: int,
+  problem_number: int,
+  ai_grading_notes: str = None,
+  current_user: dict = Depends(require_instructor)
+):
+  """Update AI grading notes (instructor only)"""
+  metadata_repo = ProblemMetadataRepository()
+  notes = ai_grading_notes or ""
+  metadata_repo.upsert_ai_grading_notes(session_id, problem_number, notes)
+  return {
+    "ai_grading_notes": notes
+  }
+
+
 @router.put("/{session_id}/default-feedback")
 async def update_default_feedback(
   session_id: int,
@@ -811,12 +839,13 @@ async def import_session(
         cursor.execute(
           """
           INSERT INTO problem_metadata
-          (session_id, problem_number, max_points, default_feedback, default_feedback_threshold)
-          VALUES (?, ?, ?, ?, ?)
+          (session_id, problem_number, max_points, default_feedback, default_feedback_threshold, ai_grading_notes)
+          VALUES (?, ?, ?, ?, ?, ?)
           """,
           (new_session_id, metadata["problem_number"],
            metadata.get("max_points"), metadata.get("default_feedback"),
-           metadata.get("default_feedback_threshold", 100.0)))
+           metadata.get("default_feedback_threshold", 100.0),
+           metadata.get("ai_grading_notes")))
 
       # Import feedback tags
       for tag in feedback_tags:

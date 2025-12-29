@@ -496,6 +496,7 @@ function displayCurrentProblem() {
     if (currentSession && currentProblemNumber) {
         loadFeedbackTags(currentSession.id, currentProblemNumber);
         loadDefaultFeedback(currentSession.id, currentProblemNumber);
+        loadAiGradingNotes(currentSession.id, currentProblemNumber);
     }
 
     // Load explanation from QR code if available

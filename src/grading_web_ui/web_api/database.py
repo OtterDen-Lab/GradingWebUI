@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 23
+CURRENT_SCHEMA_VERSION = 24
 
 
 def get_db_path() -> Path:
@@ -200,6 +200,7 @@ def create_schema(cursor):
             grading_rubric TEXT,
             default_feedback TEXT,
             default_feedback_threshold REAL DEFAULT 100.0,
+            ai_grading_notes TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (session_id) REFERENCES grading_sessions(id),
             UNIQUE(session_id, problem_number)
@@ -395,6 +396,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 23:
     migrate_to_v23(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (23)")
+
+  if from_version < 24:
+    migrate_to_v24(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (24)")
 
 
 def migrate_to_v2(cursor):
@@ -894,6 +899,21 @@ def migrate_to_v23(cursor):
   cursor.execute("ALTER TABLE users_new RENAME TO users")
 
   log.info("Successfully made email optional in users table")
+
+
+def migrate_to_v24(cursor):
+  """Add ai_grading_notes column to problem_metadata"""
+  log.info(
+    "Migrating to schema version 24: adding ai_grading_notes to problem_metadata"
+  )
+
+  cursor.execute("PRAGMA table_info(problem_metadata)")
+  existing_columns = {row[1] for row in cursor.fetchall()}
+
+  if 'ai_grading_notes' not in existing_columns:
+    cursor.execute(
+      "ALTER TABLE problem_metadata ADD COLUMN ai_grading_notes TEXT")
+    log.info("Added ai_grading_notes column")
 
 
 def update_problem_stats(session_id: int):

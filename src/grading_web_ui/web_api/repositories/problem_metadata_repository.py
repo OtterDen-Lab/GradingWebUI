@@ -155,6 +155,28 @@ class ProblemMetadataRepository(BaseRepository):
       row = cursor.fetchone()
       return row["question_text"] if row else None
 
+  def get_ai_grading_notes(self, session_id: int,
+                           problem_number: int) -> Optional[str]:
+    """
+    Get AI grading notes for a problem.
+
+    Args:
+      session_id: Session primary key
+      problem_number: Problem number
+
+    Returns:
+      Notes text or None if not set
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        SELECT ai_grading_notes FROM problem_metadata
+        WHERE session_id = ? AND problem_number = ?
+      """, (session_id, problem_number))
+
+      row = cursor.fetchone()
+      return row["ai_grading_notes"] if row else None
+
   def upsert_question_text(self, session_id: int, problem_number: int,
                           question_text: str) -> None:
     """
@@ -174,6 +196,26 @@ class ProblemMetadataRepository(BaseRepository):
         DO UPDATE SET question_text = excluded.question_text,
                      updated_at = CURRENT_TIMESTAMP
       """, (session_id, problem_number, question_text))
+
+  def upsert_ai_grading_notes(self, session_id: int, problem_number: int,
+                              notes: str) -> None:
+    """
+    Insert or update AI grading notes for a problem.
+
+    Args:
+      session_id: Session primary key
+      problem_number: Problem number
+      notes: Instructional notes for AI grading
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        INSERT INTO problem_metadata (session_id, problem_number, ai_grading_notes)
+        VALUES (?, ?, ?)
+        ON CONFLICT(session_id, problem_number)
+        DO UPDATE SET ai_grading_notes = excluded.ai_grading_notes,
+                     updated_at = CURRENT_TIMESTAMP
+      """, (session_id, problem_number, notes))
 
   def get_grading_rubric(self, session_id: int, problem_number: int) -> Optional[str]:
     """

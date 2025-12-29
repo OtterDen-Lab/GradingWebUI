@@ -158,7 +158,8 @@ class AIGraderService:
                     student_answer: str,
                     max_points: float,
                     grading_examples: List[Dict] = None,
-                    rubric: str = None) -> Tuple[int, str]:
+                    rubric: str = None,
+                    grading_notes: Optional[str] = None) -> Tuple[int, str]:
     """Grade a student's answer using AI.
 
         Args:
@@ -192,6 +193,12 @@ class AIGraderService:
         # Not JSON, treat as plain text
         rubric_section = f"\n\nGrading Rubric:\n{rubric}\n\nPlease follow this rubric when grading.\n"
 
+    # Build grading notes section
+    notes_section = ""
+    if grading_notes:
+      notes_section = (f"\n\nAdditional grading instructions:\n"
+                       f"{grading_notes}\n")
+
     # Build few-shot examples section
     examples_section = ""
     if grading_examples and len(grading_examples) > 0:
@@ -208,6 +215,7 @@ class AIGraderService:
       f"Question:\n{question_text}"
       f"{rubric_section}"
       f"{examples_section}\n"
+      f"{notes_section}\n"
       f"Current Student's Answer:\n{student_answer}\n\n"
       f"Please grade this answer and provide:\n"
       f"1. An INTEGER score out of {max_points} points (no decimals, round to nearest integer)\n"
@@ -455,6 +463,8 @@ class AIGraderService:
 
     question_text = self.get_or_extract_question(session_id, problem_number,
                                                  first_image_data)
+    grading_notes = metadata_repo.get_ai_grading_notes(session_id,
+                                                       problem_number)
 
     if progress_callback:
       progress_callback(0, total,
@@ -540,7 +550,8 @@ class AIGraderService:
             student_answer,
             max_points,
             grading_examples=grading_examples,
-            rubric=rubric)
+            rubric=rubric,
+            grading_notes=grading_notes)
 
           # Update problem with AI suggestion (score and feedback ready for instructor review)
           problem_repo.update_ai_grade(problem["id"], score, feedback)
@@ -591,6 +602,8 @@ class AIGraderService:
       feedback, _ = metadata_repo.get_default_feedback(session_id,
                                                        problem_number)
       default_feedback = feedback
+    grading_notes = metadata_repo.get_ai_grading_notes(session_id,
+                                                       problem_number)
 
     problems = problem_repo.get_ungraded_for_problem_number(
       session_id, problem_number)
@@ -677,6 +690,7 @@ class AIGraderService:
 
       results = self._grade_image_batch(problem_number, max_points,
                                         question_text, default_feedback,
+                                        grading_notes,
                                         batch_items, attachments)
       if len(results) < len(batch_items) and len(batch_items) > 1:
         log.warning(
@@ -689,7 +703,8 @@ class AIGraderService:
           retry_results = self._grade_image_batch(problem_number,
                                                   max_points,
                                                   question_text,
-                                                  default_feedback, [item],
+                                                  default_feedback,
+                                                  grading_notes, [item],
                                                   [attachments[idx - 1]])
           results.extend(retry_results)
 
@@ -794,6 +809,7 @@ class AIGraderService:
   def _grade_image_batch(self, problem_number: int, max_points: float,
                          question_text: Optional[str],
                          default_feedback: Optional[str],
+                         grading_notes: Optional[str],
                          batch_items: List[Dict],
                          attachments: List[Tuple[str, str]]) -> List[Dict]:
     message_lines = [
@@ -821,6 +837,9 @@ class AIGraderService:
     if default_feedback:
       message_lines.append(
         f"\nDefault feedback (use if appropriate):\n{default_feedback}")
+    if grading_notes:
+      message_lines.append(
+        f"\nAdditional grading instructions:\n{grading_notes}")
 
     message_lines.append("\nSubmission mapping (image order):")
     for idx, item in enumerate(batch_items, 1):

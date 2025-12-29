@@ -571,6 +571,17 @@
                             </div>
                         </div>
 
+                        <!-- AI Grading Notes Section -->
+                        <div id="ai-grading-notes-container" class="default-feedback-container" style="display: none;">
+                            <div class="default-feedback-header">
+                                <strong>AI Grading Notes:</strong>
+                                <button id="edit-ai-grading-notes-btn" class="btn btn-small">Edit</button>
+                            </div>
+                            <div id="ai-grading-notes-display" class="default-feedback-display">
+                                <span class="default-feedback-placeholder">No AI grading notes set.</span>
+                            </div>
+                        </div>
+
                         <!-- Explanation controls -->
                         <div id="explanation-controls" style="display: none; margin-top: 15px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
@@ -764,6 +775,28 @@
         </div>
     </div>
 
+    <!-- Edit AI Grading Notes Dialog -->
+    <div id="edit-ai-grading-notes-dialog" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+        <div class="dialog-content" style="background: white; border-radius: 8px; padding: 30px; max-width: 600px; width: 90%;">
+            <h2 class="dialog-header" style="margin-top: 0; cursor: move; user-select: none;">Edit AI Grading Notes</h2>
+            <p style="color: var(--gray-700); margin-bottom: 20px;">
+                Add extra grading instructions for this problem (e.g., order doesn't matter).
+            </p>
+
+            <label style="display: block; margin-bottom: 20px;">
+                <strong>AI Grading Notes:</strong>
+                <textarea id="ai-grading-notes-text" rows="5" maxlength="2000" placeholder="e.g., Order of cache contents does not matter." style="display: block; width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--gray-300); border-radius: 4px; resize: vertical;"></textarea>
+                <small style="color: var(--gray-600);">These notes are sent with AI autograding requests.</small>
+            </label>
+
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button id="cancel-ai-grading-notes-btn" class="btn">Cancel</button>
+                <button id="clear-ai-grading-notes-btn" class="btn btn-danger">Clear</button>
+                <button id="save-ai-grading-notes-btn" class="btn btn-primary">Save</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add Feedback Tag Dialog -->
     <div id="add-tag-dialog" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
         <div style="background: white; border-radius: 8px; padding: 30px; max-width: 500px; width: 90%;">
@@ -915,5 +948,6 @@
     <script src="/js/review.js"></script>
     <script src="/js/feedback_tags.js"></script>
     <script src="/js/default_feedback.js"></script>
+    <script src="/js/ai_grading_notes.js"></script>
 </body>
 </html>
