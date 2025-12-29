@@ -294,6 +294,10 @@
                     <input type="checkbox" id="autograding-image-include-feedback">
                     <span>Include default feedback (if available)</span>
                 </label>
+                <label style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="autograding-image-auto-accept">
+                    <span>Auto-accept AI scores</span>
+                </label>
             </div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button id="autograding-image-cancel-btn" class="btn">Cancel</button>
@@ -694,6 +698,7 @@
 
                 <div style="display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap;">
                     <button id="continue-grading-btn" class="btn btn-primary">← Continue Grading</button>
+                    <button id="run-autograde-all-btn" class="btn btn-primary instructor-only">Run AI on All Problems</button>
                     <button id="review-grades-stats-btn" class="btn btn-secondary">Review Graded Problems</button>
                     <button id="upload-more-stats-btn" class="btn btn-secondary instructor-only">+ Upload More Exams</button>
                     <button id="finalize-btn" class="btn btn-success instructor-only">Finalize & Upload to Canvas</button>

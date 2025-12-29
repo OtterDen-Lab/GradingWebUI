@@ -3,8 +3,11 @@ Service for AI-assisted grading of exam problems.
 """
 import logging
 import json
+import base64
+import io
 from typing import Dict, List, Optional, Tuple
 from grading_web_ui.lms_interface.ai_helper import AI_Helper__Anthropic
+from PIL import Image
 
 from ..repositories import ProblemRepository, ProblemMetadataRepository, SubmissionRepository
 from .problem_service import ProblemService
@@ -384,7 +387,8 @@ class AIGraderService:
                         session_id: int,
                         problem_number: int,
                         max_points: float = None,
-                        progress_callback=None) -> Dict:
+                        progress_callback=None,
+                        auto_accept: bool = False) -> Dict:
     """Autograde all ungraded submissions for a specific problem number.
 
         Args:
@@ -553,8 +557,14 @@ class AIGraderService:
             rubric=rubric,
             grading_notes=grading_notes)
 
-          # Update problem with AI suggestion (score and feedback ready for instructor review)
-          problem_repo.update_ai_grade(problem["id"], score, feedback)
+          if auto_accept:
+            if problem["is_blank"]:
+              problem_repo.accept_ai_blank(problem["id"], feedback=feedback)
+            else:
+              problem_repo.update_grade(problem["id"], score, feedback)
+          else:
+            # Update problem with AI suggestion (score and feedback ready for instructor review)
+            problem_repo.update_ai_grade(problem["id"], score, feedback)
 
           graded_count += 1
           log.info(f"AI graded problem {problem['id']}: {score}/{max_points}")
@@ -614,6 +624,7 @@ class AIGraderService:
     batch_size = self._parse_batch_size(settings.get("batch_size"), total)
     dpi = self._map_image_quality(settings.get("image_quality"))
     dry_run = bool(settings.get("dry_run"))
+    auto_accept = bool(settings.get("auto_accept"))
 
     if progress_callback:
       progress_callback(
@@ -653,6 +664,7 @@ class AIGraderService:
 
     for batch_start in range(0, total, batch_size):
       batch = problems[batch_start:batch_start + batch_size]
+      enforce_limit = len(batch) > 1
       batch_items = []
       attachments = []
 
@@ -671,6 +683,9 @@ class AIGraderService:
         answer_text = None
         if settings.get("include_answer"):
           answer_text = self._get_reference_answer(row)
+
+        if enforce_limit:
+          image_data = self._downscale_image_base64(image_data, max_dim=2000)
 
         batch_items.append({
           "problem_id": row["id"],
@@ -720,11 +735,17 @@ class AIGraderService:
           is_blank = True
         if is_blank:
           feedback = (result.get("feedback") or "").strip() or "No answer detected. Please show your work."
-          problem_repo.update_ai_blank(problem_id, feedback=feedback)
+          if auto_accept:
+            problem_repo.accept_ai_blank(problem_id, feedback=feedback)
+          else:
+            problem_repo.update_ai_blank(problem_id, feedback=feedback)
         else:
           score = self._coerce_score(score_value, max_points)
           feedback = (result.get("feedback") or "").strip()
-          problem_repo.update_ai_grade(problem_id, score, feedback)
+          if auto_accept:
+            problem_repo.update_grade(problem_id, score, feedback)
+          else:
+            problem_repo.update_ai_grade(problem_id, score, feedback)
         graded_count += 1
         processed += 1
         if progress_callback:
@@ -776,6 +797,25 @@ class AIGraderService:
           dpi=dpi
         )
     return None
+
+  def _downscale_image_base64(self, image_base64: str, max_dim: int) -> str:
+    """Downscale a base64 PNG image to fit within max_dim pixels if needed."""
+    try:
+      image_bytes = base64.b64decode(image_base64)
+      with Image.open(io.BytesIO(image_bytes)) as img:
+        width, height = img.size
+        max_side = max(width, height)
+        if max_side <= max_dim:
+          return image_base64
+        scale = max_dim / max_side
+        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        resized = img.resize(new_size, Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        resized.save(output, format="PNG", optimize=True)
+        return base64.b64encode(output.getvalue()).decode("ascii")
+    except Exception as exc:
+      log.warning("Failed to downscale image: %s", exc)
+      return image_base64
 
   def _get_reference_answer(self, problem_row: Dict) -> Optional[str]:
     encrypted_data = problem_row.get("qr_encrypted_data")

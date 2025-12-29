@@ -913,3 +913,27 @@ class ProblemRepository(BaseRepository[Problem]):
             blank_reasoning = 'Marked blank by AI autograder'
         WHERE id = ?
       """, (feedback, problem_id))
+
+  def accept_ai_blank(self, problem_id: int, feedback: Optional[str] = None) -> None:
+    """
+    Accept an AI-detected blank as a graded result.
+
+    Sets score to 0, graded to 1, is_blank to 1, and records AI blank method.
+
+    Args:
+      problem_id: Problem primary key
+      feedback: Feedback addressed to the student
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        UPDATE problems
+        SET score = 0,
+            feedback = ?,
+            graded = 1,
+            graded_at = CURRENT_TIMESTAMP,
+            is_blank = 1,
+            blank_method = 'ai',
+            blank_reasoning = 'Accepted as blank by AI autograder'
+        WHERE id = ?
+      """, (feedback, problem_id))

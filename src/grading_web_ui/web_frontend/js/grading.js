@@ -1885,8 +1885,11 @@ answerDialog.addEventListener('click', (e) => {
 // =============================================================================
 
 let autogradingEventSource = null;
+let autogradeAllProblems = false;
+let autogradingAllRunActive = false;
 
 const startAutogradeBtn = document.getElementById('start-autograde-btn');
+const startAutogradeAllBtn = document.getElementById('run-autograde-all-btn');
 const autogradingModeModal = document.getElementById('autograding-mode-modal');
 const autogradingModeCancelBtn = document.getElementById('autograding-mode-cancel-btn');
 const autogradingModeContinueBtn = document.getElementById('autograding-mode-continue-btn');
@@ -1898,6 +1901,7 @@ const autogradingImageBatchSize = document.getElementById('autograding-image-bat
 const autogradingImageQuality = document.getElementById('autograding-image-quality');
 const autogradingImageIncludeAnswer = document.getElementById('autograding-image-include-answer');
 const autogradingImageIncludeFeedback = document.getElementById('autograding-image-include-feedback');
+const autogradingImageAutoAccept = document.getElementById('autograding-image-auto-accept');
 
 async function startAutogradingTextRubricFlow() {
     if (!currentSession || !currentProblemNumber) return;
@@ -1958,11 +1962,19 @@ async function startAutogradingTextRubricFlow() {
 // Start Autograding button: choose mode first
 startAutogradeBtn.addEventListener('click', () => {
     if (!currentSession || !currentProblemNumber) return;
+    autogradeAllProblems = false;
+    autogradingModeModal.style.display = 'flex';
+});
+
+startAutogradeAllBtn.addEventListener('click', () => {
+    if (!currentSession) return;
+    autogradeAllProblems = true;
     autogradingModeModal.style.display = 'flex';
 });
 
 autogradingModeCancelBtn.addEventListener('click', () => {
     autogradingModeModal.style.display = 'none';
+    autogradeAllProblems = false;
 });
 
 autogradingModeContinueBtn.addEventListener('click', () => {
@@ -1971,29 +1983,43 @@ autogradingModeContinueBtn.addEventListener('click', () => {
 
     autogradingModeModal.style.display = 'none';
 
+    if (autogradeAllProblems && mode !== 'image-only') {
+        showNotification('Running AI on all problems currently supports image-only mode.');
+        autogradeAllProblems = false;
+        return;
+    }
+
     if (mode === 'text-rubric') {
         startAutogradingTextRubricFlow();
     } else {
+        if (autogradeAllProblems) {
+            autogradingImageAutoAccept.checked = true;
+        }
         autogradingImageModal.style.display = 'flex';
     }
 });
 
 autogradingImageCancelBtn.addEventListener('click', () => {
     autogradingImageModal.style.display = 'none';
+    autogradeAllProblems = false;
 });
 
-async function startImageOnlyAutograding(dryRun) {
-    if (!currentSession || !currentProblemNumber) return;
+async function startImageOnlyAutograding(dryRun, allProblems = false) {
+    if (!currentSession) return;
+    if (!allProblems && !currentProblemNumber) return;
 
     const settings = {
         batch_size: autogradingImageBatchSize.value,
         image_quality: autogradingImageQuality.value,
         include_answer: autogradingImageIncludeAnswer.checked,
         include_default_feedback: autogradingImageIncludeFeedback.checked,
+        auto_accept: autogradingImageAutoAccept.checked,
         dry_run: dryRun
     };
 
     autogradingImageModal.style.display = 'none';
+    autogradingAllRunActive = allProblems;
+    autogradeAllProblems = false;
 
     try {
         const modal = document.getElementById('autograding-modal');
@@ -2007,21 +2033,25 @@ async function startImageOnlyAutograding(dryRun) {
         progressPhase.style.display = 'block';
 
         document.getElementById('autograding-progress-message').textContent =
-            dryRun ? 'Starting image-only autograding dry run...' : 'Starting image-only autograding...';
+            dryRun
+                ? 'Starting image-only autograding dry run...'
+                : (allProblems ? 'Starting image-only autograding for all problems...' : 'Starting image-only autograding...');
         document.getElementById('autograding-progress-bar').style.width = '0%';
         document.getElementById('autograding-current').textContent = '0';
         document.getElementById('autograding-total').textContent = '0';
 
         connectToAutogradingStream();
 
-        const response = await fetch(`${API_BASE}/ai-grader/${currentSession.id}/autograde`, {
+        const endpoint = allProblems
+            ? `${API_BASE}/ai-grader/${currentSession.id}/autograde-all`
+            : `${API_BASE}/ai-grader/${currentSession.id}/autograde`;
+        const payload = allProblems
+            ? { mode: 'image-only', settings }
+            : { mode: 'image-only', problem_number: currentProblemNumber, settings };
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                mode: 'image-only',
-                problem_number: currentProblemNumber,
-                settings
-            })
+            body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
@@ -2038,15 +2068,16 @@ async function startImageOnlyAutograding(dryRun) {
         console.error('Failed to start image-only autograding:', error);
         document.getElementById('autograding-modal').style.display = 'none';
         showNotification(`Failed to start image-only autograding: ${error.message}`);
+        autogradingAllRunActive = false;
     }
 }
 
 autogradingImageStartBtn.addEventListener('click', () => {
-    startImageOnlyAutograding(false);
+    startImageOnlyAutograding(false, autogradeAllProblems);
 });
 
 autogradingImageDryRunBtn.addEventListener('click', () => {
-    startImageOnlyAutograding(true);
+    startImageOnlyAutograding(true, autogradeAllProblems);
 });
 
 // Cancel autograding
@@ -2225,10 +2256,18 @@ function connectToAutogradingStream() {
             modal.style.display = 'none';
 
             // Show completion message
-            showNotification(`Autograding complete! ${data.graded} of ${data.total} problems graded. Please review the AI suggestions.`, async () => {
-                // Reload current problem to show AI suggestion
-                await loadProblemOrMostRecent();
-            });
+            if (autogradingAllRunActive) {
+                const message = `Autograding complete! ${data.graded} of ${data.total} problems graded.`;
+                showNotification(message, async () => {
+                    await loadStatistics();
+                });
+                autogradingAllRunActive = false;
+            } else {
+                showNotification(`Autograding complete! ${data.graded} of ${data.total} problems graded. Please review the AI suggestions.`, async () => {
+                    // Reload current problem to show AI suggestion
+                    await loadProblemOrMostRecent();
+                });
+            }
         }, 2000);
     });
 
@@ -2240,6 +2279,7 @@ function connectToAutogradingStream() {
         } else {
             progressMessage.textContent = 'Connection error - autograding may still be running';
         }
+        autogradingAllRunActive = false;
     });
 }
 
