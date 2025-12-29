@@ -4,6 +4,7 @@ const API_BASE = '/api';
 let currentSession = null;
 let sessionsCache = [];
 let cloneSessionSource = null;
+let compareSessionSelections = new Set();
 let currentUser = null;
 let mockRosterEnabled = false;
 let sessionNameDirty = false;
@@ -434,6 +435,158 @@ document.getElementById('clone-session-form').onsubmit = async (e) => {
     }
 };
 
+function openCompareSessionsModal() {
+    compareSessionSelections = new Set();
+    renderCompareSessionsList();
+    updateCompareSelectionCount();
+    document.getElementById('compare-sessions-modal').style.display = 'flex';
+}
+
+function closeCompareSessionsModal() {
+    document.getElementById('compare-sessions-modal').style.display = 'none';
+    compareSessionSelections = new Set();
+}
+
+function renderCompareSessionsList() {
+    const list = document.getElementById('compare-sessions-list');
+    list.innerHTML = '';
+
+    if (!sessionsCache.length) {
+        list.innerHTML = '<div style="color: var(--gray-600);">No sessions available.</div>';
+        return;
+    }
+
+    const sorted = [...sessionsCache].sort((a, b) => {
+        const aName = a.session_name || a.assignment_name || `Session ${a.id}`;
+        const bName = b.session_name || b.assignment_name || `Session ${b.id}`;
+        return aName.localeCompare(bName);
+    });
+
+    sorted.forEach((session) => {
+        const label = document.createElement('label');
+        label.style.display = 'flex';
+        label.style.alignItems = 'flex-start';
+        label.style.gap = '8px';
+        label.style.padding = '6px 4px';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = session.id;
+        checkbox.checked = compareSessionSelections.has(session.id);
+        checkbox.addEventListener('change', (event) => {
+            if (event.target.checked) {
+                compareSessionSelections.add(session.id);
+            } else {
+                compareSessionSelections.delete(session.id);
+            }
+            updateCompareSelectionCount();
+        });
+
+        const name = session.session_name || session.assignment_name || `Session ${session.id}`;
+        const courseId = session.course_id !== undefined && session.course_id !== null ? session.course_id : 'unknown';
+        const course = session.course_name || `Course ${courseId}`;
+        const meta = document.createElement('div');
+        meta.innerHTML = `<strong>${name}</strong><div style="color: var(--gray-600); font-size: 12px;">${course} • ID ${session.id}</div>`;
+
+        label.appendChild(checkbox);
+        label.appendChild(meta);
+        list.appendChild(label);
+    });
+}
+
+function updateCompareSelectionCount() {
+    const countEl = document.getElementById('compare-session-count');
+    const selected = compareSessionSelections.size;
+    if (selected === 0) {
+        countEl.textContent = 'No sessions selected';
+    } else {
+        countEl.textContent = `${selected} session${selected === 1 ? '' : 's'} selected`;
+    }
+}
+
+function getSelectedCompareSessionIds() {
+    return Array.from(compareSessionSelections);
+}
+
+async function downloadCompareSessionsCsv(sessionIds) {
+    const response = await fetch(`${API_BASE}/sessions/compare-export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_ids: sessionIds })
+    });
+
+    if (!response.ok) {
+        let message = 'Failed to export comparison CSV';
+        try {
+            const error = await response.json();
+            message = error.detail || message;
+        } catch (err) {
+            // Ignore JSON parsing failure.
+        }
+        throw new Error(message);
+    }
+
+    const blob = await response.blob();
+    let filename = `session_comparison_${sessionIds.join('_')}.csv`;
+    const disposition = response.headers.get('Content-Disposition');
+    if (disposition) {
+        const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+        if (match) {
+            filename = match[1];
+        }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+}
+
+document.getElementById('compare-select-all-btn').onclick = () => {
+    compareSessionSelections = new Set(sessionsCache.map(session => session.id));
+    document.querySelectorAll('#compare-sessions-list input[type="checkbox"]').forEach((checkbox) => {
+        checkbox.checked = true;
+    });
+    updateCompareSelectionCount();
+};
+
+document.getElementById('compare-clear-all-btn').onclick = () => {
+    compareSessionSelections.clear();
+    document.querySelectorAll('#compare-sessions-list input[type="checkbox"]').forEach((checkbox) => {
+        checkbox.checked = false;
+    });
+    updateCompareSelectionCount();
+};
+
+document.getElementById('compare-sessions-cancel-btn').onclick = closeCompareSessionsModal;
+
+document.getElementById('compare-sessions-modal').onclick = (event) => {
+    if (event.target.id === 'compare-sessions-modal') {
+        closeCompareSessionsModal();
+    }
+};
+
+document.getElementById('compare-sessions-form').onsubmit = async (event) => {
+    event.preventDefault();
+    const sessionIds = getSelectedCompareSessionIds();
+    if (sessionIds.length < 2) {
+        alert('Select at least two sessions to compare.');
+        return;
+    }
+
+    try {
+        await downloadCompareSessionsCsv(sessionIds);
+        closeCompareSessionsModal();
+    } catch (error) {
+        console.error('Failed to export comparison CSV:', error);
+        alert(`Failed to export CSV: ${error.message}`);
+    }
+};
+
 // Select a session
 async function selectSession(sessionId) {
     try {
@@ -504,6 +657,9 @@ function setupEventListeners() {
   // New session button - open modal
   document.getElementById('new-session-btn').onclick = () => {
     openNewSessionModal();
+  };
+  document.getElementById('compare-sessions-btn').onclick = () => {
+    openCompareSessionsModal();
   };
 
   // Canvas environment change handler

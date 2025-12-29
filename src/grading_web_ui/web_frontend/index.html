@@ -163,42 +163,68 @@
     </div>
   </div>
 
-    <!-- Clone Session Modal -->
-    <div id="clone-session-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
-        <div style="background: white; border-radius: 8px; padding: 24px; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
-            <h2 style="margin-top: 0;">Clone Session</h2>
-            <p style="color: var(--gray-700); margin-bottom: 15px;">
-                Create a new session with copied submissions and problems.
-            </p>
-            <form id="clone-session-form">
-                <label style="display: block; margin-bottom: 15px;">
-                    <strong>New Session Name:</strong>
-                    <input type="text" id="clone-session-name" required style="display: block; width: 100%; margin-top: 6px;">
-                </label>
+  <!-- Clone Session Modal -->
+  <div id="clone-session-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: white; border-radius: 8px; padding: 24px; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
+      <h2 style="margin-top: 0;">Clone Session</h2>
+      <p style="color: var(--gray-700); margin-bottom: 15px;">
+        Create a new session with copied submissions and problems.
+      </p>
+      <form id="clone-session-form">
+        <label style="display: block; margin-bottom: 15px;">
+          <strong>New Session Name:</strong>
+          <input type="text" id="clone-session-name" required style="display: block; width: 100%; margin-top: 6px;">
+        </label>
 
-                <div style="background: #f9fafb; border: 1px solid var(--gray-200); border-radius: 6px; padding: 12px; margin-bottom: 15px;">
-                    <strong style="display: block; margin-bottom: 8px;">Clear on clone</strong>
-                    <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                        <input type="checkbox" id="clone-clear-scores">
-                        <span>Scores & feedback</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                        <input type="checkbox" id="clone-clear-default-feedback">
-                        <span>Default feedback</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 8px;">
-                        <input type="checkbox" id="clone-clear-ai-notes">
-                        <span>AI grading notes</span>
-                    </label>
-                </div>
-
-                <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button type="button" id="cancel-clone-session-btn" class="btn">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Create Clone</button>
-                </div>
-            </form>
+        <div style="background: #f9fafb; border: 1px solid var(--gray-200); border-radius: 6px; padding: 12px; margin-bottom: 15px;">
+          <strong style="display: block; margin-bottom: 8px;">Clear on clone</strong>
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="clone-clear-scores">
+            <span>Scores & feedback</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="clone-clear-default-feedback">
+            <span>Default feedback</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="clone-clear-ai-notes">
+            <span>AI grading notes</span>
+          </label>
         </div>
+
+        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+          <button type="button" id="cancel-clone-session-btn" class="btn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Clone</button>
+        </div>
+      </form>
     </div>
+  </div>
+
+  <!-- Session Comparison Export Modal -->
+  <div id="compare-sessions-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: white; border-radius: 8px; padding: 24px; max-width: 700px; width: 92%; max-height: 90vh; overflow-y: auto;">
+      <h2 style="margin-top: 0;">Compare Sessions (CSV)</h2>
+      <p style="color: var(--gray-700); margin-bottom: 15px;">
+        Export a CSV that aligns submissions by file hash across selected sessions.
+      </p>
+      <form id="compare-sessions-form">
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+          <button type="button" id="compare-select-all-btn" class="btn btn-secondary btn-small">Select All</button>
+          <button type="button" id="compare-clear-all-btn" class="btn btn-secondary btn-small">Clear</button>
+          <span id="compare-session-count" style="color: var(--gray-600); font-size: 13px;"></span>
+        </div>
+
+        <div id="compare-sessions-list" style="border: 1px solid var(--gray-200); border-radius: 6px; padding: 12px; max-height: 320px; overflow-y: auto; background: #f9fafb;">
+          <!-- Session checkbox list injected here -->
+        </div>
+
+        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px;">
+          <button type="button" id="compare-sessions-cancel-btn" class="btn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Download CSV</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
     <!-- Autograding Mode Modal -->
     <div id="autograding-mode-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
@@ -401,11 +427,12 @@
                     <div id="session-list"></div>
                 </div>
 
-                <div style="display: flex; gap: 10px; margin-top: 20px;">
-                    <button id="new-session-btn" class="btn btn-primary instructor-only">+ Create New Session</button>
-                    <button id="import-session-btn" class="btn btn-secondary instructor-only">Import Session</button>
-                    <button id="manage-users-btn" class="btn btn-secondary instructor-only">Manage Users</button>
-                </div>
+              <div style="display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap;">
+                <button id="new-session-btn" class="btn btn-primary instructor-only">+ Create New Session</button>
+                <button id="import-session-btn" class="btn btn-secondary instructor-only">Import Session</button>
+                <button id="compare-sessions-btn" class="btn btn-secondary instructor-only">Compare Sessions (CSV)</button>
+                <button id="manage-users-btn" class="btn btn-secondary instructor-only">Manage Users</button>
+              </div>
                 <input type="file" id="import-file-input" accept=".json" style="display: none;">
             </section>
 

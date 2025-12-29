@@ -78,6 +78,11 @@ class SessionCloneRequest(BaseModel):
   clear_ai_grading_notes: bool = False
 
 
+class SessionCompareExportRequest(BaseModel):
+  """Request model for comparing sessions"""
+  session_ids: List[int]
+
+
 class SubmissionResponse(BaseModel):
   """Response model for submission details"""
   id: int

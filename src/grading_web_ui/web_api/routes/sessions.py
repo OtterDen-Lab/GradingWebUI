@@ -23,6 +23,7 @@ from ..models import (
   SessionStatusUpdate,
   SessionStatusChange,
   SessionCloneRequest,
+  SessionCompareExportRequest,
 )
 from ..database import get_db_connection  # Still needed for unrefactored endpoints
 from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository, ProblemMetadataRepository
@@ -860,6 +861,110 @@ async def export_session(
   return StreamingResponse(
     io.BytesIO(json_str.encode()),
     media_type="application/json",
+    headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@router.post("/compare-export")
+async def export_session_comparison(
+  request: SessionCompareExportRequest,
+  current_user: dict = Depends(require_instructor)
+):
+  """Export per-problem comparison CSV for multiple sessions (instructor only)"""
+  import csv
+  from collections import defaultdict
+
+  session_ids = [sid for sid in request.session_ids if isinstance(sid, int)]
+  if not session_ids or len(session_ids) < 2:
+    raise HTTPException(status_code=400,
+                        detail="At least two session_ids are required")
+
+  repo = SessionRepository()
+  sessions = []
+  missing = []
+  for session_id in session_ids:
+    session = repo.get_by_id(session_id)
+    if session is None:
+      missing.append(session_id)
+    else:
+      sessions.append(session)
+  if missing:
+    raise HTTPException(status_code=404,
+                        detail=f"Session(s) not found: {missing}")
+
+  session_names = {}
+  for session in sessions:
+    metadata_name = None
+    if session.metadata:
+      metadata_name = session.metadata.get("session_name")
+    session_names[session.id] = metadata_name or session.assignment_name or f"Session {session.id}"
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+
+    data = defaultdict(lambda: defaultdict(dict))
+
+    for session_id in session_ids:
+      cursor.execute("""
+        SELECT s.file_hash,
+               p.problem_number,
+               p.score,
+               p.feedback,
+               p.graded,
+               p.is_blank,
+               p.submission_id
+        FROM problems p
+        JOIN submissions s ON p.submission_id = s.id
+        WHERE p.session_id = ? AND s.file_hash IS NOT NULL
+      """, (session_id,))
+
+      for row in cursor.fetchall():
+        file_hash = row["file_hash"]
+        problem_number = row["problem_number"]
+        data[file_hash][problem_number][session_id] = {
+          "submission_id": row["submission_id"],
+          "score": row["score"],
+          "feedback": row["feedback"],
+          "graded": row["graded"],
+          "is_blank": row["is_blank"],
+        }
+
+  # Build CSV
+  output = io.StringIO()
+  writer = csv.writer(output)
+
+  header_top = ["file_hash", "problem_number"]
+  header_bottom = ["", ""]
+  for session_id in session_ids:
+    label = f"{session_id} : {session_names.get(session_id, f'Session {session_id}')}"
+    header_top.extend([label] * 5)
+    header_bottom.extend([
+      "submission_id",
+      "score",
+      "feedback",
+      "graded",
+      "is_blank",
+    ])
+  writer.writerow(header_top)
+  writer.writerow(header_bottom)
+
+  for file_hash in sorted(data.keys()):
+    for problem_number in sorted(data[file_hash].keys()):
+      row = [file_hash, problem_number]
+      for session_id in session_ids:
+        entry = data[file_hash][problem_number].get(session_id, {})
+        row.extend([
+          entry.get("submission_id"),
+          entry.get("score"),
+          entry.get("feedback"),
+          entry.get("graded"),
+          entry.get("is_blank"),
+        ])
+      writer.writerow(row)
+
+  filename = f"session_comparison_{'_'.join(str(s) for s in session_ids)}.csv"
+  return StreamingResponse(
+    io.BytesIO(output.getvalue().encode()),
+    media_type="text/csv",
     headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
