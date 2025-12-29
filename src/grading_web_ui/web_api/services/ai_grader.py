@@ -5,6 +5,7 @@ import logging
 import json
 import base64
 import io
+import time
 from typing import Dict, List, Optional, Tuple
 from grading_web_ui.lms_interface.ai_helper import AI_Helper__Anthropic
 from PIL import Image
@@ -703,10 +704,23 @@ class AIGraderService:
           f"Submitting batch {batch_start // batch_size + 1} ({len(batch_items)} items)"
         )
 
-      results = self._grade_image_batch(problem_number, max_points,
-                                        question_text, default_feedback,
-                                        grading_notes,
-                                        batch_items, attachments)
+      results = []
+      attempt = 0
+      while attempt < 3:
+        try:
+          results = self._grade_image_batch(problem_number, max_points,
+                                            question_text, default_feedback,
+                                            grading_notes,
+                                            batch_items, attachments)
+          break
+        except Exception as exc:
+          attempt += 1
+          log.error(
+            "Image-only batch failed (attempt %s/%s) for problem %s: %s",
+            attempt, 3, problem_number, exc)
+          if attempt >= 3:
+            break
+          time.sleep(2 * attempt)
       if len(results) < len(batch_items) and len(batch_items) > 1:
         log.warning(
           "Batch returned %s/%s results; retrying individually for missing items",
