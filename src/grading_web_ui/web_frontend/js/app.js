@@ -212,11 +212,32 @@ function hideInstructorUI() {
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
   await checkAuth();
+  await loadVersionTag();
   await loadMockRosterConfig();
   loadSessions();
   setupEventListeners();
   initializeAIProvider();
 });
+
+async function loadVersionTag() {
+  const tagEl = document.getElementById('version-tag');
+  if (!tagEl) return;
+
+  try {
+    const response = await fetch(`${API_BASE}/version`);
+    if (!response.ok) {
+      tagEl.style.display = 'none';
+      return;
+    }
+    const data = await response.json();
+    tagEl.textContent = data.display || data.tag || data.version || '';
+    if (!tagEl.textContent) {
+      tagEl.style.display = 'none';
+    }
+  } catch (error) {
+    tagEl.style.display = 'none';
+  }
+}
 
 async function loadMockRosterConfig() {
   const manualOption = document.getElementById('manual-source-option');

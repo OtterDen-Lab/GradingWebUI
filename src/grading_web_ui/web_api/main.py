@@ -7,11 +7,59 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from dotenv import load_dotenv
+import subprocess
+import tomllib
 
 # Load environment variables from .env file
 load_dotenv()
+# Version helpers
+def _find_pyproject(start_path: Path) -> Path | None:
+  for parent in [start_path, *start_path.parents]:
+    candidate = parent / "pyproject.toml"
+    if candidate.is_file():
+      return candidate
+  return None
 
-from . import __version__
+
+def _read_project_version() -> str:
+  pyproject = _find_pyproject(Path(__file__).resolve())
+  if not pyproject:
+    return "0.0.0"
+  try:
+    with pyproject.open("rb") as handle:
+      data = tomllib.load(handle)
+    return data.get("project", {}).get("version", "0.0.0")
+  except Exception:
+    return "0.0.0"
+
+
+def _is_ahead_of_tag(version: str) -> bool:
+  pyproject = _find_pyproject(Path(__file__).resolve())
+  if not pyproject:
+    return False
+  repo_root = pyproject.parent
+  if not (repo_root / ".git").exists():
+    return False
+  tag_name = f"v{version}"
+  try:
+    result = subprocess.run(
+      ["git", "describe", "--tags", "--exact-match"],
+      cwd=repo_root,
+      check=False,
+      capture_output=True,
+      text=True,
+    )
+    if result.returncode != 0:
+      return True
+    return result.stdout.strip() != tag_name
+  except Exception:
+    return False
+
+
+PROJECT_VERSION = _read_project_version()
+DISPLAY_VERSION = f"v{PROJECT_VERSION}" + ("+" if _is_ahead_of_tag(PROJECT_VERSION) else "")
+
+
 from .database import init_database, get_db_connection
 from .routes import sessions, problems, uploads, canvas, matching, finalize, ai_grader, alignment, feedback_tags, auth, assignments
 
@@ -45,7 +93,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
   title="Web Grading API",
   description="API for web-based exam grading interface",
-  version=__version__,
+  version=PROJECT_VERSION,
   docs_url="/api/docs",
   redoc_url="/api/redoc",
   lifespan=lifespan,
@@ -65,7 +113,17 @@ app.add_middleware(
 @app.get("/api/health")
 async def health_check():
   """Health check endpoint"""
-  return {"status": "healthy", "version": __version__}
+  return {"status": "healthy", "version": PROJECT_VERSION}
+
+
+@app.get("/api/version")
+async def version_info():
+  """Return project version information."""
+  return {
+    "version": PROJECT_VERSION,
+    "display": DISPLAY_VERSION,
+    "tag": f"v{PROJECT_VERSION}"
+  }
 
 
 # Include routers
