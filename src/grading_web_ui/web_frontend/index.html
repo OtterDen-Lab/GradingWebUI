@@ -163,6 +163,43 @@
     </div>
   </div>
 
+    <!-- Clone Session Modal -->
+    <div id="clone-session-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+        <div style="background: white; border-radius: 8px; padding: 24px; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
+            <h2 style="margin-top: 0;">Clone Session</h2>
+            <p style="color: var(--gray-700); margin-bottom: 15px;">
+                Create a new session with copied submissions and problems.
+            </p>
+            <form id="clone-session-form">
+                <label style="display: block; margin-bottom: 15px;">
+                    <strong>New Session Name:</strong>
+                    <input type="text" id="clone-session-name" required style="display: block; width: 100%; margin-top: 6px;">
+                </label>
+
+                <div style="background: #f9fafb; border: 1px solid var(--gray-200); border-radius: 6px; padding: 12px; margin-bottom: 15px;">
+                    <strong style="display: block; margin-bottom: 8px;">Clear on clone</strong>
+                    <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                        <input type="checkbox" id="clone-clear-scores">
+                        <span>Scores & feedback</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                        <input type="checkbox" id="clone-clear-default-feedback">
+                        <span>Default feedback</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="clone-clear-ai-notes">
+                        <span>AI grading notes</span>
+                    </label>
+                </div>
+
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" id="cancel-clone-session-btn" class="btn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Clone</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Autograding Mode Modal -->
     <div id="autograding-mode-modal" class="instructor-only" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
         <div style="background: white; border-radius: 8px; padding: 24px; max-width: 520px; width: 90%; max-height: 90vh; overflow-y: auto;">

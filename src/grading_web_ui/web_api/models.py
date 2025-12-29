@@ -70,6 +70,14 @@ class SessionStatusChange(BaseModel):
   status: SessionStatus
 
 
+class SessionCloneRequest(BaseModel):
+  """Request model for cloning a grading session"""
+  new_name: str
+  clear_scores: bool = False
+  clear_default_feedback: bool = False
+  clear_ai_grading_notes: bool = False
+
+
 class SubmissionResponse(BaseModel):
   """Response model for submission details"""
   id: int

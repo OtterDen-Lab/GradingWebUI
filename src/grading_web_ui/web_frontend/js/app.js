@@ -2,6 +2,8 @@
 
 const API_BASE = '/api';
 let currentSession = null;
+let sessionsCache = [];
+let cloneSessionSource = null;
 let currentUser = null;
 let mockRosterEnabled = false;
 let sessionNameDirty = false;
@@ -310,6 +312,7 @@ async function loadSessions() {
     try {
         const response = await fetch(`${API_BASE}/sessions`);
         const sessions = await response.json();
+        sessionsCache = sessions;
 
         const sessionList = document.getElementById('session-list');
         sessionList.innerHTML = '';
@@ -332,7 +335,10 @@ async function loadSessions() {
                         <div>${session.course_name || `Course ${session.course_id}`}</div>
                         ${statusMessage}
                     </div>
-                    <button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteSession(${session.id})">Delete</button>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-secondary btn-small instructor-only" onclick="event.stopPropagation(); openCloneSessionModal(${session.id})">Clone</button>
+                        <button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteSession(${session.id})">Delete</button>
+                    </div>
                 </div>
             `;
             item.onclick = () => selectSession(session.id);
@@ -342,6 +348,91 @@ async function loadSessions() {
         console.error('Failed to load sessions:', error);
     }
 }
+
+function getNextCloneName(baseName) {
+    const escaped = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`^${escaped} - clone #(\\d+)$`, 'i');
+    const used = new Set();
+    sessionsCache.forEach(session => {
+        const name = session.session_name || session.assignment_name || '';
+        const match = name.match(regex);
+        if (match) {
+            used.add(parseInt(match[1], 10));
+        }
+    });
+    let next = 1;
+    while (used.has(next)) {
+        next += 1;
+    }
+    return `${baseName} - clone #${next}`;
+}
+
+function openCloneSessionModal(sessionId) {
+    const session = sessionsCache.find(s => s.id === sessionId);
+    if (!session) return;
+
+    cloneSessionSource = session;
+    const modal = document.getElementById('clone-session-modal');
+    const nameInput = document.getElementById('clone-session-name');
+    const clearScores = document.getElementById('clone-clear-scores');
+    const clearDefaultFeedback = document.getElementById('clone-clear-default-feedback');
+    const clearAiNotes = document.getElementById('clone-clear-ai-notes');
+
+    const baseName = session.session_name || session.assignment_name || `Session ${session.id}`;
+    nameInput.value = getNextCloneName(baseName);
+    clearScores.checked = true;
+    clearDefaultFeedback.checked = false;
+    clearAiNotes.checked = false;
+
+    modal.style.display = 'flex';
+    nameInput.focus();
+}
+
+document.getElementById('cancel-clone-session-btn').onclick = () => {
+    document.getElementById('clone-session-modal').style.display = 'none';
+    cloneSessionSource = null;
+};
+
+document.getElementById('clone-session-form').onsubmit = async (e) => {
+    e.preventDefault();
+    if (!cloneSessionSource) return;
+
+    const nameInput = document.getElementById('clone-session-name');
+    const payload = {
+        new_name: nameInput.value.trim(),
+        clear_scores: document.getElementById('clone-clear-scores').checked,
+        clear_default_feedback: document.getElementById('clone-clear-default-feedback').checked,
+        clear_ai_grading_notes: document.getElementById('clone-clear-ai-notes').checked
+    };
+
+    if (!payload.new_name) {
+        alert('Please enter a name for the cloned session.');
+        nameInput.focus();
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/sessions/${cloneSessionSource.id}/clone`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to clone session');
+        }
+
+        const newSession = await response.json();
+        document.getElementById('clone-session-modal').style.display = 'none';
+        cloneSessionSource = null;
+        await loadSessions();
+        await selectSession(newSession.id);
+    } catch (error) {
+        console.error('Failed to clone session:', error);
+        alert(`Failed to clone session: ${error.message}`);
+    }
+};
 
 // Select a session
 async function selectSession(sessionId) {

@@ -22,6 +22,7 @@ from ..models import (
   ProblemStatsResponse,
   SessionStatusUpdate,
   SessionStatusChange,
+  SessionCloneRequest,
 )
 from ..database import get_db_connection  # Still needed for unrefactored endpoints
 from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository, ProblemMetadataRepository
@@ -636,6 +637,155 @@ async def delete_session(
     raise HTTPException(status_code=404, detail="Session not found")
 
   return {"status": "deleted", "session_id": session_id}
+
+
+@router.post("/{session_id}/clone", response_model=SessionResponse)
+async def clone_session(
+  session_id: int,
+  request: SessionCloneRequest,
+  current_user: dict = Depends(require_instructor)
+):
+  """Clone a grading session with optional data clearing (instructor only)"""
+  from ..repositories import with_transaction
+  from ..domain.submission import Submission
+  from ..domain.problem import Problem
+  from ..domain.common import SessionStatus as DomainSessionStatus
+
+  with with_transaction() as repos:
+    source_session = repos.sessions.get_by_id(session_id)
+    if not source_session:
+      raise HTTPException(status_code=404, detail="Session not found")
+
+    metadata = dict(source_session.metadata) if source_session.metadata else {}
+    metadata["session_name"] = request.new_name
+
+    new_session = GradingSession(
+      id=0,
+      assignment_id=source_session.assignment_id,
+      assignment_name=source_session.assignment_name,
+      course_id=source_session.course_id,
+      course_name=source_session.course_name,
+      status=DomainSessionStatus.READY,
+      created_at=datetime.now(),
+      updated_at=datetime.now(),
+      canvas_points=source_session.canvas_points,
+      metadata=metadata,
+      total_exams=0,
+      processed_exams=0,
+      matched_exams=0,
+      processing_message="Cloned session",
+      use_prod_canvas=source_session.use_prod_canvas
+    )
+
+    created_session = repos.sessions.create(new_session)
+
+    submissions_list = repos.submissions.get_by_session(session_id)
+    submission_map = {}
+    new_submissions = []
+    matched_count = 0
+
+    for sub in submissions_list:
+      if sub.canvas_user_id is not None:
+        matched_count += 1
+      new_submissions.append(
+        Submission(
+          id=0,
+          session_id=created_session.id,
+          document_id=sub.document_id,
+          approximate_name=sub.approximate_name,
+          name_image_data=sub.name_image_data,
+          student_name=sub.student_name,
+          display_name=sub.display_name,
+          canvas_user_id=sub.canvas_user_id,
+          page_mappings=sub.page_mappings,
+          total_score=None if request.clear_scores else sub.total_score,
+          graded_at=None if request.clear_scores else sub.graded_at,
+          file_hash=sub.file_hash,
+          original_filename=sub.original_filename,
+          exam_pdf_data=sub.exam_pdf_data
+        ))
+
+    created_subs = repos.submissions.bulk_create(new_submissions)
+    for old_sub, new_sub in zip(submissions_list, created_subs):
+      submission_map[old_sub.id] = new_sub.id
+
+    new_problems = []
+    for old_sub in submissions_list:
+      problems_list = repos.problems.get_by_submission(old_sub.id)
+      for prob in problems_list:
+        new_problems.append(
+          Problem(
+            id=0,
+            session_id=created_session.id,
+            submission_id=submission_map[old_sub.id],
+            problem_number=prob.problem_number,
+            score=None if request.clear_scores else prob.score,
+            feedback=None if request.clear_scores else prob.feedback,
+            graded=False if request.clear_scores else prob.graded,
+            graded_at=None if request.clear_scores else prob.graded_at,
+            is_blank=prob.is_blank,
+            blank_confidence=prob.blank_confidence,
+            blank_method=prob.blank_method,
+            blank_reasoning=prob.blank_reasoning,
+            max_points=prob.max_points,
+            ai_reasoning=None if request.clear_scores else prob.ai_reasoning,
+            region_coords=prob.region_coords,
+            qr_encrypted_data=prob.qr_encrypted_data,
+            transcription=prob.transcription,
+            transcription_model=prob.transcription_model,
+            transcription_cached_at=prob.transcription_cached_at
+          ))
+
+    if new_problems:
+      repos.problems.bulk_create(new_problems)
+
+    # Copy problem metadata with optional clearing
+    with repos.sessions._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("SELECT * FROM problem_metadata WHERE session_id = ?",
+                     (session_id,))
+      metadata_rows = cursor.fetchall()
+      for row in metadata_rows:
+        cursor.execute("""
+          INSERT INTO problem_metadata
+          (session_id, problem_number, max_points, question_text, grading_rubric,
+           default_feedback, default_feedback_threshold, ai_grading_notes)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+          created_session.id,
+          row["problem_number"],
+          row["max_points"],
+          row["question_text"],
+          row["grading_rubric"],
+          None if request.clear_default_feedback else row["default_feedback"],
+          row["default_feedback_threshold"] if row["default_feedback_threshold"] is not None else 100.0,
+          None if request.clear_ai_grading_notes else row["ai_grading_notes"]
+        ))
+
+      # Copy feedback tags
+      cursor.execute("SELECT * FROM feedback_tags WHERE session_id = ?",
+                     (session_id,))
+      for tag in cursor.fetchall():
+        cursor.execute("""
+          INSERT INTO feedback_tags
+          (session_id, problem_number, short_name, comment_text, use_count, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+          created_session.id,
+          tag["problem_number"],
+          tag["short_name"],
+          tag["comment_text"],
+          tag["use_count"],
+          tag["created_at"]
+        ))
+
+    # Update counts
+    created_session.total_exams = len(submissions_list)
+    created_session.processed_exams = len(submissions_list)
+    created_session.matched_exams = matched_count
+    repos.sessions.update(created_session)
+
+    return session_to_response(created_session)
 
 
 @router.get("/{session_id}/export")
