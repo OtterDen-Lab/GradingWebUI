@@ -678,6 +678,20 @@ class AIGraderService:
       results = self._grade_image_batch(problem_number, max_points,
                                         question_text, default_feedback,
                                         batch_items, attachments)
+      if len(results) < len(batch_items) and len(batch_items) > 1:
+        log.warning(
+          "Batch returned %s/%s results; retrying individually for missing items",
+          len(results), len(batch_items))
+        returned_ids = {result.get("problem_id") for result in results if result.get("problem_id")}
+        for idx, item in enumerate(batch_items, 1):
+          if item["problem_id"] in returned_ids:
+            continue
+          retry_results = self._grade_image_batch(problem_number,
+                                                  max_points,
+                                                  question_text,
+                                                  default_feedback, [item],
+                                                  [attachments[idx - 1]])
+          results.extend(retry_results)
 
       seen_ids = set()
       for result in results:
@@ -786,11 +800,19 @@ class AIGraderService:
       f"You are grading {len(batch_items)} student submissions for problem {problem_number}.",
       f"The problem is worth {int(max_points)} points.",
       "Each submission is provided as an image attachment.",
-      "Return ONLY valid JSON with this shape:",
+      "Return ONLY valid JSON with this shape (no prose, no markdown, no code fences):",
       '{"results":[{"problem_id":123,"score":4,"feedback":"...","is_blank":false}]}',
       "Scores must be integers between 0 and the max points.",
+      "If a reference answer is provided, treat it as authoritative and grade strictly against it.",
+      "If the student's work matches the reference answer, award full credit.",
       "If the answer is blank or minimal, set is_blank=true and set score to \"-\".",
-      "Feedback must be addressed to the student, explain where their reasoning went wrong, and suggest how to improve (no full solution)."
+      "Equations are acceptable if they are correct.",
+      "If the answer is correct, set feedback to an empty string.",
+      "If the answer is incorrect, keep feedback concise (1-2 sentences, <= 200 characters), addressed to the student, and focused on what went wrong (no full solution).",
+      "Images are attached in the SAME ORDER as the submission mapping below. Image 1 corresponds to mapping line 1, etc.",
+      "Return results in the same order as the mapping.",
+      "Do NOT reuse numbers from other submissions. Only use values visible in the current image and/or the provided reference answer.",
+      "If the reference answer appears to be for a different question than the image, note the mismatch in feedback and score conservatively."
     ]
 
     if question_text:
@@ -800,19 +822,20 @@ class AIGraderService:
       message_lines.append(
         f"\nDefault feedback (use if appropriate):\n{default_feedback}")
 
-    message_lines.append("\nSubmission mapping:")
+    message_lines.append("\nSubmission mapping (image order):")
     for idx, item in enumerate(batch_items, 1):
       answer_text = item.get("answer_text")
       answer_line = "Reference answer: unavailable"
       if answer_text:
-        answer_line = f"Reference answer: {answer_text}"
+        answer_line = f"Reference answer (authoritative): {answer_text}"
       message_lines.append(
-        f"{idx}. problem_id={item['problem_id']} submission_id={item['submission_id']} ({answer_line})"
+        f"Image {idx}: problem_id={item['problem_id']} submission_id={item['submission_id']} ({answer_line})"
       )
 
     response, usage = self.ai_helper.query_ai("\n".join(message_lines),
                                               attachments,
-                                              max_response_tokens=2000)
+                                              max_response_tokens=8000,
+                                              max_retries=0)
     log.info(
       f"Image-only grading response ({usage['total_tokens']} tokens): {response[:200]}..."
     )
@@ -825,7 +848,7 @@ class AIGraderService:
 
   def _parse_json_response(self, response: str) -> Dict:
     response_clean = response.strip()
-    if response_clean.startswith("```"):
+    if "```" in response_clean:
       lines = response_clean.split("\n")
       json_lines = []
       in_code_block = False
@@ -835,12 +858,20 @@ class AIGraderService:
           continue
         if in_code_block:
           json_lines.append(line)
-      response_clean = "\n".join(json_lines)
+      if json_lines:
+        response_clean = "\n".join(json_lines).strip()
 
     try:
       return json.loads(response_clean)
     except json.JSONDecodeError:
       start = response_clean.find("{")
+      if start != -1:
+        balanced_end = self._find_last_balanced_brace(response_clean, start)
+        if balanced_end is not None:
+          try:
+            return json.loads(response_clean[start:balanced_end + 1])
+          except json.JSONDecodeError:
+            pass
       end = response_clean.rfind("}")
       if start != -1 and end != -1 and end > start:
         try:
@@ -849,6 +880,21 @@ class AIGraderService:
           pass
     log.warning(f"Failed to parse JSON response: {response[:200]}")
     return {}
+
+  def _find_last_balanced_brace(self, text: str, start_index: int) -> Optional[int]:
+    depth = 0
+    last_balanced = None
+    for idx in range(start_index, len(text)):
+      char = text[idx]
+      if char == "{":
+        depth += 1
+      elif char == "}":
+        depth -= 1
+        if depth == 0:
+          last_balanced = idx
+      if depth < 0:
+        break
+    return last_balanced
 
   def _parse_batch_size(self, value: Optional[str], total: int) -> int:
     if not value:

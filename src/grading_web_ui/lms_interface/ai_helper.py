@@ -71,7 +71,7 @@ class AI_Helper__Anthropic(AI_Helper):
     })
 
     response = cls._client.messages.create(model="claude-3-7-sonnet-latest",
-                                           max_tokens=DEFAULT_MAX_TOKENS,
+                                           max_tokens=max_response_tokens,
                                            messages=messages)
     log.debug(response.content)
 

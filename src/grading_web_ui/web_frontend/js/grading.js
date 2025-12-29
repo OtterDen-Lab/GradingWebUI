@@ -412,6 +412,40 @@ function displayCurrentProblem() {
         // Remove AI indicator
         const oldAiIndicator = document.getElementById('ai-graded-indicator');
         if (oldAiIndicator) oldAiIndicator.remove();
+    } else if (currentProblem.score != null && !currentProblem.graded) {
+        // AI-graded suggestion should override heuristic blank flag
+        document.getElementById('score-input').value = currentProblem.score != null ? currentProblem.score : '';
+        document.getElementById('feedback-input').value = currentProblem.feedback || '';
+
+        // Remove blank indicator
+        const oldBlankIndicator = document.getElementById('blank-indicator');
+        if (oldBlankIndicator) oldBlankIndicator.remove();
+
+        // Show AI-graded indicator
+        const aiIndicator = document.createElement('div');
+        aiIndicator.id = 'ai-graded-indicator';
+        aiIndicator.style.cssText = `
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        `;
+        aiIndicator.innerHTML = `
+            <strong>🤖 AI-Graded (Needs Review)</strong>
+            <div style="font-size: 12px; margin-top: 5px; opacity: 0.9;">
+                Review and modify the score and feedback as needed, then submit
+            </div>
+        `;
+
+        const oldAiIndicator = document.getElementById('ai-graded-indicator');
+        if (oldAiIndicator) oldAiIndicator.remove();
+
+        const indicatorContainer = document.getElementById('grading-indicators');
+        if (indicatorContainer) {
+            indicatorContainer.appendChild(aiIndicator);
+        }
     } else if (currentProblem.is_blank) {
         const isAiBlank = currentProblem.blank_method === 'ai' || currentProblem.feedback;
         if (isAiBlank) {
@@ -449,48 +483,13 @@ function displayCurrentProblem() {
         const oldBlankIndicator = document.getElementById('blank-indicator');
         if (oldBlankIndicator) oldBlankIndicator.remove();
 
-        // Check if this is an AI-graded problem (has score and feedback but not yet graded)
-        if (currentProblem.score != null && currentProblem.feedback) {
-            // Auto-populate both score and feedback for review
-            document.getElementById('score-input').value = currentProblem.score != null ? currentProblem.score : '';
-            document.getElementById('feedback-input').value = currentProblem.feedback || '';
+        // Clear form for non-AI-graded problems
+        document.getElementById('score-input').value = '';
+        document.getElementById('feedback-input').value = '';
 
-            // Show AI-graded indicator
-            const aiIndicator = document.createElement('div');
-            aiIndicator.id = 'ai-graded-indicator';
-            aiIndicator.style.cssText = `
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 15px;
-                border-radius: 8px;
-                margin-bottom: 15px;
-                box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
-            `;
-            aiIndicator.innerHTML = `
-                <strong>🤖 AI-Graded (Needs Review)</strong>
-                <div style="font-size: 12px; margin-top: 5px; opacity: 0.9;">
-                    Review and modify the score and feedback as needed, then submit
-                </div>
-            `;
-
-            // Remove old indicator if exists
-            const oldAiIndicator = document.getElementById('ai-graded-indicator');
-            if (oldAiIndicator) oldAiIndicator.remove();
-
-            // Insert in the grading indicators area
-            const indicatorContainer = document.getElementById('grading-indicators');
-            if (indicatorContainer) {
-                indicatorContainer.appendChild(aiIndicator);
-            }
-        } else {
-            // Clear form for non-AI-graded problems
-            document.getElementById('score-input').value = '';
-            document.getElementById('feedback-input').value = '';
-
-            // Remove AI indicator if it exists
-            const oldAiIndicator = document.getElementById('ai-graded-indicator');
-            if (oldAiIndicator) oldAiIndicator.remove();
-        }
+        // Remove AI indicator if it exists
+        const oldAiIndicator = document.getElementById('ai-graded-indicator');
+        if (oldAiIndicator) oldAiIndicator.remove();
     }
 
     // Load feedback tags and default feedback for this problem number
