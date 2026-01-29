@@ -341,7 +341,11 @@ class CanvasAssignment(LMSWrapper):
         os.remove(temp_path)
     
     if len(comments) > 0:
-      upload_buffer_as_file(comments.encode('utf-8'), "feedback.txt")
+      trimmed = comments.lstrip().lower()
+      if trimmed.startswith("<!doctype html") or trimmed.startswith("<html"):
+        upload_buffer_as_file(comments.encode('utf-8'), "feedback.html")
+      else:
+        upload_buffer_as_file(comments.encode('utf-8'), "feedback.txt")
     
     for i, attachment_buffer in enumerate(attachments):
       upload_buffer_as_file(attachment_buffer.read(), attachment_buffer.name)

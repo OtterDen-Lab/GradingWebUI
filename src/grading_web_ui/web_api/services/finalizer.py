@@ -3,15 +3,18 @@ Service for finalizing grading: annotating PDFs and uploading to Canvas.
 """
 import asyncio
 import base64
+import html
 import io
 import json
 import logging
+import re
 from pathlib import Path
 from typing import List, Dict, Tuple
 import fitz  # PyMuPDF
 from PIL import Image
 
 from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository
+from ..services.problem_service import ProblemService
 from grading_web_ui.lms_interface.canvas_interface import CanvasInterface
 from grading_web_ui.lms_interface.classes import Feedback
 from .. import sse
@@ -46,6 +49,9 @@ class FinalizationService:
 
     # Get all submissions
     submissions = self._get_submissions()
+    for submission in submissions:
+      submission["assignment_name"] = session_info.get("assignment_name")
+      submission["session_name"] = session_info.get("session_name")
     self.total_submissions = len(submissions)
     # Add 1 for final cleanup step
     self.total_steps = (self.total_submissions * self.steps_per_submission) + 1
@@ -113,6 +119,8 @@ class FinalizationService:
     return {
       "course_id": session.course_id,
       "assignment_id": session.assignment_id,
+      "assignment_name": session.assignment_name,
+      "session_name": getattr(session, "session_name", None),
       "canvas_points": session.canvas_points,
       "use_prod_canvas": use_prod
     }
@@ -150,6 +158,8 @@ class FinalizationService:
           "problem_number": prob.problem_number,
           "score": prob.score or 0.0,
           "feedback": prob.feedback or '',
+          "ai_reasoning": prob.ai_reasoning or '',
+          "max_points": prob.max_points,
           "region_coords": prob.region_coords
         })
 
@@ -266,29 +276,223 @@ class FinalizationService:
     )
 
   def _generate_comments(self, submission: Dict) -> str:
-    """Generate feedback comments for Canvas in markdown format"""
-    comments = []
-
-    # Overall score
+    """Generate feedback comments for Canvas as a self-contained HTML document"""
+    quiz_name = (submission.get("session_name")
+                 or submission.get("assignment_name")
+                 or "Grading Feedback")
+    student_name = submission.get("student_name") or "Unknown Student"
     total_score = sum(p["score"] for p in submission["problems"])
-    comments.append(f"# Grading Summary\n")
-    comments.append(f"**Total Score:** {total_score:.2f}\n")
-    comments.append("---\n")
+    total_max = sum(
+      p["max_points"] for p in submission["problems"] if p.get("max_points") is not None
+    )
+    score_summary = (f"{total_score:.2f} / {total_max:.2f}"
+                     if total_max > 0 else f"{total_score:.2f}")
 
-    # Per-problem breakdown with markdown headers
-    for problem in sorted(submission["problems"],
-                          key=lambda p: p["problem_number"]):
-      comments.append(f"## Problem {problem['problem_number']}")
-      comments.append(f"**Score:** {problem['score']:.2f}\n")
+    problem_service = ProblemService()
+    pdf_document = None
+    if submission.get("exam_pdf_data"):
+      try:
+        pdf_bytes = base64.b64decode(submission["exam_pdf_data"])
+        pdf_document = fitz.open("pdf", pdf_bytes)
+      except Exception as e:
+        log.warning(f"Failed to open PDF for submission {submission['id']}: {e}")
 
-      if problem["feedback"]:
-        # Add feedback with proper spacing
-        comments.append(f"{problem['feedback']}\n")
+    problem_sections = []
+    for problem in sorted(submission["problems"], key=lambda p: p["problem_number"]):
+      score_display = (f"{problem['score']:.2f} / {problem['max_points']:.2f}"
+                       if problem.get("max_points") is not None
+                       else f"{problem['score']:.2f}")
 
-      # Add separator between problems
-      comments.append("---\n")
+      image_html = ""
+      if pdf_document and problem.get("region_coords"):
+        region = problem["region_coords"]
+        try:
+          image_base64, _ = problem_service.extract_image_from_document(
+            pdf_document=pdf_document,
+            start_page=region["page_number"],
+            start_y=region["region_y_start"],
+            end_page=region.get("end_page_number", region["page_number"]),
+            end_y=region.get("end_region_y", region["region_y_end"]),
+            start_y_pct=region.get("region_y_start_pct"),
+            end_y_pct=region.get("region_y_end_pct"),
+            end_page_y_pct=region.get("end_region_y_pct"),
+            page_transforms=region.get("page_transforms"),
+            dpi=150
+          )
+          image_html = (
+            "<div class=\"problem-image\">"
+            f"<img src=\"data:image/png;base64,{image_base64}\" "
+            f"alt=\"Problem {problem['problem_number']} submission\" />"
+            "</div>"
+          )
+        except Exception as e:
+          log.warning(
+            f"Failed to extract image for submission {submission['id']} "
+            f"problem {problem['problem_number']}: {e}"
+          )
 
-    return "\n".join(comments)
+      feedback_html = self._render_text_or_html(problem.get("feedback"))
+      explanation_html = self._render_text_or_html(problem.get("ai_reasoning"))
+
+      explanation_section = ""
+      if explanation_html:
+        explanation_section = (
+          "<div class=\"problem-explanation\">"
+          "<h4>Explanation</h4>"
+          f"{explanation_html}"
+          "</div>"
+        )
+
+      problem_sections.append(
+        "<details class=\"problem\">"
+        f"<summary>Problem {problem['problem_number']} - Score {score_display}</summary>"
+        "<div class=\"problem-body\">"
+        f"{image_html}"
+        "<div class=\"problem-meta\">"
+        f"<div class=\"problem-score\">Score: {score_display}</div>"
+        "</div>"
+        "<div class=\"problem-feedback\">"
+        "<h4>Feedback</h4>"
+        f"{feedback_html if feedback_html else '<p>No feedback provided.</p>'}"
+        "</div>"
+        f"{explanation_section}"
+        "</div>"
+        "</details>"
+      )
+
+    if pdf_document:
+      pdf_document.close()
+
+    html_doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{html.escape(quiz_name)} Feedback</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --ink: #111827;
+      --muted: #6b7280;
+      --accent: #2563eb;
+      --border: #e5e7eb;
+      --panel: #f9fafb;
+    }}
+    body {{
+      margin: 0;
+      padding: 24px;
+      font-family: "Georgia", "Times New Roman", serif;
+      color: var(--ink);
+      background: #ffffff;
+    }}
+    header {{
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid var(--border);
+    }}
+    header h1 {{
+      margin: 0 0 8px;
+      font-size: 28px;
+      color: var(--accent);
+    }}
+    header .meta {{
+      font-size: 14px;
+      color: var(--muted);
+    }}
+    .summary {{
+      margin-top: 12px;
+      font-size: 16px;
+      font-weight: 600;
+    }}
+    .problem {{
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 16px;
+      overflow: hidden;
+      background: var(--panel);
+    }}
+    .problem summary {{
+      cursor: pointer;
+      list-style: none;
+      padding: 12px 16px;
+      font-weight: 600;
+      background: #ffffff;
+      border-bottom: 1px solid var(--border);
+    }}
+    .problem summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .problem-body {{
+      padding: 16px;
+    }}
+    .problem-image img {{
+      max-width: 100%;
+      height: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #ffffff;
+    }}
+    .problem-meta {{
+      margin: 12px 0;
+      font-size: 14px;
+      color: var(--muted);
+    }}
+    .problem-feedback, .problem-explanation {{
+      margin-top: 12px;
+      padding: 12px;
+      background: #ffffff;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }}
+    .problem-feedback h4, .problem-explanation h4 {{
+      margin: 0 0 8px;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }}
+    img {{
+      max-width: 100%;
+    }}
+    code {{
+      background: #f3f4f6;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>{html.escape(quiz_name)}</h1>
+    <div class="meta">Student: {html.escape(student_name)}</div>
+    <div class="summary">Total Score: {html.escape(score_summary)}</div>
+  </header>
+  {"".join(problem_sections)}
+</body>
+</html>
+"""
+
+    return html_doc
+
+  def _render_text_or_html(self, text: str) -> str:
+    if not text:
+      return ""
+    if self._looks_like_html(text):
+      return text
+    rendered = self._render_markdown(text)
+    if rendered:
+      return rendered
+    return f"<p>{html.escape(text).replace(chr(10), '<br>')}</p>"
+
+  def _looks_like_html(self, text: str) -> bool:
+    return bool(re.search(r"<(p|div|span|ul|ol|li|br|strong|em|table|img|h[1-6])[\s/>]", text, re.IGNORECASE))
+
+  def _render_markdown(self, text: str) -> str:
+    try:
+      import markdown  # type: ignore
+      return markdown.markdown(text, extensions=["extra", "sane_lists"])
+    except Exception:
+      return ""
 
   def _upload_to_canvas(self, submission: Dict, pdf_path: Path, comments: str):
     """Upload graded exam and comments to Canvas"""
