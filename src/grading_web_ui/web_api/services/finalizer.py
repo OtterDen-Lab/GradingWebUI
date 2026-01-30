@@ -7,6 +7,8 @@ import html
 import io
 import json
 import logging
+import mimetypes
+import os
 import re
 from pathlib import Path
 from typing import List, Dict, Tuple
@@ -160,7 +162,8 @@ class FinalizationService:
           "feedback": prob.feedback or '',
           "ai_reasoning": prob.ai_reasoning or '',
           "max_points": prob.max_points,
-          "region_coords": prob.region_coords
+          "region_coords": prob.region_coords,
+          "qr_encrypted_data": prob.qr_encrypted_data
         })
 
       submissions.append({
@@ -332,12 +335,15 @@ class FinalizationService:
           )
 
       feedback_html = self._render_text_or_html(problem.get("feedback"))
-      explanation_html = self._render_text_or_html(problem.get("ai_reasoning"))
+      explanation_html = self._render_text_or_html(
+        self._get_explanation_html(problem)
+      )
 
       explanation_section = ""
       if explanation_html:
         explanation_section = (
-          "<div class=\"problem-explanation\">"
+          "<div class=\"problem-explanation auto-generated\">"
+          "<div class=\"auto-badge\">Auto-generated</div>"
           "<h4>Explanation</h4>"
           f"{explanation_html}"
           "</div>"
@@ -369,6 +375,16 @@ class FinalizationService:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{html.escape(quiz_name)} Feedback</title>
+  <script>
+    window.MathJax = {{
+      tex: {{
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']]
+      }},
+      svg: {{ fontCache: 'global' }}
+    }};
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
   <style>
     :root {{
       color-scheme: light;
@@ -444,6 +460,22 @@ class FinalizationService:
       border-radius: 8px;
       border: 1px solid var(--border);
     }}
+    .problem-explanation.auto-generated {{
+      background: #fef9c3;
+      border-color: #facc15;
+    }}
+    .auto-badge {{
+      display: inline-block;
+      padding: 2px 8px;
+      margin-bottom: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #713f12;
+      background: #fde68a;
+      border-radius: 999px;
+    }}
     .problem-feedback h4, .problem-explanation h4 {{
       margin: 0 0 8px;
       font-size: 14px;
@@ -478,10 +510,10 @@ class FinalizationService:
     if not text:
       return ""
     if self._looks_like_html(text):
-      return text
+      return self._inline_local_images(text)
     rendered = self._render_markdown(text)
     if rendered:
-      return rendered
+      return self._inline_local_images(rendered)
     return f"<p>{html.escape(text).replace(chr(10), '<br>')}</p>"
 
   def _looks_like_html(self, text: str) -> bool:
@@ -493,6 +525,60 @@ class FinalizationService:
       return markdown.markdown(text, extensions=["extra", "sane_lists"])
     except Exception:
       return ""
+
+  def _get_explanation_html(self, problem: Dict) -> str:
+    qr_data = problem.get("qr_encrypted_data")
+    if qr_data:
+      try:
+        from QuizGenerator.regenerate import regenerate_from_encrypted
+        result = regenerate_from_encrypted(qr_data,
+                                           points=problem.get("max_points") or 0.0,
+                                           image_mode="inline")
+        explanation_html = result.get("explanation_html") or result.get("explanation_markdown")
+        if explanation_html:
+          return explanation_html
+      except Exception as e:
+        log.warning(
+          f"Failed to regenerate explanation for problem {problem.get('problem_number')}: {e}"
+        )
+    return problem.get("ai_reasoning") or ""
+
+  def _inline_local_images(self, html_text: str) -> str:
+    def inline_src(src: str) -> str:
+      if not src:
+        return src
+      lowered = src.lower()
+      if lowered.startswith("data:") or lowered.startswith("http://") or lowered.startswith("https://"):
+        return src
+      path = src
+      if lowered.startswith("file://"):
+        path = src[7:]
+      candidate_paths = [path]
+      if not os.path.isabs(path):
+        candidate_paths.append(os.path.join(os.getcwd(), path))
+      file_path = next((p for p in candidate_paths if os.path.exists(p)), None)
+      if not file_path:
+        return src
+      try:
+        with open(file_path, "rb") as f:
+          data = f.read()
+        mime_type = mimetypes.guess_type(file_path)[0] or "image/png"
+        encoded = base64.b64encode(data).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+      except Exception:
+        return src
+
+    def replace_double(match):
+      prefix, src, suffix = match.group(1), match.group(2), match.group(3)
+      return f"{prefix}{inline_src(src)}{suffix}"
+
+    def replace_single(match):
+      prefix, src, suffix = match.group(1), match.group(2), match.group(3)
+      return f"{prefix}{inline_src(src)}{suffix}"
+
+    updated = re.sub(r'(<img[^>]+src=")([^"]*)(")', replace_double, html_text, flags=re.IGNORECASE)
+    updated = re.sub(r"(<img[^>]+src=')([^']*)(')", replace_single, updated, flags=re.IGNORECASE)
+    return updated
 
   def _upload_to_canvas(self, submission: Dict, pdf_path: Path, comments: str):
     """Upload graded exam and comments to Canvas"""
