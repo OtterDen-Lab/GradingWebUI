@@ -61,7 +61,7 @@ async def get_all_students(
   canvas_interface = CanvasInterface(prod=session.use_prod_canvas)
   course = canvas_interface.get_course(session.course_id)
   assignment = course.get_assignment(session.assignment_id)
-  all_students = assignment.get_students()
+  all_students = assignment.get_students(include_names=True)
 
   # Get already matched user IDs
   matched_ids = submission_repo.get_existing_canvas_users(session_id)
@@ -103,7 +103,7 @@ async def match_submission(
   canvas_interface = CanvasInterface(prod=session.use_prod_canvas)
   course = canvas_interface.get_course(session.course_id)
   assignment = course.get_assignment(session.assignment_id)
-  students = assignment.get_students()
+  students = assignment.get_students(include_names=True)
 
   student = next((s for s in students if s.user_id == match.canvas_user_id), None)
   if not student:

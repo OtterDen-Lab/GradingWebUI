@@ -670,7 +670,7 @@ async def process_exam_files(
       canvas_interface = CanvasInterface(prod=use_prod)
       course = canvas_interface.get_course(course_id)
       assignment = course.get_assignment(assignment_id)
-      students = assignment.get_students()
+      students = assignment.get_students(include_names=True)
 
       # Convert to simple dicts for processor, excluding students who already have submissions
       canvas_students = [{
@@ -943,7 +943,7 @@ async def process_exam_names(
       canvas_interface = CanvasInterface(prod=session.use_prod_canvas)
       course = canvas_interface.get_course(session.course_id)
       assignment = course.get_assignment(session.assignment_id)
-      students = assignment.get_students()
+      students = assignment.get_students(include_names=True)
       canvas_students = [{"name": s.name, "user_id": s.user_id} for s in students]
 
     submission_repo = SubmissionRepository()
