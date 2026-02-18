@@ -13,6 +13,13 @@ from fastapi.testclient import TestClient
 from grading_web_ui.web_api.main import app
 from grading_web_ui.web_api.database import get_db_connection
 from grading_web_ui.web_api.repositories.session_repository import SessionRepository
+from grading_web_ui.web_api.repositories.problem_metadata_repository import ProblemMetadataRepository
+from grading_web_ui.web_api.repositories.feedback_tag_repository import FeedbackTagRepository
+from grading_web_ui.web_api.repositories.problem_stats_repository import ProblemStatsRepository
+from grading_web_ui.web_api.repositories.session_assignment_repository import SessionAssignmentRepository
+from grading_web_ui.web_api.repositories import with_transaction
+from grading_web_ui.web_api.domain.submission import Submission
+from grading_web_ui.web_api.domain.problem import Problem
 from grading_web_ui.web_api import workflow_locks
 
 
@@ -39,6 +46,64 @@ def client(tmp_path, monkeypatch):
     )
     assert login_response.status_code == 200
     yield test_client
+
+
+def create_test_session(client, assignment_name: str = "Test Session") -> int:
+  """Create a session through API and return session_id."""
+  response = client.post("/api/sessions",
+                         json={
+                           "course_id": 12345,
+                           "assignment_id": 67890,
+                           "assignment_name": assignment_name
+                         })
+  assert response.status_code == 200
+  return response.json()["id"]
+
+
+def seed_submission_with_problem(session_id: int,
+                                 *,
+                                 document_id: int = 1,
+                                 student_name: str = "Student One",
+                                 canvas_user_id: int | None = None,
+                                 file_hash: str | None = None,
+                                 problem_number: int = 1,
+                                 graded: bool = False,
+                                 score: float | None = None,
+                                 feedback: str | None = None,
+                                 is_blank: bool = False,
+                                 qr_encrypted_data: str | None = None,
+                                 max_points: float | None = None) -> tuple[int, int]:
+  """Create one submission and one problem via repositories."""
+  with with_transaction() as repos:
+    created_submission = repos.submissions.create(
+      Submission(
+        id=0,
+        session_id=session_id,
+        document_id=document_id,
+        approximate_name=None,
+        name_image_data=None,
+        student_name=student_name,
+        display_name=student_name,
+        canvas_user_id=canvas_user_id,
+        page_mappings={},
+        file_hash=file_hash,
+        original_filename=None,
+        exam_pdf_data=None,
+      ))
+    created_problem = repos.problems.create(
+      Problem(
+        id=0,
+        session_id=session_id,
+        submission_id=created_submission.id,
+        problem_number=problem_number,
+        graded=graded,
+        score=score,
+        feedback=feedback,
+        is_blank=is_blank,
+        qr_encrypted_data=qr_encrypted_data,
+        max_points=max_points,
+      ))
+    return created_submission.id, created_problem.id
 
 
 def test_no_default_admin_without_bootstrap(tmp_path, monkeypatch):
@@ -258,56 +323,41 @@ def test_zip_upload_rejects_unsafe_paths(client):
 
 def test_delete_session_with_dependent_rows(client):
   """Deleting a session should cascade through dependent rows without FK errors."""
-  session_response = client.post("/api/sessions",
-                                 json={
-                                   "course_id": 12345,
-                                   "assignment_id": 67890,
-                                   "assignment_name": "Delete Cascade Test"
-                                 })
-  assert session_response.status_code == 200
-  session_id = session_response.json()["id"]
+  session_id = create_test_session(client, "Delete Cascade Test")
+  seed_submission_with_problem(session_id, graded=False)
+  ProblemMetadataRepository().bulk_insert_for_session(
+    session_id,
+    [{
+      "problem_number": 1,
+      "max_points": 10.0
+    }],
+  )
+  ProblemStatsRepository().bulk_insert_for_session(
+    session_id,
+    [{
+      "problem_number": 1,
+      "num_total": 1,
+      "num_graded": 0
+    }],
+  )
+  FeedbackTagRepository().bulk_insert_for_session(
+    session_id,
+    [{
+      "problem_number": 1,
+      "short_name": "tag1",
+      "comment_text": "comment"
+    }],
+  )
 
   with get_db_connection() as conn:
     cursor = conn.cursor()
-    cursor.execute(
-      """
-      INSERT INTO submissions (session_id, document_id, page_mappings, student_name)
-      VALUES (?, ?, ?, ?)
-      """, (session_id, 1, "{}", "Student One"))
-    submission_id = cursor.lastrowid
-
-    cursor.execute(
-      """
-      INSERT INTO problems (session_id, submission_id, problem_number, graded)
-      VALUES (?, ?, ?, ?)
-      """, (session_id, submission_id, 1, 0))
-
-    cursor.execute(
-      """
-      INSERT INTO problem_metadata (session_id, problem_number, max_points)
-      VALUES (?, ?, ?)
-      """, (session_id, 1, 10.0))
-
-    cursor.execute(
-      """
-      INSERT INTO problem_stats (session_id, problem_number, num_total, num_graded)
-      VALUES (?, ?, ?, ?)
-      """, (session_id, 1, 1, 0))
-
-    cursor.execute(
-      """
-      INSERT INTO feedback_tags (session_id, problem_number, short_name, comment_text)
-      VALUES (?, ?, ?, ?)
-      """, (session_id, 1, "tag1", "comment"))
-
     cursor.execute("SELECT id FROM users WHERE username = 'admin' LIMIT 1")
     admin_row = cursor.fetchone()
     assert admin_row is not None
-    cursor.execute(
-      """
-      INSERT INTO session_assignments (session_id, user_id, assigned_by)
-      VALUES (?, ?, ?)
-      """, (session_id, admin_row["id"], admin_row["id"]))
+    admin_id = admin_row["id"]
+
+  SessionAssignmentRepository().assign_user_to_session(session_id, admin_id,
+                                                       admin_id)
 
   delete_response = client.delete(f"/api/sessions/{session_id}")
   assert delete_response.status_code == 200
@@ -333,30 +383,12 @@ def test_delete_session_with_dependent_rows(client):
 
 def test_regenerate_answer_avoids_signature_mismatch_error(client):
   """Answer regeneration should not fail with unexpected keyword-argument errors."""
-  session_response = client.post("/api/sessions",
-                                 json={
-                                   "course_id": 12345,
-                                   "assignment_id": 67890,
-                                   "assignment_name": "Regeneration Signature Test"
-                                 })
-  assert session_response.status_code == 200
-  session_id = session_response.json()["id"]
-
-  with get_db_connection() as conn:
-    cursor = conn.cursor()
-    cursor.execute(
-      """
-      INSERT INTO submissions (session_id, document_id, page_mappings, student_name)
-      VALUES (?, ?, ?, ?)
-      """, (session_id, 1, "{}", "Student One"))
-    submission_id = cursor.lastrowid
-
-    cursor.execute(
-      """
-      INSERT INTO problems (session_id, submission_id, problem_number, graded, qr_encrypted_data, max_points)
-      VALUES (?, ?, ?, ?, ?, ?)
-      """, (session_id, submission_id, 1, 0, "invalid-encrypted-payload", 5.0))
-    problem_id = cursor.lastrowid
+  session_id = create_test_session(client, "Regeneration Signature Test")
+  _, problem_id = seed_submission_with_problem(
+    session_id,
+    qr_encrypted_data="invalid-encrypted-payload",
+    max_points=5.0,
+  )
 
   response = client.get(f"/api/problems/{problem_id}/regenerate-answer")
   assert response.status_code in (400, 500)
@@ -399,47 +431,42 @@ def test_encryption_key_test_endpoint_handles_invalid_payload(client):
 
 def test_session_export_includes_stats_metadata_and_tags(client):
   """Session export should include problem_stats, problem_metadata, and feedback_tags."""
-  session_response = client.post("/api/sessions",
-                                 json={
-                                   "course_id": 12345,
-                                   "assignment_id": 67890,
-                                   "assignment_name": "Export Coverage Test"
-                                 })
-  assert session_response.status_code == 200
-  session_id = session_response.json()["id"]
+  session_id = create_test_session(client, "Export Coverage Test")
+  seed_submission_with_problem(session_id,
+                               file_hash="hash-export-1",
+                               graded=True,
+                               score=4.0,
+                               feedback="nice work")
 
-  with get_db_connection() as conn:
-    cursor = conn.cursor()
-    cursor.execute(
-      """
-      INSERT INTO submissions (session_id, document_id, page_mappings, student_name, file_hash)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_id, 1, "{}", "Student One", "hash-export-1"))
-    submission_id = cursor.lastrowid
-
-    cursor.execute(
-      """
-      INSERT INTO problems (session_id, submission_id, problem_number, graded, score, feedback)
-      VALUES (?, ?, ?, ?, ?, ?)
-      """, (session_id, submission_id, 1, 1, 4.0, "nice work"))
-
-    cursor.execute(
-      """
-      INSERT INTO problem_stats (session_id, problem_number, avg_score, min_score, max_score, num_graded, num_total)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      """, (session_id, 1, 4.0, 4.0, 4.0, 1, 1))
-
-    cursor.execute(
-      """
-      INSERT INTO problem_metadata (session_id, problem_number, max_points, default_feedback, default_feedback_threshold)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_id, 1, 5.0, "default comment", 90.0))
-
-    cursor.execute(
-      """
-      INSERT INTO feedback_tags (session_id, problem_number, short_name, comment_text, use_count)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_id, 1, "tag-a", "comment a", 2))
+  ProblemStatsRepository().bulk_insert_for_session(
+    session_id,
+    [{
+      "problem_number": 1,
+      "avg_score": 4.0,
+      "min_score": 4.0,
+      "max_score": 4.0,
+      "num_graded": 1,
+      "num_total": 1,
+    }],
+  )
+  ProblemMetadataRepository().bulk_insert_for_session(
+    session_id,
+    [{
+      "problem_number": 1,
+      "max_points": 5.0,
+      "default_feedback": "default comment",
+      "default_feedback_threshold": 90.0,
+    }],
+  )
+  FeedbackTagRepository().bulk_insert_for_session(
+    session_id,
+    [{
+      "problem_number": 1,
+      "short_name": "tag-a",
+      "comment_text": "comment a",
+      "use_count": 2,
+    }],
+  )
 
   export_response = client.get(f"/api/sessions/{session_id}/export")
   assert export_response.status_code == 200
@@ -455,48 +482,18 @@ def test_session_export_includes_stats_metadata_and_tags(client):
 
 def test_session_compare_export_csv_contains_rows(client):
   """Comparison export should return CSV rows for matching file_hash/problem pairs."""
-  session_one = client.post("/api/sessions",
-                            json={
-                              "course_id": 100,
-                              "assignment_id": 200,
-                              "assignment_name": "Compare One"
-                            })
-  session_two = client.post("/api/sessions",
-                            json={
-                              "course_id": 101,
-                              "assignment_id": 201,
-                              "assignment_name": "Compare Two"
-                            })
-  assert session_one.status_code == 200
-  assert session_two.status_code == 200
-  session_one_id = session_one.json()["id"]
-  session_two_id = session_two.json()["id"]
-
-  with get_db_connection() as conn:
-    cursor = conn.cursor()
-    cursor.execute(
-      """
-      INSERT INTO submissions (session_id, document_id, page_mappings, student_name, file_hash)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_one_id, 1, "{}", "Student One", "shared-hash-1"))
-    sub_one = cursor.lastrowid
-    cursor.execute(
-      """
-      INSERT INTO submissions (session_id, document_id, page_mappings, student_name, file_hash)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_two_id, 1, "{}", "Student One", "shared-hash-1"))
-    sub_two = cursor.lastrowid
-
-    cursor.execute(
-      """
-      INSERT INTO problems (session_id, submission_id, problem_number, graded, score, feedback, is_blank)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      """, (session_one_id, sub_one, 1, 1, 3.0, "ok", 0))
-    cursor.execute(
-      """
-      INSERT INTO problems (session_id, submission_id, problem_number, graded, score, feedback, is_blank)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      """, (session_two_id, sub_two, 1, 1, 4.0, "better", 0))
+  session_one_id = create_test_session(client, "Compare One")
+  session_two_id = create_test_session(client, "Compare Two")
+  seed_submission_with_problem(session_one_id,
+                               file_hash="shared-hash-1",
+                               graded=True,
+                               score=3.0,
+                               feedback="ok")
+  seed_submission_with_problem(session_two_id,
+                               file_hash="shared-hash-1",
+                               graded=True,
+                               score=4.0,
+                               feedback="better")
 
   response = client.post("/api/sessions/compare-export",
                          json={
@@ -531,30 +528,31 @@ def test_finalize_rejects_when_finalize_lock_active(client):
     workflow_locks.release("finalize", session_id)
 
 
+def test_finalize_rejects_when_autograde_lock_active(client):
+  """Finalize endpoint should reject when autograding lock is active."""
+  session_id = create_test_session(client, "Finalize vs Autograde Lock Test")
+  seed_submission_with_problem(session_id,
+                               student_name="Student Lock",
+                               canvas_user_id=9010,
+                               graded=True,
+                               score=4.0)
+
+  assert workflow_locks.acquire("autograde", session_id) is True
+  try:
+    response = client.post(f"/api/finalize/{session_id}/finalize")
+    assert response.status_code == 409
+    assert "autograding is in progress" in response.json()["detail"].lower()
+  finally:
+    workflow_locks.release("autograde", session_id)
+
+
 def test_autograde_all_rejects_when_finalize_lock_active(client):
   """Autograde endpoint should reject while finalization lock is active for session."""
-  session_response = client.post("/api/sessions",
-                                 json={
-                                   "course_id": 12345,
-                                   "assignment_id": 67890,
-                                   "assignment_name": "Autograde Lock Test"
-                                 })
-  assert session_response.status_code == 200
-  session_id = session_response.json()["id"]
-
-  with get_db_connection() as conn:
-    cursor = conn.cursor()
-    cursor.execute(
-      """
-      INSERT INTO submissions (session_id, document_id, page_mappings, student_name, file_hash)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_id, 1, "{}", "Student Lock", "lock-hash"))
-    submission_id = cursor.lastrowid
-    cursor.execute(
-      """
-      INSERT INTO problems (session_id, submission_id, problem_number, graded, is_blank)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_id, submission_id, 1, 0, 0))
+  session_id = create_test_session(client, "Autograde Lock Test")
+  seed_submission_with_problem(session_id,
+                               student_name="Student Lock",
+                               file_hash="lock-hash",
+                               graded=False)
 
   assert workflow_locks.acquire("finalize", session_id) is True
   try:
@@ -580,28 +578,12 @@ def test_finalize_concurrent_requests_allow_only_one_start(client, monkeypatch):
   """Concurrent finalize starts should allow one start and reject the overlap."""
   from grading_web_ui.web_api.routes import finalize as finalize_routes
 
-  session_response = client.post("/api/sessions",
-                                 json={
-                                   "course_id": 12345,
-                                   "assignment_id": 67890,
-                                   "assignment_name": "Finalize Concurrency Test"
-                                 })
-  assert session_response.status_code == 200
-  session_id = session_response.json()["id"]
-
-  with get_db_connection() as conn:
-    cursor = conn.cursor()
-    cursor.execute(
-      """
-      INSERT INTO submissions (session_id, document_id, page_mappings, student_name, canvas_user_id)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_id, 1, "{}", "Student Concurrent", 9002))
-    submission_id = cursor.lastrowid
-    cursor.execute(
-      """
-      INSERT INTO problems (session_id, submission_id, problem_number, graded, score, is_blank)
-      VALUES (?, ?, ?, ?, ?, ?)
-      """, (session_id, submission_id, 1, 1, 5.0, 0))
+  session_id = create_test_session(client, "Finalize Concurrency Test")
+  seed_submission_with_problem(session_id,
+                               student_name="Student Concurrent",
+                               canvas_user_id=9002,
+                               graded=True,
+                               score=5.0)
 
   async def slow_fake_run_finalization(target_session_id: int, stream_id: str):
     await asyncio.sleep(0.25)
@@ -626,28 +608,12 @@ def test_finalize_lifecycle_starts_and_completes_with_background_task(client,
   from grading_web_ui.web_api.repositories.session_repository import SessionRepository
   from grading_web_ui.web_api.domain.common import SessionStatus as DomainSessionStatus
 
-  session_response = client.post("/api/sessions",
-                                 json={
-                                   "course_id": 12345,
-                                   "assignment_id": 67890,
-                                   "assignment_name": "Finalize Lifecycle Test"
-                                 })
-  assert session_response.status_code == 200
-  session_id = session_response.json()["id"]
-
-  with get_db_connection() as conn:
-    cursor = conn.cursor()
-    cursor.execute(
-      """
-      INSERT INTO submissions (session_id, document_id, page_mappings, student_name, canvas_user_id)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_id, 1, "{}", "Student Final", 9001))
-    submission_id = cursor.lastrowid
-    cursor.execute(
-      """
-      INSERT INTO problems (session_id, submission_id, problem_number, graded, score, is_blank)
-      VALUES (?, ?, ?, ?, ?, ?)
-      """, (session_id, submission_id, 1, 1, 4.0, 0))
+  session_id = create_test_session(client, "Finalize Lifecycle Test")
+  seed_submission_with_problem(session_id,
+                               student_name="Student Final",
+                               canvas_user_id=9001,
+                               graded=True,
+                               score=4.0)
 
   async def fake_run_finalization(target_session_id: int, stream_id: str):
     repo = SessionRepository()
@@ -676,28 +642,11 @@ def test_autograde_image_lifecycle_starts_job(client, monkeypatch):
   """Autograde image endpoint should start a background job when setup is valid."""
   from grading_web_ui.web_api.routes import ai_grader as ai_routes
 
-  session_response = client.post("/api/sessions",
-                                 json={
-                                   "course_id": 12345,
-                                   "assignment_id": 67890,
-                                   "assignment_name": "Autograde Lifecycle Test"
-                                 })
-  assert session_response.status_code == 200
-  session_id = session_response.json()["id"]
-
-  with get_db_connection() as conn:
-    cursor = conn.cursor()
-    cursor.execute(
-      """
-      INSERT INTO submissions (session_id, document_id, page_mappings, student_name, file_hash)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_id, 1, "{}", "Student Auto", "autograde-hash"))
-    submission_id = cursor.lastrowid
-    cursor.execute(
-      """
-      INSERT INTO problems (session_id, submission_id, problem_number, graded, is_blank)
-      VALUES (?, ?, ?, ?, ?)
-      """, (session_id, submission_id, 1, 0, 0))
+  session_id = create_test_session(client, "Autograde Lifecycle Test")
+  seed_submission_with_problem(session_id,
+                               student_name="Student Auto",
+                               file_hash="autograde-hash",
+                               graded=False)
 
   async def fake_run_autograding_image(target_session_id: int, problem_number: int,
                                        settings: dict, stream_id: str):
@@ -710,6 +659,48 @@ def test_autograde_image_lifecycle_starts_job(client, monkeypatch):
                          json={
                            "mode": "image-only",
                            "problem_number": 1,
+                           "settings": {
+                             "batch_size": "small",
+                             "image_quality": "medium",
+                             "include_answer": False,
+                             "include_default_feedback": False,
+                             "auto_accept": False,
+                             "dry_run": True
+                           }
+                         })
+  assert response.status_code == 200
+  assert response.json()["status"] == "started"
+  assert workflow_locks.is_active("autograde", session_id) is False
+
+
+def test_autograde_all_lifecycle_starts_job(client, monkeypatch):
+  """Autograde-all endpoint should start a background job for valid sessions."""
+  from grading_web_ui.web_api.routes import ai_grader as ai_routes
+
+  session_id = create_test_session(client, "Autograde-All Lifecycle Test")
+  seed_submission_with_problem(session_id,
+                               student_name="Student Auto 1",
+                               file_hash="autograde-all-hash-1",
+                               problem_number=1,
+                               graded=False)
+  seed_submission_with_problem(session_id,
+                               document_id=2,
+                               student_name="Student Auto 2",
+                               file_hash="autograde-all-hash-2",
+                               problem_number=2,
+                               graded=False)
+
+  async def fake_run_autograding_all(target_session_id: int, problem_numbers: list,
+                                     totals_by_problem: dict, settings: dict,
+                                     stream_id: str):
+    workflow_locks.release("autograde", target_session_id)
+
+  monkeypatch.setattr(ai_routes, "run_autograding_all",
+                      fake_run_autograding_all)
+
+  response = client.post(f"/api/ai-grader/{session_id}/autograde-all",
+                         json={
+                           "mode": "image-only",
                            "settings": {
                              "batch_size": "small",
                              "image_quality": "medium",
@@ -750,4 +741,69 @@ def test_run_autograding_image_releases_lock_on_failure(monkeypatch):
     }, "test_stream"))
 
   assert workflow_locks.is_active("autograde", session_id) is False
+  assert any(event_type == "error" for _, event_type, _ in captured_events)
+
+
+def test_run_autograding_all_releases_lock_on_failure(monkeypatch):
+  """Autograde-all worker should release lock and emit error event on exceptions."""
+  from grading_web_ui.web_api.routes import ai_grader as ai_routes
+
+  session_id = 9899
+  assert workflow_locks.acquire("autograde", session_id) is True
+  captured_events = []
+
+  class FailingAIGrader:
+
+    def autograde_problem_image_only(self, *args, **kwargs):
+      raise RuntimeError("forced autograde-all failure")
+
+  async def capture_event(stream_id: str, event_type: str, data: dict):
+    captured_events.append((stream_id, event_type, data))
+
+  monkeypatch.setattr(ai_routes, "AIGraderService", lambda: FailingAIGrader())
+  monkeypatch.setattr(ai_routes.sse, "send_event", capture_event)
+
+  asyncio.run(
+    ai_routes.run_autograding_all(session_id, [1], {
+      1: 1
+    }, {
+      "auto_accept": False,
+      "dry_run": True
+    }, "test_stream_all"))
+
+  assert workflow_locks.is_active("autograde", session_id) is False
+  assert any(event_type == "error" for _, event_type, _ in captured_events)
+
+
+def test_run_finalization_sets_error_status_and_releases_lock(client,
+                                                              monkeypatch):
+  """Finalization worker should set ERROR status and release lock on failures."""
+  from grading_web_ui.web_api.routes import finalize as finalize_routes
+  session_repo = SessionRepository()
+
+  session_id = create_test_session(client, "Finalize Failure Lifecycle Test")
+  assert workflow_locks.acquire("finalize", session_id) is True
+  captured_events = []
+
+  class FailingFinalizer:
+
+    def __init__(self, session_id, temp_dir, stream_id, loop):
+      self.session_id = session_id
+
+    def finalize(self):
+      raise RuntimeError("forced finalization failure")
+
+  async def capture_event(stream_id: str, event_type: str, data: dict):
+    captured_events.append((stream_id, event_type, data))
+
+  monkeypatch.setattr(finalize_routes, "FinalizationService", FailingFinalizer)
+  monkeypatch.setattr(finalize_routes.sse, "send_event", capture_event)
+
+  asyncio.run(finalize_routes.run_finalization(session_id, "finalize_stream"))
+
+  session = session_repo.get_by_id(session_id)
+  assert session is not None
+  assert session.status.value == "error"
+  assert "finalization failed" in (session.processing_message or "").lower()
+  assert workflow_locks.is_active("finalize", session_id) is False
   assert any(event_type == "error" for _, event_type, _ in captured_events)
