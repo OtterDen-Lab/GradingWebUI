@@ -15,6 +15,7 @@ import base64
 import fitz
 from ..services.qr_scanner import QRScanner
 from ..services.exam_processor import ExamProcessor
+from ..services.quiz_encryption import set_runtime_encryption_key
 
 from ..models import (
   SessionCreate,
@@ -36,6 +37,7 @@ from ..auth import get_current_user, require_instructor, require_session_access
 import os
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 MOCK_ROSTER_ENV = "ALLOW_MOCK_ROSTER"
 QUIZ_YAML_TEXT_KEY = "quiz_yaml_text"
 QUIZ_YAML_FILENAME_KEY = "quiz_yaml_filename"
@@ -1275,13 +1277,18 @@ async def test_encryption_key(
   current_user: dict = Depends(require_instructor)
 ):
   """Test if an encryption key can decrypt sample QR code data (instructor only)"""
-  from ..services.qr_scanner import MinimalQuestionQRCode
-  import logging
-  log = logging.getLogger(__name__)
+  try:
+    from QuizGenerator.qrcode_generator import QuestionQRCode
+  except ImportError:
+    raise HTTPException(
+      status_code=500,
+      detail=
+      "QuizGenerator module not available. Please install QuizGenerator to test encryption keys."
+    )
 
   try:
     # Try to decrypt with the provided key
-    metadata = MinimalQuestionQRCode.decrypt_question_data(
+    metadata = QuestionQRCode.decrypt_question_data(
       encrypted_data, encryption_key.encode())
 
     return {
@@ -1303,22 +1310,21 @@ async def set_encryption_key(
   current_user: dict = Depends(require_instructor)
 ):
   """
-    Set the encryption key for the current session (instructor only, runtime only, not persisted).
-    This is a workaround for when the QUIZ_ENCRYPTION_KEY env var isn't available.
+    Set an in-memory encryption key for this process (instructor only).
+    The key is not persisted and is lost when the server restarts.
     """
-  import logging
-  log = logging.getLogger(__name__)
+  try:
+    set_runtime_encryption_key(encryption_key)
+  except ValueError as exc:
+    raise HTTPException(status_code=400, detail=str(exc))
 
-  # Set the environment variable for this process
-  os.environ['QUIZ_ENCRYPTION_KEY'] = encryption_key
-
-  log.info("Encryption key updated for current session (runtime only)")
+  log.info("Runtime encryption key updated for current process (in-memory)")
 
   return {
     "status":
     "success",
     "message":
-    "Encryption key set for current session. This will be lost when the server restarts."
+    "Runtime encryption key set for this process. It will be lost when the server restarts."
   }
 
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import subprocess
 import tomllib
+import logging
 
 # Load environment variables from .env file
 load_dotenv()
@@ -61,6 +62,8 @@ DISPLAY_VERSION = f"v{PROJECT_VERSION}" + ("+" if _is_ahead_of_tag(PROJECT_VERSI
 
 
 from .database import init_database, get_db_connection
+from .services.quiz_encryption import install_quizgenerator_key_provider
+from .startup_config import validate_startup_configuration
 from .routes import sessions, problems, uploads, canvas, matching, finalize, ai_grader, alignment, feedback_tags, auth, assignments
 
 # Optional debug routes (may not exist on all deployments)
@@ -74,6 +77,14 @@ except ImportError:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   """Lifespan event handler for startup/shutdown"""
+  log = logging.getLogger(__name__)
+
+  # Ensure QuizGenerator key access does not mutate process env at runtime.
+  install_quizgenerator_key_provider()
+
+  for warning in validate_startup_configuration():
+    log.warning("Startup config: %s", warning)
+
   # Startup: Initialize database
   init_database()
 

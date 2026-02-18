@@ -125,6 +125,12 @@ AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAMESITE=lax
 ```
 
+Startup config is validated at launch. Keep strict validation enabled in production:
+
+```bash
+GRADING_STRICT_STARTUP_CONFIG=true
+```
+
 ## Requirements
 
 - Python >= 3.12

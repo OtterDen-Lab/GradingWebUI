@@ -2,6 +2,7 @@
 Basic API tests to verify setup.
 """
 import io
+import os
 from pathlib import Path
 import zipfile
 import pytest
@@ -20,6 +21,9 @@ def client(tmp_path, monkeypatch):
   monkeypatch.setenv("GRADING_BOOTSTRAP_ADMIN_PASSWORD", "changeme123")
   monkeypatch.setenv("GRADING_BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
   monkeypatch.setenv("AUTH_COOKIE_SECURE", "false")
+  monkeypatch.setenv("CANVAS_API_URL", "https://canvas.example.test")
+  monkeypatch.setenv("CANVAS_API_KEY", "test-canvas-key")
+  monkeypatch.setenv("GRADING_STRICT_STARTUP_CONFIG", "true")
 
   with TestClient(app) as test_client:
     login_response = test_client.post(
@@ -41,6 +45,9 @@ def test_no_default_admin_without_bootstrap(tmp_path, monkeypatch):
   monkeypatch.delenv("GRADING_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
   monkeypatch.delenv("GRADING_BOOTSTRAP_ADMIN_EMAIL", raising=False)
   monkeypatch.setenv("AUTH_COOKIE_SECURE", "false")
+  monkeypatch.setenv("CANVAS_API_URL", "https://canvas.example.test")
+  monkeypatch.setenv("CANVAS_API_KEY", "test-canvas-key")
+  monkeypatch.setenv("GRADING_STRICT_STARTUP_CONFIG", "true")
 
   with TestClient(app) as test_client:
     login_response = test_client.post(
@@ -61,6 +68,9 @@ def test_login_sets_secure_cookie_when_enabled(tmp_path, monkeypatch):
   monkeypatch.setenv("GRADING_BOOTSTRAP_ADMIN_PASSWORD", "changeme123")
   monkeypatch.setenv("GRADING_BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
   monkeypatch.setenv("AUTH_COOKIE_SECURE", "true")
+  monkeypatch.setenv("CANVAS_API_URL", "https://canvas.example.test")
+  monkeypatch.setenv("CANVAS_API_KEY", "test-canvas-key")
+  monkeypatch.setenv("GRADING_STRICT_STARTUP_CONFIG", "true")
 
   with TestClient(app) as test_client:
     response = test_client.post(
@@ -336,3 +346,36 @@ def test_regenerate_answer_avoids_signature_mismatch_error(client):
   assert response.status_code in (400, 500)
   detail = response.json().get("detail", "")
   assert "unexpected keyword argument" not in detail
+
+
+def test_set_encryption_key_uses_runtime_store_not_env(client):
+  """Setting runtime encryption key should not mutate QUIZ_ENCRYPTION_KEY env var."""
+  from grading_web_ui.web_api.services.quiz_encryption import (
+    get_runtime_encryption_key,
+    clear_runtime_encryption_key,
+  )
+
+  original_env = os.environ.get("QUIZ_ENCRYPTION_KEY")
+  os.environ.pop("QUIZ_ENCRYPTION_KEY", None)
+  clear_runtime_encryption_key()
+  try:
+    response = client.post("/api/sessions/encryption-key/set",
+                           params={"encryption_key": "runtime-key-123"})
+    assert response.status_code == 200
+    assert get_runtime_encryption_key() == b"runtime-key-123"
+    assert os.environ.get("QUIZ_ENCRYPTION_KEY") is None
+  finally:
+    clear_runtime_encryption_key()
+    if original_env is not None:
+      os.environ["QUIZ_ENCRYPTION_KEY"] = original_env
+
+
+def test_encryption_key_test_endpoint_handles_invalid_payload(client):
+  """Key test endpoint should return failure payload for invalid data, not import errors."""
+  response = client.post("/api/sessions/encryption-key/test",
+                         params={
+                           "encrypted_data": "not-valid",
+                           "encryption_key": "runtime-key-123"
+                         })
+  assert response.status_code == 200
+  assert response.json().get("status") == "failed"
