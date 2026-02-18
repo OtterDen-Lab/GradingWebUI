@@ -3,10 +3,12 @@ Database connection and schema management.
 """
 import sqlite3
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 from contextlib import contextmanager
 import logging
+from datetime import datetime
 
 log = logging.getLogger(__name__)
 
@@ -17,6 +19,8 @@ BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
 BOOTSTRAP_ADMIN_FULL_NAME_ENV = "GRADING_BOOTSTRAP_ADMIN_FULL_NAME"
+DB_MIGRATION_BACKUP_DIR_ENV = "GRADING_DB_MIGRATION_BACKUP_DIR"
+DB_CREATE_MIGRATION_BACKUP_ENV = "GRADING_DB_CREATE_MIGRATION_BACKUP"
 
 
 def get_db_path() -> Path:
@@ -25,6 +29,53 @@ def get_db_path() -> Path:
   path = Path(db_path)
   path.parent.mkdir(parents=True, exist_ok=True)
   return path
+
+
+def _is_truthy(value: str) -> bool:
+  return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _should_create_migration_backup() -> bool:
+  return _is_truthy(os.getenv(DB_CREATE_MIGRATION_BACKUP_ENV, "true"))
+
+
+def _get_migration_backup_dir(db_path: Path) -> Path:
+  configured = os.getenv(DB_MIGRATION_BACKUP_DIR_ENV, "").strip()
+  backup_dir = Path(configured) if configured else db_path.parent
+  backup_dir.mkdir(parents=True, exist_ok=True)
+  return backup_dir
+
+
+def _create_pre_migration_backup(db_path: Path, from_version: int) -> Optional[Path]:
+  """
+  Create a pre-migration backup for rollback safety.
+
+  Returns backup path when a backup is created, otherwise None.
+  """
+  if not _should_create_migration_backup():
+    log.warning(
+      "Skipping pre-migration backup because %s=false",
+      DB_CREATE_MIGRATION_BACKUP_ENV)
+    return None
+
+  if not db_path.exists():
+    return None
+
+  backup_dir = _get_migration_backup_dir(db_path)
+  db_size = db_path.stat().st_size
+  # Require at least 2x DB size (or 5MB minimum) in backup destination.
+  required_free_bytes = max(db_size * 2, 5 * 1024 * 1024)
+  free_bytes = shutil.disk_usage(str(backup_dir)).free
+  if free_bytes < required_free_bytes:
+    raise RuntimeError(
+      f"Insufficient disk space for pre-migration backup in {backup_dir}. "
+      f"Required {required_free_bytes} bytes, available {free_bytes} bytes.")
+
+  timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+  backup_path = backup_dir / f"{db_path.name}.v{from_version}.bak-{timestamp}"
+  shutil.copy2(str(db_path), str(backup_path))
+  log.warning("Created pre-migration backup at %s", backup_path)
+  return backup_path
 
 
 def _get_busy_timeout_ms() -> int:
@@ -103,7 +154,8 @@ def get_db_connection():
 
 def init_database():
   """Initialize database with schema"""
-  log.info(f"Initializing database at {get_db_path()}")
+  db_path = get_db_path()
+  log.info(f"Initializing database at {db_path}")
 
   with get_db_connection() as conn:
     cursor = conn.cursor()
@@ -114,7 +166,14 @@ def init_database():
     if current_version == 0:
       # Create new database
       create_schema(cursor)
+    elif current_version > CURRENT_SCHEMA_VERSION:
+      raise RuntimeError(
+        f"Database schema version {current_version} is newer than supported "
+        f"application schema version {CURRENT_SCHEMA_VERSION}. "
+        "Downgrades are not supported. Use a matching/newer application version.")
     elif current_version < CURRENT_SCHEMA_VERSION:
+      # Preflight backup before in-place migrations for rollback safety.
+      _create_pre_migration_backup(db_path, current_version)
       # Run migrations
       run_migrations(cursor, current_version)
 

@@ -1,7 +1,7 @@
 """
 Repository for problem metadata (max_points, rubrics, etc.).
 """
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 import sqlite3
 
 from .base import BaseRepository
@@ -40,6 +40,62 @@ class ProblemMetadataRepository(BaseRepository):
 
       row = cursor.fetchone()
       return row["max_points"] if row else None
+
+  def list_by_session(self, session_id: int) -> List[Dict]:
+    """
+    Get all metadata rows for a session.
+    """
+    with self._get_connection() as conn:
+      return self._execute_and_fetch_all(
+        conn,
+        """
+        SELECT * FROM problem_metadata
+        WHERE session_id = ?
+        ORDER BY problem_number
+        """,
+        (session_id, )
+      )
+
+  def bulk_insert_for_session(
+    self,
+    session_id: int,
+    metadata_rows: List[Dict],
+    clear_default_feedback: bool = False,
+    clear_ai_grading_notes: bool = False
+  ) -> int:
+    """
+    Insert metadata rows for a target session.
+
+    Existing ids/session_ids from input rows are ignored.
+    """
+    if not metadata_rows:
+      return 0
+
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      inserted = 0
+      for row in metadata_rows:
+        cursor.execute(
+          """
+          INSERT INTO problem_metadata
+          (session_id, problem_number, max_points, question_text, grading_rubric,
+           default_feedback, default_feedback_threshold, ai_grading_notes, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          """,
+          (
+            session_id,
+            row["problem_number"],
+            row.get("max_points"),
+            row.get("question_text"),
+            row.get("grading_rubric"),
+            None if clear_default_feedback else row.get("default_feedback"),
+            row.get("default_feedback_threshold", 100.0),
+            None if clear_ai_grading_notes else row.get("ai_grading_notes"),
+            row.get("updated_at"),
+          ),
+        )
+        inserted += 1
+      return inserted
 
   def get_all_max_points(self, session_id: int) -> Dict[int, float]:
     """

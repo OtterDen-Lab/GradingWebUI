@@ -76,6 +76,21 @@ class FeedbackTagRepository(BaseRepository[FeedbackTag]):
         (session_id, problem_number)
       )
 
+  def get_by_session(self, session_id: int) -> List[FeedbackTag]:
+    """
+    Get all feedback tags for a session.
+    """
+    with self._get_connection() as conn:
+      return self._execute_and_fetch_all(
+        conn,
+        """
+        SELECT * FROM feedback_tags
+        WHERE session_id = ?
+        ORDER BY problem_number, short_name
+        """,
+        (session_id, )
+      )
+
   def create(self, session_id: int, problem_number: int,
              short_name: str, comment_text: str) -> FeedbackTag:
     """
@@ -143,3 +158,47 @@ class FeedbackTagRepository(BaseRepository[FeedbackTag]):
         WHERE id = ?
       """, (tag_id,))
       return cursor.rowcount > 0
+
+  def bulk_insert_for_session(self, session_id: int, tags: List[dict | FeedbackTag]) -> int:
+    """
+    Insert feedback tags for a target session.
+
+    Existing ids/session_ids from input rows are ignored.
+    """
+    if not tags:
+      return 0
+
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      inserted = 0
+      for tag in tags:
+        if isinstance(tag, FeedbackTag):
+          problem_number = tag.problem_number
+          short_name = tag.short_name
+          comment_text = tag.comment_text
+          use_count = tag.use_count
+          created_at = tag.created_at
+        else:
+          problem_number = tag["problem_number"]
+          short_name = tag["short_name"]
+          comment_text = tag["comment_text"]
+          use_count = tag.get("use_count", 0)
+          created_at = tag.get("created_at")
+
+        cursor.execute(
+          """
+          INSERT INTO feedback_tags
+          (session_id, problem_number, short_name, comment_text, use_count, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          """,
+          (
+            session_id,
+            problem_number,
+            short_name,
+            comment_text,
+            use_count,
+            created_at,
+          ),
+        )
+        inserted += 1
+      return inserted

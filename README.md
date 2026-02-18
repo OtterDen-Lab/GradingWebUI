@@ -131,6 +131,51 @@ Startup config is validated at launch. Keep strict validation enabled in product
 GRADING_STRICT_STARTUP_CONFIG=true
 ```
 
+## Dependency Management
+
+Runtime dependencies are pinned in `pyproject.toml`, and CI installs via `uv sync --frozen` using `uv.lock`.
+
+Recommended update cadence:
+
+```bash
+# Monthly (or before release)
+uv lock --upgrade
+uv sync --extra dev
+uv run pytest -q
+uv run pip-audit \
+  --ignore-vuln GHSA-6vgw-5pg2-w6jp \
+  --ignore-vuln GHSA-8rrh-rw8j-w5fx \
+  --ignore-vuln PYSEC-2024-225 \
+  --ignore-vuln GHSA-3ww4-gg4f-jr7f \
+  --ignore-vuln GHSA-9v9h-cgj8-h64p \
+  --ignore-vuln GHSA-h4gh-qq45-vh27 \
+  --ignore-vuln GHSA-r6ph-v2qm-q3c2
+```
+
+During dependency updates, review upstream changelogs for FastAPI, Pydantic, Uvicorn, and QuizGenerator before merging.
+
+## Database Migration Runbook
+
+Run migrations explicitly before deployment cutovers:
+
+```bash
+python scripts/migrate_db.py --db-path /path/to/grading.db --backup-dir /path/to/backups
+```
+
+Rollback guidance:
+
+1. Stop the app process.
+2. Restore the most recent backup created before migration:
+`cp /path/to/backups/grading.db.v<old>.bak-<timestamp> /path/to/grading.db`
+3. Restart the app on the matching application version for that schema.
+
+Preflight safety checks:
+
+- By default, migrations create a backup (`GRADING_DB_CREATE_MIGRATION_BACKUP=true`).
+- Backup location defaults to the DB directory and can be overridden with
+`GRADING_DB_MIGRATION_BACKUP_DIR`.
+- Migration aborts if there is not enough free disk for the backup copy.
+
 ## Requirements
 
 - Python >= 3.12

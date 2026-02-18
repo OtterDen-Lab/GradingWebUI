@@ -126,6 +126,29 @@ class ProblemRepository(BaseRepository[Problem]):
         (session_id,)
       )
 
+  def get_comparison_rows_for_session(self, session_id: int) -> List[Dict]:
+    """
+    Get per-problem comparison rows joined with submission file hash.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute(
+        """
+        SELECT s.file_hash,
+               p.problem_number,
+               p.score,
+               p.feedback,
+               p.graded,
+               p.is_blank,
+               p.submission_id
+        FROM problems p
+        JOIN submissions s ON p.submission_id = s.id
+        WHERE p.session_id = ? AND s.file_hash IS NOT NULL
+        """,
+        (session_id, ),
+      )
+      return [dict(row) for row in cursor.fetchall()]
+
   def create(self, problem: Problem) -> Problem:
     """
     Create single problem.

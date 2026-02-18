@@ -18,10 +18,26 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install uv
+        run: python -m pip install uv
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          uv sync --extra dev --frozen
 
       - name: Run tests
-        run: pytest -q
+        run: uv run pytest -q
+
+      - name: Run dependency audit
+        run: |
+          # Toolchain and upstream-pinned exceptions:
+          # - pip/wheel advisories are tracked in the CI base image/tooling lifecycle.
+          # - cryptography advisories remain until QuizGenerator lifts cryptography<41.1.
+          uv run pip-audit \
+            --ignore-vuln GHSA-6vgw-5pg2-w6jp \
+            --ignore-vuln GHSA-8rrh-rw8j-w5fx \
+            --ignore-vuln PYSEC-2024-225 \
+            --ignore-vuln GHSA-3ww4-gg4f-jr7f \
+            --ignore-vuln GHSA-9v9h-cgj8-h64p \
+            --ignore-vuln GHSA-h4gh-qq45-vh27 \
+            --ignore-vuln GHSA-r6ph-v2qm-q3c2
