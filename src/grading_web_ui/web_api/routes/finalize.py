@@ -15,6 +15,7 @@ from ..domain.common import SessionStatus
 from ..services.finalizer import FinalizationService
 from .. import sse
 from ..auth import require_instructor
+from .. import workflow_locks
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -67,6 +68,20 @@ async def finalize_session(
       status_code=400,
       detail=f"Cannot finalize: {ungraded_count} problems still ungraded")
 
+  if workflow_locks.is_active("autograde", session_id):
+    raise HTTPException(
+      status_code=409,
+      detail="Cannot finalize while autograding is in progress for this session")
+
+  if session.status == SessionStatus.FINALIZING or workflow_locks.is_active(
+      "finalize", session_id):
+    raise HTTPException(status_code=409,
+                        detail="Finalization is already running for this session")
+
+  if not workflow_locks.acquire("finalize", session_id):
+    raise HTTPException(status_code=409,
+                        detail="Finalization is already running for this session")
+
   # Update session status with initial progress message
   session_repo.update_status(session_id, SessionStatus.FINALIZING, "Starting finalization...")
 
@@ -75,7 +90,11 @@ async def finalize_session(
   sse.create_stream(stream_id)
 
   # Start background finalization
-  background_tasks.add_task(run_finalization, session_id, stream_id)
+  try:
+    background_tasks.add_task(run_finalization, session_id, stream_id)
+  except Exception:
+    workflow_locks.release("finalize", session_id)
+    raise
 
   return {
     "status": "started",
@@ -148,3 +167,5 @@ async def run_finalization(session_id: int, stream_id: str):
     # Update session to error state
     session_repo = SessionRepository()
     session_repo.update_status(session_id, SessionStatus.ERROR, f"Finalization failed: {str(e)}")
+  finally:
+    workflow_locks.release("finalize", session_id)

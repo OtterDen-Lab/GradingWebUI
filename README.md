@@ -30,14 +30,23 @@ git bump patch
 
 ## Quick Start
 
-### 1. Set up Canvas API credentials
+### 1. Set up environment variables
 
-Create a `.env` file in your working directory:
+Copy `.env.example` to `.env` and set values:
 
 ```bash
+cp .env.example .env
+
+# Required Canvas settings
 CANVAS_API_KEY=your_canvas_api_key_here
 CANVAS_API_URL=https://your-institution.instructure.com
+
+# Required for first login bootstrap
+GRADING_BOOTSTRAP_ADMIN_PASSWORD=choose_a_strong_password
 ```
+
+On first startup, an initial instructor user is created only when
+`GRADING_BOOTSTRAP_ADMIN_PASSWORD` is set.
 
 ### 2. Run the server
 
@@ -107,6 +116,13 @@ The web UI reads Canvas credentials from `~/.env` by default. To use production 
 USE_PROD_CANVAS=true
 CANVAS_API_KEY_PROD=your_prod_key
 CANVAS_API_URL_PROD=https://your-institution.instructure.com
+```
+
+Authentication cookie defaults can be controlled with:
+
+```bash
+AUTH_COOKIE_SECURE=true
+AUTH_COOKIE_SAMESITE=lax
 ```
 
 ## Requirements

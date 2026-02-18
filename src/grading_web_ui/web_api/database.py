@@ -2,6 +2,7 @@
 Database connection and schema management.
 """
 import sqlite3
+import os
 from pathlib import Path
 from typing import Optional
 from contextlib import contextmanager
@@ -12,23 +13,84 @@ log = logging.getLogger(__name__)
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
 CURRENT_SCHEMA_VERSION = 24
+BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
+BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
+BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
+BOOTSTRAP_ADMIN_FULL_NAME_ENV = "GRADING_BOOTSTRAP_ADMIN_FULL_NAME"
 
 
 def get_db_path() -> Path:
   """Get database path from environment or use default"""
-  import os
   db_path = os.getenv("GRADING_DB_PATH", str(DEFAULT_DB_PATH))
   path = Path(db_path)
   path.parent.mkdir(parents=True, exist_ok=True)
   return path
 
 
+def _get_busy_timeout_ms() -> int:
+  raw_value = os.getenv("GRADING_DB_BUSY_TIMEOUT_MS", "30000").strip()
+  try:
+    return max(1000, int(raw_value))
+  except ValueError:
+    return 30000
+
+
+def _get_connect_timeout_seconds() -> float:
+  raw_value = os.getenv("GRADING_DB_CONNECT_TIMEOUT_SECONDS", "30").strip()
+  try:
+    return max(1.0, float(raw_value))
+  except ValueError:
+    return 30.0
+
+
+def maybe_create_bootstrap_admin(cursor, email_required: bool = False):
+  """
+  Create initial admin user only when explicitly configured via environment.
+  """
+  password = os.getenv(BOOTSTRAP_ADMIN_PASSWORD_ENV, "").strip()
+  if not password:
+    log.info(
+      "Skipping bootstrap admin creation because %s is not set",
+      BOOTSTRAP_ADMIN_PASSWORD_ENV)
+    return
+
+  username = os.getenv(BOOTSTRAP_ADMIN_USERNAME_ENV, "admin").strip() or "admin"
+  email = os.getenv(BOOTSTRAP_ADMIN_EMAIL_ENV, "").strip() or None
+  full_name = (os.getenv(BOOTSTRAP_ADMIN_FULL_NAME_ENV, "Administrator").strip()
+               or "Administrator")
+
+  if email_required and not email:
+    email = f"{username}@example.com"
+
+  cursor.execute("SELECT id FROM users WHERE username = ? LIMIT 1", (username, ))
+  if cursor.fetchone():
+    log.info("Bootstrap admin user '%s' already exists; skipping", username)
+    return
+
+  import bcrypt
+  password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+  cursor.execute(
+    """
+      INSERT INTO users (username, email, password_hash, full_name, role)
+      VALUES (?, ?, ?, ?, ?)
+    """, (username, email, password_hash, full_name, "instructor"))
+  log.info("Created bootstrap admin user '%s' from environment config", username)
+
+
 @contextmanager
 def get_db_connection():
   """Context manager for database connections"""
   db_path = get_db_path()
-  conn = sqlite3.connect(str(db_path))
+  conn = sqlite3.connect(str(db_path), timeout=_get_connect_timeout_seconds())
   conn.row_factory = sqlite3.Row  # Enable column access by name
+  conn.execute("PRAGMA foreign_keys = ON")
+  conn.execute(f"PRAGMA busy_timeout = {_get_busy_timeout_ms()}")
+  try:
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+  except sqlite3.OperationalError:
+    # WAL may be unavailable on some filesystems; continue with defaults.
+    log.warning("Could not enable SQLite WAL mode for %s", db_path)
   try:
     yield conn
     conn.commit()
@@ -281,20 +343,7 @@ def create_schema(cursor):
     "CREATE INDEX idx_session_assignments_session ON session_assignments(session_id)"
   )
 
-  # Create default admin user (password: changeme123)
-  import bcrypt
-  password_hash = bcrypt.hashpw("changeme123".encode(),
-                                bcrypt.gensalt()).decode()
-  cursor.execute(
-    """
-        INSERT INTO users (username, email, password_hash, full_name, role)
-        VALUES (?, ?, ?, ?, ?)
-    """,
-    ("admin", "admin@example.com", password_hash, "Administrator",
-     "instructor"))
-
-  log.info(
-    "Created default admin user (username: admin, password: changeme123)")
+  maybe_create_bootstrap_admin(cursor)
 
   # Record schema version
   cursor.execute("INSERT INTO _schema_version (version) VALUES (?)",
@@ -847,20 +896,7 @@ def migrate_to_v22(cursor):
     "CREATE INDEX idx_session_assignments_session ON session_assignments(session_id)"
   )
 
-  # Create default admin user (password: changeme123)
-  import bcrypt
-  password_hash = bcrypt.hashpw("changeme123".encode(),
-                                bcrypt.gensalt()).decode()
-  cursor.execute(
-    """
-        INSERT INTO users (username, email, password_hash, full_name, role)
-        VALUES (?, ?, ?, ?, ?)
-    """,
-    ("admin", "admin@example.com", password_hash, "Administrator",
-     "instructor"))
-
-  log.info(
-    "Created default admin user (username: admin, password: changeme123)")
+  maybe_create_bootstrap_admin(cursor, email_required=True)
   log.info("Successfully added authentication and RBAC tables")
 
 

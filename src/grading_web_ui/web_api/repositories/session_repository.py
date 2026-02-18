@@ -238,10 +238,7 @@ class SessionRepository(BaseRepository[GradingSession]):
 
   def delete(self, session_id: int) -> bool:
     """
-    Delete session.
-
-    Note: Caller is responsible for deleting related records first
-    (submissions, problems, etc.) to maintain referential integrity.
+    Delete session and associated records.
 
     Args:
       session_id: Session primary key
@@ -251,6 +248,20 @@ class SessionRepository(BaseRepository[GradingSession]):
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
+
+      # Delete dependent records first to satisfy FK constraints.
+      # Keep all operations in one transaction so partial cleanup cannot persist.
+      cursor.execute("DELETE FROM problems WHERE session_id = ?", (session_id, ))
+      cursor.execute("DELETE FROM submissions WHERE session_id = ?",
+                     (session_id, ))
+      cursor.execute("DELETE FROM problem_metadata WHERE session_id = ?",
+                     (session_id, ))
+      cursor.execute("DELETE FROM problem_stats WHERE session_id = ?",
+                     (session_id, ))
+      cursor.execute("DELETE FROM feedback_tags WHERE session_id = ?",
+                     (session_id, ))
+      cursor.execute("DELETE FROM session_assignments WHERE session_id = ?",
+                     (session_id, ))
       cursor.execute("DELETE FROM grading_sessions WHERE id = ?", (session_id,))
       return cursor.rowcount > 0
 

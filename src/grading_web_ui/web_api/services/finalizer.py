@@ -17,6 +17,7 @@ from PIL import Image
 
 from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository
 from ..services.problem_service import ProblemService
+from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from lms_interface.canvas_interface import CanvasInterface
 from lms_interface.classes import Feedback
 from .. import sse
@@ -42,6 +43,7 @@ class FinalizationService:
     self.steps_per_submission = 3
     self.total_steps = 0
     self.current_step = 0
+    self.last_persisted_step = 0
     self.quiz_yaml_text = None
 
   def finalize(self):
@@ -534,11 +536,11 @@ class FinalizationService:
     qr_data = problem.get("qr_encrypted_data")
     if qr_data:
       try:
-        from QuizGenerator.regenerate import regenerate_from_encrypted
-        result = regenerate_from_encrypted(encrypted_data=qr_data,
-                                           points=problem.get("max_points") or 0.0,
-                                           image_mode="inline",
-                                           yaml_text=self.quiz_yaml_text)
+        result = regenerate_from_encrypted_compat(
+          encrypted_data=qr_data,
+          points=problem.get("max_points") or 0.0,
+          image_mode="inline",
+          yaml_text=self.quiz_yaml_text)
         explanation_html = result.get("explanation_html") or result.get("explanation_markdown")
         if explanation_html:
           return explanation_html
@@ -613,12 +615,21 @@ class FinalizationService:
     # Increment step counter
     self.current_step += 1
 
-    # Update database
-    session_repo = SessionRepository()
-    session = session_repo.get_by_id(self.session_id)
-    if session:
-      session.processing_message = message
-      session_repo.update(session)
+    should_persist = (
+      self.current_step == 1
+      or self.current_step >= self.total_steps
+      or "ERROR" in message
+      or (self.current_step - self.last_persisted_step) >= self.steps_per_submission
+    )
+
+    # Persist to DB less frequently to reduce lock churn during long finalization runs.
+    if should_persist:
+      session_repo = SessionRepository()
+      session = session_repo.get_by_id(self.session_id)
+      if session:
+        session.processing_message = message
+        session_repo.update(session)
+      self.last_persisted_step = self.current_step
 
     # Send SSE progress event based on steps completed
     if self.total_steps > 0:
