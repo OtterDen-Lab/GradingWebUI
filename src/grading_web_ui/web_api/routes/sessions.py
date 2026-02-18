@@ -386,14 +386,17 @@ async def get_session_stats(
 
     # Get counts
     counts = problem_repo.get_counts_for_problem_number(session_id, problem_num)
+    manual_blank_counts = problem_repo.get_manual_blank_counts_for_problem_number(
+      session_id, problem_num)
     num_total = counts["total"]
     num_graded = counts["graded"]
-    num_blank_ungraded = counts["ungraded_blank"]
+    num_blank_ungraded = manual_blank_counts["ungraded_manual_blank"]
     num_blank_total = num_blank + num_blank_ungraded
 
     # Debug log
     log.info(
-      f"[STATS] Problem {problem_num}: total={num_total}, graded={num_graded}, blank_ungraded={num_blank_ungraded}, blank_total={num_blank_total}"
+      f"[STATS] Problem {problem_num}: total={num_total}, graded={num_graded}, "
+      f"manual_blank_ungraded={num_blank_ungraded}, manual_blank_total={num_blank_total}"
     )
 
     # Calculate statistics

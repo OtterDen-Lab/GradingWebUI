@@ -678,27 +678,83 @@ class ProblemRepository(BaseRepository[Problem]):
 
   def get_problem_scores_and_blanks(self, session_id: int, problem_number: int) -> tuple[List[float], int]:
     """
-    Get scores and blank count for a specific problem.
+    Get scores and manual blank count for a specific problem.
 
     Args:
       session_id: Session primary key
       problem_number: Problem number
 
     Returns:
-      Tuple of (list of scores, num_blank)
+      Tuple of (list of scores, num_manual_blank)
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
       cursor.execute("""
-        SELECT score, is_blank
+        SELECT score, is_blank, blank_method, blank_reasoning
         FROM problems
         WHERE session_id = ? AND problem_number = ? AND graded = 1
       """, (session_id, problem_number))
 
       results = cursor.fetchall()
       scores = [row["score"] for row in results if row["score"] is not None]
-      num_blank = sum(1 for row in results if row["is_blank"])
-      return (scores, num_blank)
+      num_manual_blank = sum(
+        1 for row in results
+        if row["is_blank"] and (
+          (row["blank_method"] or "").strip().lower() == "manual"
+          or ((row["blank_method"] is None)
+              and str(row["blank_reasoning"] or "").startswith(
+                "Manually marked as blank"))
+        ))
+      return (scores, num_manual_blank)
+
+  def get_manual_blank_counts_for_problem_number(self, session_id: int,
+                                                 problem_number: int) -> Dict[str, int]:
+    """
+    Get graded/ungraded manual blank counts for a problem number.
+
+    Manual blanks are explicit grader entries (dash input), not heuristic/AI flags.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        SELECT
+          SUM(
+            CASE
+              WHEN graded = 1
+               AND is_blank = 1
+               AND (
+                 LOWER(COALESCE(blank_method, '')) = 'manual'
+                 OR (
+                   blank_method IS NULL
+                   AND blank_reasoning LIKE 'Manually marked as blank%'
+                 )
+               )
+              THEN 1 ELSE 0
+            END
+          ) as graded_manual_blank,
+          SUM(
+            CASE
+              WHEN graded = 0
+               AND is_blank = 1
+               AND (
+                 LOWER(COALESCE(blank_method, '')) = 'manual'
+                 OR (
+                   blank_method IS NULL
+                   AND blank_reasoning LIKE 'Manually marked as blank%'
+                 )
+               )
+              THEN 1 ELSE 0
+            END
+          ) as ungraded_manual_blank
+        FROM problems
+        WHERE session_id = ? AND problem_number = ?
+      """, (session_id, problem_number))
+
+      row = cursor.fetchone()
+      return {
+        "graded_manual_blank": row["graded_manual_blank"] or 0,
+        "ungraded_manual_blank": row["ungraded_manual_blank"] or 0,
+      }
 
   def get_blank_distribution(self, session_id: int) -> Dict[int, Dict]:
     """

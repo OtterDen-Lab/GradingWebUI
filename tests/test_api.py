@@ -71,6 +71,8 @@ def seed_submission_with_problem(session_id: int,
                                  score: float | None = None,
                                  feedback: str | None = None,
                                  is_blank: bool = False,
+                                 blank_method: str | None = None,
+                                 blank_reasoning: str | None = None,
                                  qr_encrypted_data: str | None = None,
                                  max_points: float | None = None) -> tuple[int, int]:
   """Create one submission and one problem via repositories."""
@@ -100,6 +102,8 @@ def seed_submission_with_problem(session_id: int,
         score=score,
         feedback=feedback,
         is_blank=is_blank,
+        blank_method=blank_method,
+        blank_reasoning=blank_reasoning,
         qr_encrypted_data=qr_encrypted_data,
         max_points=max_points,
       ))
@@ -394,6 +398,57 @@ def test_regenerate_answer_avoids_signature_mismatch_error(client):
   assert response.status_code in (400, 500)
   detail = response.json().get("detail", "")
   assert "unexpected keyword argument" not in detail
+
+
+def test_session_stats_blank_rate_counts_manual_blanks_only(client):
+  """Stats blank metrics should use manual '-' marks, not AI/heuristic blank flags."""
+  session_id = create_test_session(client, "Manual Blank Stats Test")
+
+  # Manual blank entry (dash grading path equivalent)
+  seed_submission_with_problem(session_id,
+                               document_id=1,
+                               graded=True,
+                               score=0.0,
+                               is_blank=True,
+                               blank_method="manual",
+                               blank_reasoning="Manually marked as blank by grader")
+
+  # AI/estimated blank should NOT count toward manual blank-rate tracking.
+  seed_submission_with_problem(session_id,
+                               document_id=2,
+                               graded=True,
+                               score=0.0,
+                               is_blank=True,
+                               blank_method="ai",
+                               blank_reasoning="Accepted as blank by AI autograder")
+
+  # Heuristic ungraded blank should also be excluded from stats blank tracking.
+  seed_submission_with_problem(session_id,
+                               document_id=3,
+                               graded=False,
+                               score=None,
+                               is_blank=True,
+                               blank_method="heuristic",
+                               blank_reasoning="No writing detected")
+
+  # Non-blank graded example
+  seed_submission_with_problem(session_id,
+                               document_id=4,
+                               graded=True,
+                               score=4.0,
+                               is_blank=False)
+
+  response = client.get(f"/api/sessions/{session_id}/stats")
+  assert response.status_code == 200
+  payload = response.json()
+  stats_row = next(ps for ps in payload["problem_stats"]
+                   if ps["problem_number"] == 1)
+
+  assert stats_row["num_total"] == 4
+  assert stats_row["num_graded"] == 3
+  assert stats_row["num_blank"] == 1
+  assert stats_row["num_blank_ungraded"] == 0
+  assert stats_row["pct_blank"] == pytest.approx((1 / 3) * 100, rel=1e-3)
 
 
 def test_set_encryption_key_uses_runtime_store_not_env(client):
