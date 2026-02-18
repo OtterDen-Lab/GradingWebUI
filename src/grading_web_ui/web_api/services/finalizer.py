@@ -27,6 +27,9 @@ log = logging.getLogger(__name__)
 
 class FinalizationService:
   """Handles finalization of grading sessions"""
+  AUTO_EXPLANATION_DISCLAIMER = (
+    "Note: The explanation below is automatically generated and might not be correct."
+  )
 
   def __init__(self, session_id: int, temp_dir: Path, stream_id: str,
                event_loop):
@@ -340,10 +343,13 @@ class FinalizationService:
             f"problem {problem['problem_number']}: {e}"
           )
 
-      feedback_html = self._render_text_or_html(problem.get("feedback"))
-      explanation_html = self._render_text_or_html(
-        self._get_explanation_html(problem)
-      )
+      explanation_source = self._get_explanation_html(problem)
+      explanation_html = self._render_text_or_html(explanation_source)
+
+      feedback_source = problem.get("feedback") or ""
+      if explanation_source:
+        feedback_source = self._strip_auto_generated_explanation(feedback_source)
+      feedback_html = self._render_text_or_html(feedback_source)
 
       explanation_section = ""
       if explanation_html:
@@ -511,6 +517,21 @@ class FinalizationService:
 """
 
     return html_doc
+
+  def _strip_auto_generated_explanation(self, feedback_text: str) -> str:
+    if not feedback_text:
+      return ""
+
+    marker = self.AUTO_EXPLANATION_DISCLAIMER
+    idx = feedback_text.find(marker)
+    if idx < 0:
+      return feedback_text
+
+    trimmed = feedback_text[:idx].rstrip()
+    # Remove common separator if present before disclaimer block.
+    if trimmed.endswith("---"):
+      trimmed = trimmed[:-3].rstrip()
+    return trimmed
 
   def _render_text_or_html(self, text: str) -> str:
     if not text:
