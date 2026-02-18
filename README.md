@@ -82,6 +82,15 @@ Use `docker/web-grading/docker-compose.prod.yml` for deployment-style runs (imag
 make docker-up-build
 ```
 
+### One-command local redeploy (rebuild + keep existing volumes)
+
+```bash
+make deploy
+```
+
+This validates `docker/web-grading/.env`, rebuilds containers, and redeploys in place.
+Named volumes (including `grading-data`) are preserved.
+
 ### Local server-style run (image + env file injection)
 
 ```bash
@@ -95,6 +104,12 @@ docker compose -f docker/web-grading/docker-compose.prod.yml up -d
 ```bash
 make docker-prod-pull DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 DOCKER_ENV_FILE=/etc/grading-web/web.env
 make docker-prod-up DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 DOCKER_ENV_FILE=/etc/grading-web/web.env
+```
+
+Or use the combined production redeploy target:
+
+```bash
+make deploy-prod DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 DOCKER_ENV_FILE=/etc/grading-web/web.env
 ```
 
 ## Features
