@@ -62,6 +62,32 @@ http://localhost:8765
 
 For more details, see `docker/web-grading/README.md`.
 
+## Deployment Quick Reference
+
+Use `docker/web-grading/docker-compose.yml` for development (local source mounted, fast iteration).
+Use `docker/web-grading/docker-compose.prod.yml` for deployment-style runs (image-only, server env file).
+
+### Local dev with Docker Compose (build from local source)
+
+```bash
+make docker-up-build
+```
+
+### Local server-style run (image + env file injection)
+
+```bash
+GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3 \
+GRADING_WEB_ENV_FILE=/etc/grading-web/web.env \
+docker compose -f docker/web-grading/docker-compose.prod.yml up -d
+```
+
+### Update to a newer image tag
+
+```bash
+make docker-prod-pull DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 DOCKER_ENV_FILE=/etc/grading-web/web.env
+make docker-prod-up DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 DOCKER_ENV_FILE=/etc/grading-web/web.env
+```
+
 ## Features
 
 ### Web UI Capabilities

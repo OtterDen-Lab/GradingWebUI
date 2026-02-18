@@ -2,6 +2,10 @@
 
 This directory contains Docker configuration for deploying the Web Grading Interface.
 
+Compose files:
+- `docker-compose.yml`: local development (includes source bind mounts).
+- `docker-compose.prod.yml`: deployment (image-only, no source bind mounts).
+
 ## Quick Start
 
 ### Prerequisites
@@ -64,6 +68,37 @@ This directory contains Docker configuration for deploying the Web Grading Inter
    - Create a new grading session
    - Resume an existing session
    - Import a saved session
+
+## Production Deployment (Recommended)
+
+Use the production compose file with a server-only env file.
+
+1. **Create a server-only env file:**
+   ```bash
+   sudo mkdir -p /etc/grading-web
+   sudo cp docker/web-grading/.env.example /etc/grading-web/web.env
+   sudo chmod 600 /etc/grading-web/web.env
+   ```
+   Fill `/etc/grading-web/web.env` with real secrets.
+
+2. **Deploy a tagged image:**
+   ```bash
+   export GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.2
+   export GRADING_WEB_ENV_FILE=/etc/grading-web/web.env
+   docker compose -f docker/web-grading/docker-compose.prod.yml pull
+   docker compose -f docker/web-grading/docker-compose.prod.yml up -d
+   ```
+
+3. **Upgrade to a new release:**
+   ```bash
+   export GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3
+   docker compose -f docker/web-grading/docker-compose.prod.yml pull
+   docker compose -f docker/web-grading/docker-compose.prod.yml up -d
+   ```
+
+Equivalent Make targets from repo root:
+- `make docker-prod-pull DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3 DOCKER_ENV_FILE=/etc/grading-web/web.env`
+- `make docker-prod-up DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3 DOCKER_ENV_FILE=/etc/grading-web/web.env`
 
 ## Getting API Keys
 
@@ -300,7 +335,9 @@ volumes:
 - Use **development Canvas** (`CANVAS_API_URL_DEV`) for testing
 - Only use production Canvas when you're ready to submit real grades
 - The database contains student data - ensure it's backed up and secured
-- Consider using Docker secrets for production deployments
+- Keep production secrets on the server (e.g. `/etc/grading-web/web.env`) instead of in the repository
+- Use versioned images (`vX.Y.Z`) for deployment instead of mutable `latest`
+- Rotate keys immediately if they were ever committed
 
 ## System Requirements
 
@@ -352,18 +389,22 @@ System libraries for OpenCV are automatically installed in the Docker image.
 
 ## Updating
 
-### Pull Latest Code
+### Local Dev Update (source-based)
 ```bash
 cd /path/to/GradingWebUI
 git pull
 cd docker/web-grading
-```
-
-### Rebuild and Restart
-```bash
 docker-compose down
 docker-compose build --no-cache
 docker-compose up -d
+```
+
+### Production Update (image-based)
+```bash
+export GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3
+export GRADING_WEB_ENV_FILE=/etc/grading-web/web.env
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### Database Migrations

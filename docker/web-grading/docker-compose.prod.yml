@@ -1,0 +1,28 @@
+services:
+  web:
+    image: ${GRADING_WEB_IMAGE:-ghcr.io/otterden-lab/gradingwebui:latest}
+    container_name: autograder-web-grading
+    ports:
+      - "${GRADING_WEB_PORT:-8765}:8765"
+    env_file:
+      - ${GRADING_WEB_ENV_FILE:-/etc/grading-web/web.env}
+    environment:
+      - GRADING_DB_PATH=/data/grading.db
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3-vl:2b}
+      - OLLAMA_TIMEOUT=${OLLAMA_TIMEOUT:-300}
+    volumes:
+      - grading-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8765/api/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  grading-data:
+    driver: local

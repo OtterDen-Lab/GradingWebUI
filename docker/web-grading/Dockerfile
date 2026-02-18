@@ -22,6 +22,7 @@ WORKDIR /app
 
 # Copy package source
 COPY src /app/src
+COPY lms_interface /app/lms_interface
 
 # Copy pyproject.toml, LICENSE, and README
 COPY pyproject.toml /app/

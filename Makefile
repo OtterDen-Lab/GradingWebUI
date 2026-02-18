@@ -8,9 +8,12 @@ PORT ?= 8765
 DB_DIR ?= .tmp
 DB_PATH ?= $(DB_DIR)/grading.db
 DOCKER_COMPOSE ?= docker compose -f docker/web-grading/docker-compose.yml
+DOCKER_COMPOSE_PROD ?= docker compose -f docker/web-grading/docker-compose.prod.yml
+DOCKER_IMAGE ?= ghcr.io/otterden-lab/gradingwebui:latest
+DOCKER_ENV_FILE ?= /etc/grading-web/web.env
 QUIZGEN_PATH ?= /Users/ssogden/repos/teaching/QuizGeneration
 
-.PHONY: help install install-quizgen-local run run-reload test test-api docker-build docker-up docker-up-build docker-restart-web docker-logs docker-down docker-ps docker-shell
+.PHONY: help install install-quizgen-local run run-reload test test-api docker-build docker-up docker-up-build docker-restart-web docker-logs docker-down docker-ps docker-shell docker-prod-pull docker-prod-up docker-prod-down docker-prod-logs docker-prod-ps
 
 help:
 	@echo "Targets:"
@@ -28,6 +31,11 @@ help:
 	@echo "  docker-down        Stop Docker services"
 	@echo "  docker-ps          Show Docker service status"
 	@echo "  docker-shell       Open shell in running web container"
+	@echo "  docker-prod-pull   Pull production image tag"
+	@echo "  docker-prod-up     Start production container(s)"
+	@echo "  docker-prod-down   Stop production container(s)"
+	@echo "  docker-prod-logs   Tail production logs"
+	@echo "  docker-prod-ps     Show production service status"
 
 install:
 	@if command -v $(UV) >/dev/null 2>&1; then \
@@ -84,3 +92,18 @@ docker-ps:
 
 docker-shell:
 	$(DOCKER_COMPOSE) exec web /bin/sh
+
+docker-prod-pull:
+	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) pull
+
+docker-prod-up:
+	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) up -d
+
+docker-prod-down:
+	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) down
+
+docker-prod-logs:
+	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) logs -f
+
+docker-prod-ps:
+	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) ps

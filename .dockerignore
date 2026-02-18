@@ -1,0 +1,25 @@
+# Secrets
+.env
+**/.env
+*.pem
+*.key
+
+# VCS and local tooling
+.git
+.github
+.idea
+.pytest_cache
+.uv_cache
+.venv
+__pycache__
+
+# Local runtime artifacts
+.tmp
+out
+records
+*.log
+
+# Development/test-only content not needed for runtime image
+tests
+imgs
+WebUI
