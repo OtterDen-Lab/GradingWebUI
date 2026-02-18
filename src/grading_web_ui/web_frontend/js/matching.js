@@ -3,6 +3,7 @@
 let allSubmissions = [];
 let allStudents = [];
 let revealCanvasNames = true;
+let matchingImagePreviewBound = false;
 
 // Simple fuzzy matching helper (Levenshtein distance)
 function fuzzyMatch(str1, str2) {
@@ -118,11 +119,12 @@ function renderMatchingList() {
         html += `
             <div class="matching-item ${statusClass}" data-submission-id="${submission.id}">
                 <div class="matching-info">
-                    <div style="display: flex; gap: 15px; align-items: flex-start;">
+                    <div class="matching-preview-row">
                         ${submission.name_image_data ? `
                             <img src="data:image/png;base64,${submission.name_image_data}"
                                  alt="Name area"
-                                 style="max-width: 200px; border: 1px solid #ccc; border-radius: 4px;">
+                                 title="Click to enlarge/shrink"
+                                 class="matching-name-image">
                         ` : ''}
                         <div style="flex: 1;">
                             <strong>Exam #${submission.document_id + 1}</strong>
@@ -155,6 +157,28 @@ function renderMatchingList() {
     });
 
     container.innerHTML = html;
+    bindMatchingImagePreview();
+}
+
+function bindMatchingImagePreview() {
+    if (matchingImagePreviewBound) return;
+
+    const container = document.getElementById('unmatched-list');
+    if (!container) return;
+
+    container.addEventListener('click', (event) => {
+        const image = event.target.closest('.matching-name-image');
+        if (!image) return;
+        const willExpand = !image.classList.contains('expanded');
+        container.querySelectorAll('.matching-name-image.expanded').forEach((img) => {
+            img.classList.remove('expanded');
+        });
+        if (willExpand) {
+            image.classList.add('expanded');
+        }
+    });
+
+    matchingImagePreviewBound = true;
 }
 
 async function toggleCanvasNameReveal() {

@@ -690,8 +690,9 @@ header h1 {
 /* Name Matching */
 .matching-item {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    justify-content: flex-start;
+    align-items: flex-start;
+    gap: 12px;
     padding: 15px;
     background-color: var(--gray-100);
     border-radius: 6px;
@@ -713,6 +714,13 @@ header h1 {
     flex: 1;
 }
 
+.matching-preview-row {
+    display: flex;
+    gap: 15px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
 .detected-name {
     margin-top: 5px;
     color: var(--gray-700);
@@ -730,6 +738,24 @@ header h1 {
     display: flex;
     gap: 10px;
     align-items: center;
+    order: -1;
+    flex: 0 0 auto;
+}
+
+.matching-name-image {
+    width: 350px;
+    max-width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    height: auto;
+    cursor: zoom-in;
+    transition: width 0.2s ease;
+}
+
+.matching-name-image.expanded {
+    width: clamp(350px, calc(100vw - 420px), 1000px);
+    max-width: 100%;
+    cursor: zoom-out;
 }
 
 .student-select {
@@ -814,10 +840,16 @@ header h1 {
     .matching-control {
         width: 100%;
         flex-direction: column;
+        order: 0;
     }
 
     .student-select {
         width: 100%;
+    }
+
+    .matching-name-image {
+        width: 100%;
+        max-width: 320px;
     }
 }
 
