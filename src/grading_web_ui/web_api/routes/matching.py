@@ -46,9 +46,10 @@ async def get_all_submissions(
 @router.get("/{session_id}/students")
 async def get_all_students(
   session_id: int,
+  reveal_names: bool = True,
   current_user: dict = Depends(require_session_access())
 ):
-  """Get all Canvas students with match status (requires session access)"""
+  """Get all Canvas students with match status (requires session access)."""
   session_repo = SessionRepository()
   submission_repo = SubmissionRepository()
 
@@ -57,8 +58,12 @@ async def get_all_students(
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")
 
-  # Get Canvas students
-  canvas_interface = CanvasInterface(prod=session.use_prod_canvas)
+  # Get Canvas students (optionally reveal real names for explicit matching flow).
+  privacy_mode = "none" if reveal_names else "id_only"
+  canvas_interface = CanvasInterface(
+    prod=session.use_prod_canvas,
+    privacy_mode=privacy_mode
+  )
   course = canvas_interface.get_course(session.course_id)
   assignment = course.get_assignment(session.assignment_id)
   all_students = assignment.get_students(include_names=True)
@@ -83,6 +88,7 @@ async def get_all_students(
 async def match_submission(
   session_id: int,
   match: NameMatchRequest,
+  reveal_names: bool = True,
   current_user: dict = Depends(require_session_access())
 ):
   """Manually match a submission to a Canvas student (requires session access)"""
@@ -99,8 +105,12 @@ async def match_submission(
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")
 
-  # Get student name from Canvas
-  canvas_interface = CanvasInterface(prod=session.use_prod_canvas)
+  # Get student name from Canvas. When reveal_names=true, store the real name.
+  privacy_mode = "none" if reveal_names else "id_only"
+  canvas_interface = CanvasInterface(
+    prod=session.use_prod_canvas,
+    privacy_mode=privacy_mode
+  )
   course = canvas_interface.get_course(session.course_id)
   assignment = course.get_assignment(session.assignment_id)
   students = assignment.get_students(include_names=True)

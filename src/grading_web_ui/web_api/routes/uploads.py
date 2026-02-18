@@ -3,17 +3,17 @@ File upload and processing endpoints.
 """
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 import tempfile
 import zipfile
 import hashlib
 import logging
+from datetime import datetime
 from pathlib import Path
+import yaml
 
 from ..models import UploadResponse
-from ..repositories import SessionRepository
-from ..domain.common import SessionStatus
 from .. import sse
 from ..auth import require_instructor, require_session_access
 
@@ -32,6 +32,11 @@ from ..domain.common import SessionStatus
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+QUIZ_YAML_TEXT_KEY = "quiz_yaml_text"
+QUIZ_YAML_FILENAME_KEY = "quiz_yaml_filename"
+QUIZ_YAML_IDS_KEY = "quiz_yaml_ids"
+QUIZ_YAML_DOC_COUNT_KEY = "quiz_yaml_doc_count"
+QUIZ_YAML_UPLOADED_AT_KEY = "quiz_yaml_uploaded_at"
 
 
 class SplitPointsSubmission(BaseModel):
@@ -49,6 +54,60 @@ def compute_file_hash(file_path: Path) -> str:
     for byte_block in iter(lambda: f.read(4096), b""):
       sha256_hash.update(byte_block)
   return sha256_hash.hexdigest()
+
+
+def parse_uploaded_quiz_yaml(content: bytes, filename: str) -> Dict[str, Any]:
+  """Validate and parse uploaded YAML content."""
+  if not content:
+    raise HTTPException(status_code=400,
+                        detail=f"Quiz YAML file '{filename}' is empty")
+
+  try:
+    yaml_text = content.decode("utf-8")
+  except UnicodeDecodeError:
+    raise HTTPException(status_code=400,
+                        detail=f"Quiz YAML file '{filename}' must be UTF-8 encoded")
+
+  try:
+    docs = list(yaml.safe_load_all(yaml_text))
+  except yaml.YAMLError as exc:
+    raise HTTPException(status_code=400,
+                        detail=f"Invalid quiz YAML '{filename}': {exc}")
+
+  yaml_ids = []
+  for doc in docs:
+    if isinstance(doc, dict):
+      yaml_id = doc.get("yaml_id")
+      if isinstance(yaml_id, str) and yaml_id.strip():
+        yaml_ids.append(yaml_id.strip())
+
+  # Preserve insertion order while removing duplicates
+  seen = set()
+  ordered_ids = []
+  for yaml_id in yaml_ids:
+    if yaml_id not in seen:
+      seen.add(yaml_id)
+      ordered_ids.append(yaml_id)
+
+  return {
+    "text": yaml_text,
+    "filename": filename,
+    "yaml_ids": ordered_ids,
+    "doc_count": len(docs),
+    "uploaded_at": datetime.now().isoformat(timespec="seconds")
+  }
+
+
+def apply_uploaded_quiz_yaml_metadata(session_data: Dict[str, Any],
+                                      uploaded_yaml: Optional[Dict[str, Any]]) -> None:
+  """Write parsed YAML metadata into session metadata."""
+  if not uploaded_yaml:
+    return
+  session_data[QUIZ_YAML_TEXT_KEY] = uploaded_yaml["text"]
+  session_data[QUIZ_YAML_FILENAME_KEY] = uploaded_yaml["filename"]
+  session_data[QUIZ_YAML_IDS_KEY] = uploaded_yaml["yaml_ids"]
+  session_data[QUIZ_YAML_DOC_COUNT_KEY] = uploaded_yaml["doc_count"]
+  session_data[QUIZ_YAML_UPLOADED_AT_KEY] = uploaded_yaml["uploaded_at"]
 
 
 @router.get("/{session_id}/upload-stream")
@@ -93,11 +152,14 @@ async def upload_exams(
   saved_files = []
   file_metadata = {}  # Map: file_path -> {hash, original_filename}
   filename_counter = {}  # Track filename usage to handle duplicates
+  uploaded_yaml = None
 
   for file in files:
     # Handle duplicate filenames by appending a counter
     # This can happen when dragging folders with same filenames in different subdirectories
-    base_filename = file.filename
+    base_filename = (file.filename or "").strip()
+    if not base_filename:
+      continue
     if base_filename in filename_counter:
       filename_counter[base_filename] += 1
       # Insert counter before extension: "file.pdf" -> "file_1.pdf"
@@ -112,6 +174,21 @@ async def upload_exams(
     with open(file_path, "wb") as f:
       content = await file.read()
       f.write(content)
+
+    suffix = file_path.suffix.lower()
+    if suffix in (".yaml", ".yml"):
+      if uploaded_yaml is not None:
+        raise HTTPException(
+          status_code=400,
+          detail="Upload exactly one quiz YAML file (.yaml/.yml) at a time")
+      uploaded_yaml = parse_uploaded_quiz_yaml(content, base_filename)
+      continue
+
+    if suffix not in (".pdf", ".zip"):
+      raise HTTPException(
+        status_code=400,
+        detail=
+        f"Unsupported file type '{base_filename}'. Upload .pdf, .zip, .yaml, or .yml files.")
 
     # Compute hash for duplicate detection
     file_hash = compute_file_hash(file_path)
@@ -147,7 +224,25 @@ async def upload_exams(
   session_repo = SessionRepository()
 
   # Get existing session data
-  existing_data = session_repo.get_metadata(session_id)
+  existing_data = session_repo.get_metadata(session_id) or {}
+
+  if not saved_files:
+    if uploaded_yaml:
+      session_data = dict(existing_data)
+      apply_uploaded_quiz_yaml_metadata(session_data, uploaded_yaml)
+      session_repo.update_metadata(session_id, session_data)
+      return {
+        "session_id": session_id,
+        "files_uploaded": 0,
+        "status": "yaml_uploaded",
+        "message":
+        f"Uploaded quiz YAML '{uploaded_yaml['filename']}' for this session.",
+        "num_exams": len(existing_data.get("file_paths", [])),
+        "auto_processed": False
+      }
+    raise HTTPException(
+      status_code=400,
+      detail="No exam files found. Upload at least one PDF/ZIP exam file.")
 
   # Check if we have existing split points from a previous upload
   has_existing_split_points = (existing_data
@@ -202,6 +297,13 @@ async def upload_exams(
       "mock_roster": existing_data.get("mock_roster", False),
       "ai_name_extraction": existing_data.get("ai_name_extraction", True)
     }
+    apply_uploaded_quiz_yaml_metadata(session_data, uploaded_yaml)
+    if not uploaded_yaml:
+      # Preserve existing quiz YAML when not replaced.
+      for key in (QUIZ_YAML_TEXT_KEY, QUIZ_YAML_FILENAME_KEY, QUIZ_YAML_IDS_KEY,
+                  QUIZ_YAML_DOC_COUNT_KEY, QUIZ_YAML_UPLOADED_AT_KEY):
+        if key in existing_data:
+          session_data[key] = existing_data[key]
 
     # Preserve split points and other settings from previous upload
     if has_existing_split_points:
@@ -234,9 +336,15 @@ async def upload_exams(
         str(k): v
         for k, v in file_metadata.items()
       },
-      "mock_roster": existing_data.get("mock_roster", False) if existing_data else False,
-      "ai_name_extraction": existing_data.get("ai_name_extraction", True) if existing_data else True
+      "mock_roster": existing_data.get("mock_roster", False),
+      "ai_name_extraction": existing_data.get("ai_name_extraction", True)
     }
+    apply_uploaded_quiz_yaml_metadata(session_data, uploaded_yaml)
+    if not uploaded_yaml:
+      for key in (QUIZ_YAML_TEXT_KEY, QUIZ_YAML_FILENAME_KEY, QUIZ_YAML_IDS_KEY,
+                  QUIZ_YAML_DOC_COUNT_KEY, QUIZ_YAML_UPLOADED_AT_KEY):
+        if key in existing_data:
+          session_data[key] = existing_data[key]
     total_files = len(saved_files)
 
   # Update session with file metadata and status
@@ -251,6 +359,9 @@ async def upload_exams(
   session = session_repo.get_by_id(session_id)
   session.total_exams = total_files
   session_repo.update(session)
+  yaml_note = ""
+  if uploaded_yaml:
+    yaml_note = f" Quiz YAML '{uploaded_yaml['filename']}' attached."
 
   # If we already have split points from a previous upload, auto-submit and skip alignment UI
   if has_existing_split_points:
@@ -283,7 +394,7 @@ async def upload_exams(
       "files_uploaded": len(saved_files),
       "status": "processing",
       "message":
-      f"Uploaded {len(saved_files)} exam(s). Extracting names...",
+      f"Uploaded {len(saved_files)} exam(s). Extracting names...{yaml_note}",
       "num_exams": total_files,
       "auto_processed": True
     }
@@ -313,7 +424,7 @@ async def upload_exams(
     "files_uploaded": len(saved_files),
     "status": "processing",
     "message":
-    f"Uploaded {len(saved_files)} exam(s). Total: {total_files} exam(s). Extracting names...",
+    f"Uploaded {len(saved_files)} exam(s). Total: {total_files} exam(s). Extracting names...{yaml_note}",
     "num_exams": total_files,
     "auto_processed": False
   }
@@ -667,7 +778,7 @@ async def process_exam_files(
       )
     else:
       # Get Canvas students
-      canvas_interface = CanvasInterface(prod=use_prod)
+      canvas_interface = CanvasInterface(prod=use_prod, privacy_mode="none")
       course = canvas_interface.get_course(course_id)
       assignment = course.get_assignment(assignment_id)
       students = assignment.get_students(include_names=True)
@@ -940,7 +1051,10 @@ async def process_exam_names(
 
     canvas_students = []
     if not mock_roster:
-      canvas_interface = CanvasInterface(prod=session.use_prod_canvas)
+      canvas_interface = CanvasInterface(
+        prod=session.use_prod_canvas,
+        privacy_mode="none"
+      )
       course = canvas_interface.get_course(session.course_id)
       assignment = course.get_assignment(session.assignment_id)
       students = assignment.get_students(include_names=True)

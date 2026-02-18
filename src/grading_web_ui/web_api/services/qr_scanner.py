@@ -10,79 +10,276 @@ import base64
 import json
 import logging
 import math
+import os
+import platform
+import threading
 from typing import Optional, Dict, List
 from pathlib import Path
 from PIL import Image
 import io
+from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
-# Try to import pyzbar for QR code scanning
-try:
-  from pyzbar import pyzbar
-  PYZBAR_AVAILABLE = True
-except Exception as exc:
+
+def _configure_macos_zbar_library_path() -> bool:
+  """
+  Add common Homebrew zbar library locations to DYLD fallback path.
+
+  Returns:
+      True if DYLD_FALLBACK_LIBRARY_PATH was updated, False otherwise.
+  """
+  if platform.system() != "Darwin":
+    return False
+
+  candidates = []
+  brew_prefix = os.getenv("HOMEBREW_PREFIX")
+  if brew_prefix:
+    candidates.append(Path(brew_prefix) / "opt" / "zbar" / "lib")
+
+  candidates.extend([
+    Path("/opt/homebrew/opt/zbar/lib"),
+    Path("/usr/local/opt/zbar/lib")
+  ])
+
+  existing_paths = []
+  for candidate in candidates:
+    if candidate.exists():
+      path_str = str(candidate)
+      if path_str not in existing_paths:
+        existing_paths.append(path_str)
+
+  if not existing_paths:
+    return False
+
+  current = os.getenv("DYLD_FALLBACK_LIBRARY_PATH", "")
+  current_paths = [p for p in current.split(":") if p]
+  new_paths = [p for p in existing_paths if p not in current_paths] + current_paths
+
+  if new_paths == current_paths:
+    return False
+
+  os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = ":".join(new_paths)
+  return True
+
+
+def _load_pyzbar():
+  """Load pyzbar with a macOS/Homebrew zbar fallback."""
+  try:
+    from pyzbar import pyzbar as module
+    return module, True, None
+  except Exception as exc:
+    first_error = exc
+
+  if _configure_macos_zbar_library_path():
+    try:
+      from pyzbar import pyzbar as module
+      return module, True, None
+    except Exception as exc:
+      return None, False, exc
+
+  return None, False, first_error
+
+
+pyzbar, PYZBAR_AVAILABLE, _PYZBAR_IMPORT_ERROR = _load_pyzbar()
+if not PYZBAR_AVAILABLE:
   log.warning(
     "pyzbar/zbar not available - QR code scanning will not be available (%s)",
-    exc
+    _PYZBAR_IMPORT_ERROR
   )
-  PYZBAR_AVAILABLE = False
+
+
+_PYZBAR_DECODE_LOCK = threading.Lock()
+
+
+@dataclass
+class _QRRect:
+  left: float
+  top: float
+  width: float
+  height: float
 
 
 class QRScanner:
   """Service for scanning and processing QR codes from exam problems."""
 
+  _unavailable_warning_emitted = False
+
   def __init__(self):
     """Initialize QR scanner."""
     self.available = PYZBAR_AVAILABLE
-    if not PYZBAR_AVAILABLE:
+    if (not PYZBAR_AVAILABLE and
+        not QRScanner._unavailable_warning_emitted):
       log.warning("QR scanner unavailable: pyzbar/zbar not available")
+      QRScanner._unavailable_warning_emitted = True
 
-  def _decode_qr_codes(self, image: Image.Image) -> List[Dict]:
-    """Decode QR codes from a PIL image into raw records."""
-    qr_codes = pyzbar.decode(image)
-    if not qr_codes:
+  @staticmethod
+  def _estimate_angle(polygon_points) -> float:
+    if not polygon_points or len(polygon_points) < 2:
+      return 0.0
+    points = [(getattr(p, "x", p[0]), getattr(p, "y", p[1]))
+              for p in polygon_points]
+    points_sorted = sorted(points, key=lambda pt: (pt[1], pt[0]))
+    p1, p2 = points_sorted[0], points_sorted[1]
+    if p2[0] < p1[0]:
+      p1, p2 = p2, p1
+    return math.degrees(math.atan2(p2[1] - p1[1], p2[0] - p1[0]))
+
+  @staticmethod
+  def _payload_from_text(payload_text: str) -> Optional[Dict]:
+    try:
+      qr_json = json.loads(payload_text)
+    except Exception:
+      return None
+
+    if not isinstance(qr_json, dict):
+      return None
+
+    question_number = qr_json.get('q')
+    max_points = qr_json.get('pts')
+    if max_points is None:
+      # Backward/forward compatibility across QR schema versions
+      max_points = qr_json.get('p')
+    if max_points is None:
+      max_points = qr_json.get('points')
+    if max_points is None:
+      max_points = qr_json.get('max_points')
+    if question_number is None or max_points is None:
+      return None
+
+    return {
+      "question_number": int(question_number),
+      "max_points": float(max_points),
+      "encrypted_data": qr_json.get('s')
+    }
+
+  def _decode_qr_codes_pyzbar(self, image: Image.Image) -> List[Dict]:
+    if not PYZBAR_AVAILABLE:
       return []
 
-    def estimate_angle(polygon_points) -> float:
-      if not polygon_points or len(polygon_points) < 2:
-        return 0.0
-      points = [(getattr(p, "x", p[0]), getattr(p, "y", p[1]))
-                for p in polygon_points]
-      points_sorted = sorted(points, key=lambda pt: (pt[1], pt[0]))
-      p1, p2 = points_sorted[0], points_sorted[1]
-      if p2[0] < p1[0]:
-        p1, p2 = p2, p1
-      return math.degrees(math.atan2(p2[1] - p1[1], p2[0] - p1[0]))
+    try:
+      with _PYZBAR_DECODE_LOCK:
+        symbols = getattr(getattr(pyzbar, "ZBarSymbol", None), "QRCODE", None)
+        if symbols is not None:
+          qr_codes = pyzbar.decode(image, symbols=[symbols])
+        else:
+          qr_codes = pyzbar.decode(image)
+    except Exception as exc:
+      log.debug("pyzbar decode failed: %s", exc)
+      return []
 
     results = []
     for qr in qr_codes:
-      try:
-        qr_data = qr.data.decode('utf-8')
-        qr_json = json.loads(qr_data)
-      except Exception:
+      payload = self._payload_from_text(qr.data.decode('utf-8'))
+      if not payload:
         continue
-
-      if not isinstance(qr_json, dict):
-        log.debug("Unexpected QR payload type: %s", type(qr_json).__name__)
-        continue
-
-      question_number = qr_json.get('q')
-      max_points = qr_json.get('pts')
-      if question_number is None or max_points is None:
-        continue
-
-      rect = qr.rect
-      angle = estimate_angle(qr.polygon) if hasattr(qr, "polygon") else 0.0
-      results.append({
-        "question_number": int(question_number),
-        "max_points": float(max_points),
-        "encrypted_data": qr_json.get('s'),
-        "rect": rect,
-        "angle": angle
+      payload.update({
+        "rect": qr.rect,
+        "angle": self._estimate_angle(qr.polygon) if hasattr(qr, "polygon") else 0.0
       })
+      results.append(payload)
 
     return results
+
+  @staticmethod
+  def _points_to_rect(points) -> _QRRect:
+    xs = [float(p[0]) for p in points]
+    ys = [float(p[1]) for p in points]
+    left = min(xs)
+    top = min(ys)
+    return _QRRect(
+      left=left,
+      top=top,
+      width=max(xs) - left,
+      height=max(ys) - top
+    )
+
+  def _decode_qr_codes_opencv(self, image: Image.Image) -> List[Dict]:
+    try:
+      import cv2
+      import numpy as np
+    except Exception:
+      return []
+
+    image_rgb = image.convert('RGB')
+    image_array = np.array(image_rgb)
+    image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+    detector = cv2.QRCodeDetector()
+    results = []
+
+    try:
+      ok, decoded_info, points, _ = detector.detectAndDecodeMulti(image_bgr)
+      if ok and decoded_info is not None:
+        for idx, text in enumerate(decoded_info):
+          if not text:
+            continue
+          payload = self._payload_from_text(text)
+          if not payload:
+            continue
+
+          points_for_code = []
+          if points is not None and len(points) > idx:
+            points_for_code = [
+              (float(p[0]), float(p[1])) for p in points[idx]
+            ]
+
+          rect = self._points_to_rect(points_for_code) if points_for_code else _QRRect(
+            left=0,
+            top=0,
+            width=float(image_rgb.width),
+            height=float(image_rgb.height)
+          )
+          payload.update({
+            "rect": rect,
+            "angle": self._estimate_angle(points_for_code)
+          })
+          results.append(payload)
+    except Exception as exc:
+      log.debug("OpenCV detectAndDecodeMulti failed: %s", exc)
+
+    if results:
+      return results
+
+    try:
+      text, points, _ = detector.detectAndDecode(image_bgr)
+      if not text:
+        return []
+
+      payload = self._payload_from_text(text)
+      if not payload:
+        return []
+
+      points_for_code = []
+      if points is not None:
+        try:
+          points_for_code = [
+            (float(p[0]), float(p[1])) for p in points.reshape(-1, 2)
+          ]
+        except Exception:
+          points_for_code = []
+
+      rect = self._points_to_rect(points_for_code) if points_for_code else _QRRect(
+        left=0,
+        top=0,
+        width=float(image_rgb.width),
+        height=float(image_rgb.height)
+      )
+      payload.update({
+        "rect": rect,
+        "angle": self._estimate_angle(points_for_code)
+      })
+      return [payload]
+    except Exception as exc:
+      log.debug("OpenCV detectAndDecode failed: %s", exc)
+      return []
+
+  def _decode_qr_codes(self, image: Image.Image) -> List[Dict]:
+    """Decode QR codes from a PIL image into raw records."""
+    results = self._decode_qr_codes_pyzbar(image)
+    if results:
+      return results
+
+    return self._decode_qr_codes_opencv(image)
 
   def _scan_image_step_up(self, image: Image.Image,
                           dpi_steps: Optional[List[int]] = None,

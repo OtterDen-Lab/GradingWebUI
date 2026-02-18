@@ -840,37 +840,47 @@ function setupEventListeners() {
             console.log('Total files extracted from drop:', files.length);
             console.log('File names:', files.map(f => f.name));
 
-            // Filter to only PDF files
-            const pdfFiles = files.filter(file =>
-                file.name.toLowerCase().endsWith('.pdf') &&
-                !file.name.startsWith('.')
-            );
-            console.log('PDF files after filtering:', pdfFiles.length);
+            // Filter to supported file types
+            const supportedFiles = files.filter(file => {
+                const name = file.name.toLowerCase();
+                return !file.name.startsWith('.') && (
+                    name.endsWith('.pdf') ||
+                    name.endsWith('.zip') ||
+                    name.endsWith('.yaml') ||
+                    name.endsWith('.yml')
+                );
+            });
+            console.log('Supported files after filtering:', supportedFiles.length);
 
-            if (pdfFiles.length > 0) {
+            if (supportedFiles.length > 0) {
                 // Create a new FileList-like object
                 const dataTransfer = new DataTransfer();
-                pdfFiles.forEach(file => dataTransfer.items.add(file));
+                supportedFiles.forEach(file => dataTransfer.items.add(file));
                 fileInput.files = dataTransfer.files;
                 console.log('About to upload', fileInput.files.length, 'files');
                 uploadFiles();
             } else {
-                alert('No PDF files found. Please upload PDF files only.');
+                alert('No supported files found. Upload .pdf/.zip exam files and optionally one .yaml/.yml quiz file.');
             }
         } else {
-            // Fallback for older browsers - still filter PDFs
-            const pdfFiles = Array.from(e.dataTransfer.files).filter(file =>
-                file.name.toLowerCase().endsWith('.pdf') &&
-                !file.name.startsWith('.')
-            );
-            console.log('Fallback mode - PDF files:', pdfFiles.length);
-            if (pdfFiles.length > 0) {
+            // Fallback for older browsers - still filter supported files
+            const supportedFiles = Array.from(e.dataTransfer.files).filter(file => {
+                const name = file.name.toLowerCase();
+                return !file.name.startsWith('.') && (
+                    name.endsWith('.pdf') ||
+                    name.endsWith('.zip') ||
+                    name.endsWith('.yaml') ||
+                    name.endsWith('.yml')
+                );
+            });
+            console.log('Fallback mode - supported files:', supportedFiles.length);
+            if (supportedFiles.length > 0) {
                 const dataTransfer = new DataTransfer();
-                pdfFiles.forEach(file => dataTransfer.items.add(file));
+                supportedFiles.forEach(file => dataTransfer.items.add(file));
                 fileInput.files = dataTransfer.files;
                 uploadFiles();
             } else {
-                alert('No PDF files found. Please upload PDF files only.');
+                alert('No supported files found. Upload .pdf/.zip exam files and optionally one .yaml/.yml quiz file.');
             }
         }
     };

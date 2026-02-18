@@ -2,6 +2,7 @@
 
 let allSubmissions = [];
 let allStudents = [];
+let revealCanvasNames = true;
 
 // Simple fuzzy matching helper (Levenshtein distance)
 function fuzzyMatch(str1, str2) {
@@ -45,7 +46,8 @@ async function loadNameMatching() {
         allSubmissions = submissionsData.submissions;
 
         // Fetch all students (unmatched first)
-        const studentsResp = await fetch(`${API_BASE}/matching/${currentSession.id}/students`);
+        const revealQuery = revealCanvasNames ? '?reveal_names=true' : '';
+        const studentsResp = await fetch(`${API_BASE}/matching/${currentSession.id}/students${revealQuery}`);
         const studentsData = await studentsResp.json();
         allStudents = studentsData.students;
 
@@ -100,6 +102,9 @@ function renderMatchingList() {
             <button id="confirm-all-matches-btn" class="btn btn-primary" onclick="confirmAllMatches()" style="padding: 10px 30px; font-size: 16px;">
                 Confirm All Matches
             </button>
+            <button class="btn btn-secondary" onclick="toggleCanvasNameReveal()" style="padding: 10px 20px; margin-left: 10px; font-size: 14px;">
+                ${revealCanvasNames ? 'Hide Real Names' : 'Show Real Names'}
+            </button>
             <p style="margin-top: 10px; color: var(--gray-600); font-size: 14px;">
                 Select students from the dropdowns below, then click this button to confirm all changes at once.
             </p>
@@ -150,6 +155,11 @@ function renderMatchingList() {
     });
 
     container.innerHTML = html;
+}
+
+async function toggleCanvasNameReveal() {
+    revealCanvasNames = !revealCanvasNames;
+    await loadNameMatching();
 }
 
 // Handle student selection - show warning if student is already matched
@@ -244,7 +254,8 @@ async function confirmAllMatches() {
 
         for (const match of pendingMatches) {
             try {
-                const response = await fetch(`${API_BASE}/matching/${currentSession.id}/match`, {
+                const revealQuery = revealCanvasNames ? '?reveal_names=true' : '';
+                const response = await fetch(`${API_BASE}/matching/${currentSession.id}/match${revealQuery}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -318,7 +329,8 @@ async function matchSubmission(submissionId) {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/matching/${currentSession.id}/match`, {
+        const revealQuery = revealCanvasNames ? '?reveal_names=true' : '';
+        const response = await fetch(`${API_BASE}/matching/${currentSession.id}/match${revealQuery}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

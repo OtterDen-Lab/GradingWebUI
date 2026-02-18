@@ -10,7 +10,12 @@ from typing import Dict, List, Optional, Tuple
 from grading_web_ui.ai_helper import AI_Helper__Anthropic
 from PIL import Image
 
-from ..repositories import ProblemRepository, ProblemMetadataRepository, SubmissionRepository
+from ..repositories import (
+  ProblemRepository,
+  ProblemMetadataRepository,
+  SessionRepository,
+  SubmissionRepository,
+)
 from .problem_service import ProblemService
 
 log = logging.getLogger(__name__)
@@ -22,6 +27,7 @@ class AIGraderService:
   def __init__(self):
     self.ai_helper = AI_Helper__Anthropic()
     self.problem_service = ProblemService()
+    self._session_yaml_cache: Dict[int, Optional[str]] = {}
 
   def extract_question_text(self, image_base64: str) -> str:
     """Extract question text from a problem image, ignoring handwritten content.
@@ -683,7 +689,7 @@ class AIGraderService:
 
         answer_text = None
         if settings.get("include_answer"):
-          answer_text = self._get_reference_answer(row)
+          answer_text = self._get_reference_answer(row, session_id=session_id)
 
         if enforce_limit:
           image_data = self._downscale_image_base64(image_data, max_dim=2000)
@@ -831,7 +837,24 @@ class AIGraderService:
       log.warning("Failed to downscale image: %s", exc)
       return image_base64
 
-  def _get_reference_answer(self, problem_row: Dict) -> Optional[str]:
+  def _get_session_quiz_yaml_text(self, session_id: Optional[int]) -> Optional[str]:
+    if not session_id:
+      return None
+
+    if session_id in self._session_yaml_cache:
+      return self._session_yaml_cache[session_id]
+
+    metadata = SessionRepository().get_metadata(session_id) or {}
+    yaml_text = metadata.get("quiz_yaml_text")
+    if isinstance(yaml_text, str) and yaml_text.strip():
+      self._session_yaml_cache[session_id] = yaml_text
+    else:
+      self._session_yaml_cache[session_id] = None
+    return self._session_yaml_cache[session_id]
+
+  def _get_reference_answer(self,
+                            problem_row: Dict,
+                            session_id: Optional[int] = None) -> Optional[str]:
     encrypted_data = problem_row.get("qr_encrypted_data")
     if not encrypted_data:
       return None
@@ -845,17 +868,62 @@ class AIGraderService:
     try:
       result = regenerate_from_encrypted(
         encrypted_data=encrypted_data,
-        points=problem_row.get("max_points") or 0.0)
+        points=problem_row.get("max_points") or 0.0,
+        yaml_text=self._get_session_quiz_yaml_text(session_id))
     except Exception as e:
       log.warning(f"Failed to regenerate answer: {e}")
       return None
 
     answers = []
-    for key, answer_obj in result.get("answer_objects", {}).items():
-      value = str(answer_obj.value)
-      if hasattr(answer_obj, "tolerance") and answer_obj.tolerance is not None:
-        value = f"{value} (tol={answer_obj.tolerance})"
-      answers.append(f"{key}: {value}")
+    answer_objects = result.get("answer_objects")
+    iterable_answers = []
+    if isinstance(answer_objects, dict):
+      iterable_answers = list(answer_objects.items())
+    elif isinstance(answer_objects, list):
+      iterable_answers = [(f"answer_{idx + 1}", obj)
+                          for idx, obj in enumerate(answer_objects)]
+    elif answer_objects is not None:
+      iterable_answers = [("answer", answer_objects)]
+
+    for key, answer_obj in iterable_answers:
+      if isinstance(answer_obj, dict):
+        value = answer_obj.get("value")
+        if value is None:
+          value = answer_obj.get("answer_text")
+        if value is None:
+          value = answer_obj
+        tolerance = answer_obj.get("tolerance")
+      else:
+        value = getattr(answer_obj, "value", answer_obj)
+        tolerance = getattr(answer_obj, "tolerance", None)
+
+      value_str = str(value)
+      if tolerance is not None:
+        value_str = f"{value_str} (tol={tolerance})"
+      answers.append(f"{key}: {value_str}")
+
+    if not answers:
+      answers_payload = result.get("answers")
+      if isinstance(answers_payload, dict):
+        raw_answers = answers_payload.get("data", [])
+      elif isinstance(answers_payload, list):
+        raw_answers = answers_payload
+      else:
+        raw_answers = []
+      for idx, raw_answer in enumerate(raw_answers):
+        if isinstance(raw_answer, dict):
+          key = (raw_answer.get("blank_id") or raw_answer.get("id")
+                 or raw_answer.get("name") or f"answer_{idx + 1}")
+          value = raw_answer.get("answer_text")
+          if value is None:
+            value = raw_answer.get("value")
+          if value is None:
+            value = raw_answer
+        else:
+          key = f"answer_{idx + 1}"
+          value = raw_answer
+        answers.append(f"{key}: {value}")
+
     if not answers:
       return None
     return "; ".join(answers)

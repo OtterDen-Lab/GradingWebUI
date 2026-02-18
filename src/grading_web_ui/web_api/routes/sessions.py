@@ -7,6 +7,7 @@ from typing import List, Optional
 import json
 import io
 from datetime import datetime
+import yaml
 
 import logging
 import json
@@ -36,10 +37,39 @@ import os
 
 router = APIRouter()
 MOCK_ROSTER_ENV = "ALLOW_MOCK_ROSTER"
+QUIZ_YAML_TEXT_KEY = "quiz_yaml_text"
+QUIZ_YAML_FILENAME_KEY = "quiz_yaml_filename"
+QUIZ_YAML_IDS_KEY = "quiz_yaml_ids"
+QUIZ_YAML_DOC_COUNT_KEY = "quiz_yaml_doc_count"
+QUIZ_YAML_UPLOADED_AT_KEY = "quiz_yaml_uploaded_at"
 
 
 def mock_roster_enabled() -> bool:
   return os.getenv(MOCK_ROSTER_ENV, "").lower() in ("1", "true", "yes")
+
+
+def _parse_quiz_yaml_text(yaml_text: str) -> tuple[int, List[str]]:
+  try:
+    docs = list(yaml.safe_load_all(yaml_text))
+  except yaml.YAMLError as exc:
+    raise HTTPException(status_code=400, detail=f"Invalid YAML file: {exc}")
+
+  yaml_ids: List[str] = []
+  for doc in docs:
+    if isinstance(doc, dict):
+      yaml_id = doc.get("yaml_id")
+      if isinstance(yaml_id, str) and yaml_id.strip():
+        yaml_ids.append(yaml_id.strip())
+
+  # Preserve order while de-duplicating
+  seen = set()
+  ordered_ids = []
+  for yaml_id in yaml_ids:
+    if yaml_id not in seen:
+      seen.add(yaml_id)
+      ordered_ids.append(yaml_id)
+
+  return len(docs), ordered_ids
 
 
 def session_to_response(session: GradingSession) -> SessionResponse:
@@ -126,6 +156,112 @@ async def get_session(
 
   # Convert domain model to API response model
   return session_to_response(session)
+
+
+@router.get("/{session_id}/quiz-yaml")
+async def get_quiz_yaml_status(
+  session_id: int,
+  current_user: dict = Depends(require_session_access())
+):
+  """Get quiz YAML status for a session (requires session access)."""
+  session_repo = SessionRepository()
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  metadata = session_repo.get_metadata(session_id) or {}
+  yaml_text = metadata.get(QUIZ_YAML_TEXT_KEY)
+  has_yaml = isinstance(yaml_text, str) and bool(yaml_text.strip())
+
+  yaml_ids = metadata.get(QUIZ_YAML_IDS_KEY) or []
+  doc_count = metadata.get(QUIZ_YAML_DOC_COUNT_KEY)
+  if has_yaml and (not isinstance(yaml_ids, list) or doc_count is None):
+    parsed_doc_count, parsed_yaml_ids = _parse_quiz_yaml_text(yaml_text)
+    yaml_ids = parsed_yaml_ids
+    doc_count = parsed_doc_count
+
+  return {
+    "has_quiz_yaml": has_yaml,
+    "filename": metadata.get(QUIZ_YAML_FILENAME_KEY),
+    "yaml_ids": yaml_ids if isinstance(yaml_ids, list) else [],
+    "doc_count": doc_count,
+    "uploaded_at": metadata.get(QUIZ_YAML_UPLOADED_AT_KEY)
+  }
+
+
+@router.post("/{session_id}/quiz-yaml")
+async def upload_quiz_yaml(
+  session_id: int,
+  yaml_file: UploadFile = File(...),
+  current_user: dict = Depends(require_instructor)
+):
+  """Upload quiz YAML used for regenerating YAML-based QR questions (instructor only)."""
+  session_repo = SessionRepository()
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  filename = (yaml_file.filename or "").strip()
+  if not filename.lower().endswith((".yaml", ".yml")):
+    raise HTTPException(status_code=400,
+                        detail="Quiz YAML must be a .yaml or .yml file")
+
+  raw_bytes = await yaml_file.read()
+  if not raw_bytes:
+    raise HTTPException(status_code=400, detail="Uploaded YAML file is empty")
+
+  try:
+    yaml_text = raw_bytes.decode("utf-8")
+  except UnicodeDecodeError:
+    raise HTTPException(status_code=400,
+                        detail="Quiz YAML must be UTF-8 encoded text")
+
+  doc_count, yaml_ids = _parse_quiz_yaml_text(yaml_text)
+
+  metadata = session_repo.get_metadata(session_id) or {}
+  metadata[QUIZ_YAML_TEXT_KEY] = yaml_text
+  metadata[QUIZ_YAML_FILENAME_KEY] = filename
+  metadata[QUIZ_YAML_IDS_KEY] = yaml_ids
+  metadata[QUIZ_YAML_DOC_COUNT_KEY] = doc_count
+  metadata[QUIZ_YAML_UPLOADED_AT_KEY] = datetime.now().isoformat(timespec="seconds")
+  session_repo.update_metadata(session_id, metadata)
+
+  return {
+    "status": "uploaded",
+    "session_id": session_id,
+    "filename": filename,
+    "yaml_ids": yaml_ids,
+    "doc_count": doc_count
+  }
+
+
+@router.delete("/{session_id}/quiz-yaml")
+async def delete_quiz_yaml(
+  session_id: int,
+  current_user: dict = Depends(require_instructor)
+):
+  """Delete stored quiz YAML for a session (instructor only)."""
+  session_repo = SessionRepository()
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  metadata = session_repo.get_metadata(session_id) or {}
+  removed = False
+  for key in (
+    QUIZ_YAML_TEXT_KEY,
+    QUIZ_YAML_FILENAME_KEY,
+    QUIZ_YAML_IDS_KEY,
+    QUIZ_YAML_DOC_COUNT_KEY,
+    QUIZ_YAML_UPLOADED_AT_KEY,
+  ):
+    if key in metadata:
+      removed = True
+      metadata.pop(key, None)
+
+  session_repo.update_metadata(session_id, metadata)
+
+  return {
+    "status": "deleted" if removed else "not_found",
+    "session_id": session_id
+  }
 
 
 @router.patch("/{session_id}/status")

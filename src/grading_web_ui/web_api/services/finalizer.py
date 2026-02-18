@@ -42,6 +42,7 @@ class FinalizationService:
     self.steps_per_submission = 3
     self.total_steps = 0
     self.current_step = 0
+    self.quiz_yaml_text = None
 
   def finalize(self):
     """Main finalization process (runs in thread to avoid blocking event loop)"""
@@ -117,6 +118,9 @@ class FinalizationService:
     log.info(
       f"Session {self.session_id}: use_prod_canvas from DB = {session.use_prod_canvas} (type: {type(session.use_prod_canvas)}), computed use_prod = {use_prod}"
     )
+    if session.metadata and isinstance(session.metadata.get("quiz_yaml_text"), str):
+      yaml_text = session.metadata.get("quiz_yaml_text")
+      self.quiz_yaml_text = yaml_text if yaml_text.strip() else None
 
     return {
       "course_id": session.course_id,
@@ -531,9 +535,10 @@ class FinalizationService:
     if qr_data:
       try:
         from QuizGenerator.regenerate import regenerate_from_encrypted
-        result = regenerate_from_encrypted(qr_data,
+        result = regenerate_from_encrypted(encrypted_data=qr_data,
                                            points=problem.get("max_points") or 0.0,
-                                           image_mode="inline")
+                                           image_mode="inline",
+                                           yaml_text=self.quiz_yaml_text)
         explanation_html = result.get("explanation_html") or result.get("explanation_markdown")
         if explanation_html:
           return explanation_html

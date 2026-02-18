@@ -12,7 +12,7 @@ import fitz  # PyMuPDF
 
 from ..models import ProblemResponse, GradeSubmission
 from ..database import get_db_connection, update_problem_stats
-from ..repositories import ProblemRepository, SubmissionRepository
+from ..repositories import ProblemRepository, SubmissionRepository, SessionRepository
 from ..services.problem_service import ProblemService
 from ..auth import require_session_access, get_current_user
 
@@ -598,26 +598,83 @@ async def regenerate_answer(
     )
 
   try:
+    session_metadata = SessionRepository().get_metadata(problem.session_id) or {}
+    quiz_yaml_text = session_metadata.get("quiz_yaml_text")
+    if not isinstance(quiz_yaml_text, str) or not quiz_yaml_text.strip():
+      quiz_yaml_text = None
+
     # Regenerate the answer using encrypted QR data
     result = regenerate_from_encrypted(encrypted_data=problem.qr_encrypted_data,
-                                       points=problem.max_points or 0.0)
+                                       points=problem.max_points or 0.0,
+                                       yaml_text=quiz_yaml_text)
 
     # Extract metadata from result (returned by regenerate)
     question_type = result.get('question_type')
     seed = result.get('seed')
     version = result.get('version')
-    config = result.get('config')
+    config = result.get('config') or result.get('kwargs')
 
-    # Format answers for display
+    # Format answers for display.
+    # QuizGenerator may return answer_objects as dict, list, or custom objects.
     answers = []
-    for key, answer_obj in result['answer_objects'].items():
-      answer_dict = {"key": key, "value": str(answer_obj.value)}
+    answer_objects = result.get('answer_objects')
 
-      # Include tolerance for numerical answers
-      if hasattr(answer_obj, 'tolerance') and answer_obj.tolerance is not None:
-        answer_dict['tolerance'] = answer_obj.tolerance
+    iterable_answers = []
+    if isinstance(answer_objects, dict):
+      iterable_answers = list(answer_objects.items())
+    elif isinstance(answer_objects, list):
+      iterable_answers = [(f"answer_{idx + 1}", obj)
+                          for idx, obj in enumerate(answer_objects)]
+    elif answer_objects is not None:
+      iterable_answers = [("answer", answer_objects)]
+
+    for key, answer_obj in iterable_answers:
+      if isinstance(answer_obj, dict):
+        value = answer_obj.get('value')
+        if value is None:
+          value = answer_obj.get('answer_text')
+        if value is None:
+          value = answer_obj
+        tolerance = answer_obj.get('tolerance')
+        html = answer_obj.get('html')
+      else:
+        value = getattr(answer_obj, 'value', answer_obj)
+        tolerance = getattr(answer_obj, 'tolerance', None)
+        html = getattr(answer_obj, 'html', None)
+
+      answer_dict = {"key": str(key), "value": str(value)}
+      if tolerance is not None:
+        answer_dict['tolerance'] = tolerance
+      if html is not None:
+        answer_dict['html'] = str(html)
 
       answers.append(answer_dict)
+
+    # Fallback to canvas-formatted answers if answer_objects was absent/empty.
+    if not answers:
+      answers_payload = result.get('answers')
+      if isinstance(answers_payload, dict):
+        raw_answers = answers_payload.get('data', [])
+      elif isinstance(answers_payload, list):
+        raw_answers = answers_payload
+      else:
+        raw_answers = []
+
+      for idx, raw_answer in enumerate(raw_answers):
+        if isinstance(raw_answer, dict):
+          key = (raw_answer.get('blank_id') or raw_answer.get('id') or
+                 raw_answer.get('name') or f"answer_{idx + 1}")
+          value = raw_answer.get('answer_text')
+          if value is None:
+            value = raw_answer.get('value')
+          if value is None:
+            value = raw_answer
+          answer_dict = {"key": str(key), "value": str(value)}
+          if raw_answer.get('tolerance') is not None:
+            answer_dict['tolerance'] = raw_answer.get('tolerance')
+        else:
+          answer_dict = {"key": f"answer_{idx + 1}", "value": str(raw_answer)}
+        answers.append(answer_dict)
 
     # Prepare response
     response = {
@@ -626,7 +683,7 @@ async def regenerate_answer(
       "question_type": question_type,
       "seed": seed,
       "version": version,
-      "max_points": problem.max_points,
+      "max_points": problem.max_points if problem.max_points is not None else result.get('points'),
       "answers": answers
     }
 
@@ -645,8 +702,15 @@ async def regenerate_answer(
     return response
 
   except ValueError as e:
+    error_msg = str(e)
+    if "Must provide yaml_path, yaml_text, or yaml_docs." in error_msg:
+      raise HTTPException(
+        status_code=400,
+        detail=
+        "This problem uses YAML-based regeneration. Upload the quiz YAML file for this session before regenerating answers."
+      )
     raise HTTPException(status_code=500,
-                        detail=f"Failed to regenerate answer: {str(e)}")
+                        detail=f"Failed to regenerate answer: {error_msg}")
   except Exception as e:
     raise HTTPException(
       status_code=500,
