@@ -8,6 +8,26 @@ A web-based interface for grading exams with Canvas LMS integration and AI-assis
 pip install -e .
 ```
 
+## LMSInterface Vendoring Workflow
+
+Install local hooks and the `git bump` alias:
+
+```bash
+bash scripts/install_git_hooks.sh
+```
+
+Refresh vendored LMSInterface code manually:
+
+```bash
+python scripts/vendor_lms_interface.py --quiet
+```
+
+Bump version + vendor + test + commit:
+
+```bash
+git bump patch
+```
+
 ## Quick Start
 
 ### 1. Set up Canvas API credentials

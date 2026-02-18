@@ -1,12 +1,12 @@
 """
 LMS integration for GradingWebUI
 
-Vendored from LMSInterface v0.2.2 (2026-02-08)
+Vendored from LMSInterface v0.4.4 (2026-02-17)
 """
 
-__version__ = "0.2.2"
+__version__ = "0.4.4"
 __vendored_from__ = "LMSInterface"
-__vendored_date__ = "2026-02-08"
+__vendored_date__ = "2026-02-17"
 
 try:
   from importlib.metadata import PackageNotFoundError, version
