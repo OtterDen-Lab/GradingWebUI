@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import canvasapi.exceptions
@@ -76,12 +77,9 @@ def test_push_feedback_uploads_html_attachment_with_inline_summary():
       [123],
     )
   ]
-  assert any(
-    edit.get("comment", {}).get("text_comment")
-    == "Detailed feedback is attached as feedback.html."
-    for edit in submission.edits
-  )
-  assert any(path.endswith(".html") for path in submission.uploaded_paths)
+  assert not any("comment" in edit for edit in submission.edits)
+  assert any(os.path.basename(path) == "feedback.html"
+             for path in submission.uploaded_paths)
   assert not any(path.endswith(".txt") for path in submission.uploaded_paths)
 
 

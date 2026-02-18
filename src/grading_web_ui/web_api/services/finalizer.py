@@ -31,6 +31,13 @@ class FinalizationService:
     "Note: The explanation below is automatically generated and might not be correct."
   )
 
+  @staticmethod
+  def _submission_label(submission: Dict) -> str:
+    submission_id = submission.get("id")
+    if submission_id is not None:
+      return f"submission {submission_id}"
+    return "submission"
+
   def __init__(self, session_id: int, temp_dir: Path, stream_id: str,
                event_loop):
     self.session_id = session_id
@@ -71,36 +78,36 @@ class FinalizationService:
     # Process each submission
     for i, submission in enumerate(submissions, 1):
       self.current_submission = i
-      student_name = submission['student_name'] or 'Unknown'
+      submission_label = self._submission_label(submission)
 
       try:
         # Generate annotated PDF
         self._update_progress(
-          f"Processing {i}/{len(submissions)}: Generating PDF for {student_name}"
+          f"Processing {i}/{len(submissions)}: Generating PDF for {submission_label}"
         )
         pdf_path = self._create_annotated_pdf(submission)
 
         # Generate comments
         self._update_progress(
-          f"Processing {i}/{len(submissions)}: Preparing comments for {student_name}"
+          f"Processing {i}/{len(submissions)}: Preparing comments for {submission_label}"
         )
         comments = self._generate_comments(submission)
 
         # Upload to Canvas
         self._update_progress(
-          f"Processing {i}/{len(submissions)}: Uploading to Canvas for {student_name}"
+          f"Processing {i}/{len(submissions)}: Uploading to Canvas for {submission_label}"
         )
         self._upload_to_canvas(submission, pdf_path, comments)
 
         log.info(
-          f"Successfully uploaded submission {i}/{len(submissions)} for {student_name}"
+          f"Successfully uploaded submission {i}/{len(submissions)} for {submission_label}"
         )
 
       except Exception as e:
         log.error(f"Failed to process submission {submission['id']}: {e}",
                   exc_info=True)
         self._update_progress(
-          f"Processing {i}/{len(submissions)}: ERROR - Failed for {student_name}: {str(e)}"
+          f"Processing {i}/{len(submissions)}: ERROR - Failed for {submission_label}: {str(e)}"
         )
         # Continue with other submissions
 
@@ -292,7 +299,6 @@ class FinalizationService:
     quiz_name = (submission.get("session_name")
                  or submission.get("assignment_name")
                  or "Grading Feedback")
-    student_name = submission.get("student_name") or "Unknown Student"
     total_score = sum(p["score"] for p in submission["problems"])
     total_max = sum(
       p["max_points"] for p in submission["problems"] if p.get("max_points") is not None
@@ -508,7 +514,6 @@ class FinalizationService:
 <body>
   <header>
     <h1>{html.escape(quiz_name)}</h1>
-    <div class="meta">Student: {html.escape(student_name)}</div>
     <div class="summary">Total Score: {html.escape(score_summary)}</div>
   </header>
   {"".join(problem_sections)}
@@ -620,7 +625,7 @@ class FinalizationService:
 
     # Canvas expects file-like objects
     pdf_file = io.BytesIO(pdf_bytes)
-    pdf_file.name = f"graded_exam_{submission['student_name']}.pdf"
+    pdf_file.name = f"graded_exam_submission_{submission['id']}.pdf"
 
     # Upload to Canvas
     self.assignment.push_feedback(score=sum(p["score"]
