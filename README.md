@@ -144,12 +144,7 @@ uv sync --extra dev
 uv run pytest -q
 uv run pip-audit \
   --ignore-vuln GHSA-6vgw-5pg2-w6jp \
-  --ignore-vuln GHSA-8rrh-rw8j-w5fx \
-  --ignore-vuln PYSEC-2024-225 \
-  --ignore-vuln GHSA-3ww4-gg4f-jr7f \
-  --ignore-vuln GHSA-9v9h-cgj8-h64p \
-  --ignore-vuln GHSA-h4gh-qq45-vh27 \
-  --ignore-vuln GHSA-r6ph-v2qm-q3c2
+  --ignore-vuln GHSA-8rrh-rw8j-w5fx
 ```
 
 During dependency updates, review upstream changelogs for FastAPI, Pydantic, Uvicorn, and QuizGenerator before merging.
