@@ -687,6 +687,10 @@ async def regenerate_answer(
     if 'answer_key_html' in result:
       response['answer_key_html'] = result['answer_key_html']
 
+    # Include explanation HTML if available
+    if 'explanation_html' in result:
+      response['explanation_html'] = result['explanation_html']
+
     # Include explanation markdown if available
     if 'explanation_markdown' in result:
       response['explanation_markdown'] = result['explanation_markdown']

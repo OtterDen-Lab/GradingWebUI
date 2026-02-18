@@ -57,7 +57,7 @@ def _build_assignment(fake_submission):
   return assignment, fake_assignment_api
 
 
-def test_push_feedback_posts_inline_comment():
+def test_push_feedback_uploads_html_attachment_with_inline_summary():
   submission = _FakeSubmission(existing_score=10.0)
   assignment, fake_assignment_api = _build_assignment(submission)
 
@@ -77,23 +77,43 @@ def test_push_feedback_posts_inline_comment():
     )
   ]
   assert any(
-    edit.get("comment", {}).get("text_comment") == comment_html
+    edit.get("comment", {}).get("text_comment")
+    == "Detailed feedback is attached as feedback.html."
+    for edit in submission.edits
+  )
+  assert any(path.endswith(".html") for path in submission.uploaded_paths)
+  assert not any(path.endswith(".txt") for path in submission.uploaded_paths)
+
+
+def test_push_feedback_posts_plain_text_inline_comment():
+  submission = _FakeSubmission()
+  assignment, _ = _build_assignment(submission)
+
+  result = assignment.push_feedback(
+    user_id=123,
+    score=88.0,
+    comments="Plain text feedback",
+    attachments=[],
+  )
+
+  assert result is True
+  assert any(
+    edit.get("comment", {}).get("text_comment") == "Plain text feedback"
     for edit in submission.edits
   )
   assert submission.uploaded_paths == []
 
 
-def test_push_feedback_falls_back_to_html_attachment():
+def test_push_feedback_falls_back_to_txt_attachment_for_plain_text():
   submission = _FakeSubmission(fail_comment_edit=True)
   assignment, _ = _build_assignment(submission)
 
   result = assignment.push_feedback(
     user_id=123,
     score=88.0,
-    comments="<html><body>fallback</body></html>",
+    comments="fallback",
     attachments=[],
   )
 
   assert result is True
-  assert any(path.endswith(".html") for path in submission.uploaded_paths)
-  assert not any(path.endswith(".txt") for path in submission.uploaded_paths)
+  assert any(path.endswith(".txt") for path in submission.uploaded_paths)

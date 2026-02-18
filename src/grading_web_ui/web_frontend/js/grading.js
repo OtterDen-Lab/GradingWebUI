@@ -2429,7 +2429,7 @@ function updateSortIndicators(column) {
 // EXPLANATION LOADING AND AUTO-INCLUDE IN FEEDBACK
 // =============================================================================
 
-// Cache for explanations { problemId: markdownText }
+// Cache for explanations { problemId: { html?: string, markdown?: string } }
 let explanationCache = {};
 
 // Load explanation from QR code if available
@@ -2468,9 +2468,11 @@ async function loadExplanation() {
 
         const data = await response.json();
 
-        if (data.explanation_markdown) {
-            // Cache explanation
-            explanationCache[currentProblem.id] = data.explanation_markdown;
+        if (data.explanation_html || data.explanation_markdown) {
+            explanationCache[currentProblem.id] = {
+                html: data.explanation_html || null,
+                markdown: data.explanation_markdown || null
+            };
             if (viewBtn) {
                 viewBtn.disabled = false;
                 viewBtn.textContent = 'View Explanation';
@@ -2495,7 +2497,10 @@ function showExplanationDialog() {
         return;
     }
 
-    const htmlContent = marked.parse(explanationCache[currentProblem.id]);
+    const explanation = explanationCache[currentProblem.id];
+    const htmlContent = explanation.html
+        ? explanation.html
+        : marked.parse(explanation.markdown || '');
     content.innerHTML = htmlContent;
     dialog.style.display = 'flex';
 

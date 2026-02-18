@@ -5,6 +5,7 @@ import itertools
 import logging
 import os
 import queue
+import re
 import random
 import tempfile
 import threading
@@ -820,21 +821,44 @@ class CanvasAssignment(LMSWrapper):
         submission.upload_comment(temp_path)  # ✅ PathLike | str
       finally:
         os.remove(temp_path)
+
+    def looks_like_html(text: str) -> bool:
+      if not text:
+        return False
+      return bool(re.search(r"<(html|body|div|p|table|img|h[1-6]|ul|ol|li|br|strong|em|figure)[\\s/>]",
+                            text,
+                            re.IGNORECASE))
     
     if len(comments) > 0:
-      try:
-        submission.edit(
-          comment={
-            'text_comment': comments,
-          },
-        )
-      except (requests.exceptions.RequestException,
-              canvasapi.exceptions.CanvasException) as e:
-        log.warning(f"Failed to post inline feedback comment for {user_id}: {e}")
-        extra = _format_canvas_exception(e)
-        if extra:
-          log.warning(extra)
+      if looks_like_html(comments):
         upload_buffer_as_file(comments.encode('utf-8'), "feedback.html")
+        summary_comment = "Detailed feedback is attached as feedback.html."
+        try:
+          submission.edit(
+            comment={
+              'text_comment': summary_comment,
+            },
+          )
+        except (requests.exceptions.RequestException,
+                canvasapi.exceptions.CanvasException) as e:
+          log.warning(f"Failed to post inline feedback summary for {user_id}: {e}")
+          extra = _format_canvas_exception(e)
+          if extra:
+            log.warning(extra)
+      else:
+        try:
+          submission.edit(
+            comment={
+              'text_comment': comments,
+            },
+          )
+        except (requests.exceptions.RequestException,
+                canvasapi.exceptions.CanvasException) as e:
+          log.warning(f"Failed to post inline feedback comment for {user_id}: {e}")
+          extra = _format_canvas_exception(e)
+          if extra:
+            log.warning(extra)
+          upload_buffer_as_file(comments.encode('utf-8'), "feedback.txt")
     
     for i, attachment_buffer in enumerate(attachments):
       upload_buffer_as_file(attachment_buffer.read(), attachment_buffer.name)
