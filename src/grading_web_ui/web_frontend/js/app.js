@@ -615,6 +615,10 @@ async function selectSession(sessionId) {
         currentSession = await response.json();
 
         updateSessionInfo();
+        if (currentSession.status === 'awaiting_alignment') {
+            await prepareAlignment();
+            return;
+        }
         navigateToSection(getNextSectionForStatus(currentSession.status));
     } catch (error) {
         console.error('Failed to select session:', error);
@@ -1406,7 +1410,7 @@ function listenForStatusUpdates() {
         currentSession = await response.json();
         updateSessionInfo();
 
-        if (currentSession.status === 'awaiting_alignment' && currentSession.mock_roster) {
+        if (currentSession.status === 'awaiting_alignment') {
             await prepareAlignment();
             return;
         }
@@ -1474,6 +1478,7 @@ async function prepareAlignment() {
 // Show alignment interface for manual split point selection
 let splitPoints = {};
 let compositeData = null;
+const ALIGNMENT_DEFAULT_DISPLAY_WIDTH = 900;
 
 function showAlignmentInterface(composites, pageDimensions, numExams, suggestedSplitPoints = null) {
     compositeData = {
@@ -1728,16 +1733,19 @@ function createAlignmentPageSection(pageNum, imageBase64) {
     header.textContent = `Page ${pageNum + 1}`;
 
     const canvasContainer = document.createElement('div');
-    canvasContainer.style.cssText = 'position: relative; margin: 20px; cursor: crosshair;';
+    canvasContainer.style.cssText = 'position: relative; margin: 20px auto; cursor: crosshair; width: fit-content; max-width: 100%;';
 
     const canvas = document.createElement('canvas');
     canvas.id = `alignment-canvas-${pageNum}`;
-    canvas.style.cssText = 'border: 1px solid var(--gray-200); max-width: 100%; height: auto;';
+    canvas.style.cssText = 'display: block; border: 1px solid var(--gray-200); max-width: 100%; height: auto;';
 
     const img = new Image();
     img.onload = () => {
         canvas.width = img.width;
         canvas.height = img.height;
+        const displayWidth = Math.min(img.width, ALIGNMENT_DEFAULT_DISPLAY_WIDTH);
+        canvasContainer.style.width = `${displayWidth}px`;
+        canvas.style.width = `${displayWidth}px`;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
