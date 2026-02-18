@@ -58,7 +58,7 @@ def _build_assignment(fake_submission):
   return assignment, fake_assignment_api
 
 
-def test_push_feedback_uploads_html_attachment_with_inline_summary():
+def test_push_feedback_uploads_html_attachment_without_inline_summary():
   submission = _FakeSubmission(existing_score=10.0)
   assignment, fake_assignment_api = _build_assignment(submission)
 
