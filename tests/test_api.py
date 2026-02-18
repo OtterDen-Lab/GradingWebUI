@@ -7,9 +7,21 @@ from grading_web_ui.web_api.main import app
 
 
 @pytest.fixture
-def client():
-  """Create test client"""
-  return TestClient(app)
+def client(tmp_path, monkeypatch):
+  """Create authenticated test client with isolated DB"""
+  db_path = tmp_path / "test_api.db"
+  monkeypatch.setenv("GRADING_DB_PATH", str(db_path))
+
+  with TestClient(app) as test_client:
+    login_response = test_client.post(
+      "/api/auth/login",
+      json={
+        "username": "admin",
+        "password": "changeme123"
+      }
+    )
+    assert login_response.status_code == 200
+    yield test_client
 
 
 def test_health_check(client):

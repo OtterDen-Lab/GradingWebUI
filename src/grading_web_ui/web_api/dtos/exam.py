@@ -4,7 +4,7 @@ DTOs for exam processing operations.
 These represent the output of ExamProcessor.process_exams() before
 the data is persisted to the database.
 """
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from typing import List, Optional, Dict
 import base64
 import io
@@ -36,10 +36,11 @@ class ProblemDTO(BaseModel):
   qr_encrypted_data: Optional[str] = Field(default=None, description="Encrypted QR code data for answer regeneration")
 
   # Validation
-  @validator('blank_confidence')
-  def validate_blank_confidence(cls, v, values):
+  @field_validator('blank_confidence')
+  @classmethod
+  def validate_blank_confidence(cls, v: float, info: ValidationInfo) -> float:
     """Ensure blank problems have reasonable confidence"""
-    if values.get('is_blank') and v < 0.5:
+    if info.data.get('is_blank') and v < 0.5:
       # Allow it but could warn
       pass
     return v
@@ -141,13 +142,14 @@ class ProblemDTO(BaseModel):
     total_pixels = pixels.size
     return black_pixels / total_pixels if total_pixels > 0 else 0.0
 
-  class Config:
+  model_config = ConfigDict(
     # Allow mutation for in-place modifications during processing
-    validate_assignment = True
+    validate_assignment=True,
     # Keep dict keys when dumping to JSON
-    use_enum_values = True
+    use_enum_values=True,
     # Allow arbitrary types (for caching PIL Images if needed)
-    arbitrary_types_allowed = True
+    arbitrary_types_allowed=True
+  )
 
 
 class SubmissionDTO(BaseModel):
@@ -206,7 +208,8 @@ class SubmissionDTO(BaseModel):
     self.student_name = student_name
     self.canvas_user_id = canvas_user_id
 
-  class Config:
+  model_config = ConfigDict(
     # Allow mutation for in-place modifications during processing
-    validate_assignment = True
-    use_enum_values = True
+    validate_assignment=True,
+    use_enum_values=True
+  )

@@ -3,7 +3,7 @@ Pydantic models for request/response validation.
 """
 from datetime import datetime
 from typing import Optional, List, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from enum import Enum
 
 
@@ -52,8 +52,7 @@ class SessionResponse(BaseModel):
   mock_roster: bool = False
   ai_name_extraction: bool = True
 
-  class Config:
-    from_attributes = True
+  model_config = ConfigDict(from_attributes=True)
 
 
 class SessionStatusUpdate(BaseModel):
@@ -96,8 +95,7 @@ class SubmissionResponse(BaseModel):
   total_score: Optional[float]
   graded_at: Optional[datetime]
 
-  class Config:
-    from_attributes = True
+  model_config = ConfigDict(from_attributes=True)
 
 
 class NameMatchRequest(BaseModel):
@@ -135,8 +133,7 @@ class ProblemResponse(BaseModel):
   # QR code availability flag (for "Show Answer" button)
   has_qr_data: bool = False
 
-  class Config:
-    from_attributes = True
+  model_config = ConfigDict(from_attributes=True)
 
 
 class GradeSubmission(BaseModel):
@@ -168,8 +165,7 @@ class ProblemStatsResponse(BaseModel):
   num_total: int
   max_points: Optional[float]
 
-  class Config:
-    from_attributes = True
+  model_config = ConfigDict(from_attributes=True)
 
 
 class SessionStatsResponse(BaseModel):
@@ -182,8 +178,7 @@ class SessionStatsResponse(BaseModel):
   progress_percentage: float
   problem_stats: List[ProblemStatsResponse]
 
-  class Config:
-    from_attributes = True
+  model_config = ConfigDict(from_attributes=True)
 
 
 class UploadResponse(BaseModel):
@@ -233,8 +228,7 @@ class UserResponse(BaseModel):
   is_active: bool
   created_at: datetime
 
-  class Config:
-    from_attributes = True
+  model_config = ConfigDict(from_attributes=True)
 
 
 class AssignUserRequest(BaseModel):

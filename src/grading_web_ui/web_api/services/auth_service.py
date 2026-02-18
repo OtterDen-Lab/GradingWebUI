@@ -34,11 +34,18 @@ class AuthService:
     """Generate secure session ID"""
     return secrets.token_urlsafe(32)
 
+  @staticmethod
+  def _sqlite_timestamp(value: datetime) -> str:
+    """Format datetime for SQLite TEXT comparisons."""
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
   def create_session(self, user_id: int, ip_address: str, user_agent: str,
                      conn) -> str:
     """Create new auth session"""
     session_id = self.generate_session_id()
-    expires_at = datetime.now() + timedelta(hours=self.SESSION_DURATION_HOURS)
+    expires_at = self._sqlite_timestamp(
+      datetime.now() + timedelta(hours=self.SESSION_DURATION_HOURS)
+    )
 
     cursor = conn.cursor()
     cursor.execute(
@@ -80,13 +87,14 @@ class AuthService:
     # Update last_activity and extend expiry (sliding window)
     new_expires_at = datetime.now() + timedelta(
       hours=self.SESSION_DURATION_HOURS)
+    new_expires_at_str = self._sqlite_timestamp(new_expires_at)
     cursor.execute(
       """
             UPDATE auth_sessions
             SET last_activity = CURRENT_TIMESTAMP,
                 expires_at = ?
             WHERE id = ?
-        """, (new_expires_at, session_id))
+        """, (new_expires_at_str, session_id))
 
     return {
       "user_id": row[0],
@@ -106,8 +114,9 @@ class AuthService:
     """Remove expired sessions (run periodically)"""
     cursor = conn.cursor()
     try:
+      now = self._sqlite_timestamp(datetime.now())
       cursor.execute("DELETE FROM auth_sessions WHERE expires_at < ?",
-                     (datetime.now(), ))
+                     (now, ))
       deleted_count = cursor.rowcount
       if deleted_count > 0:
         log.info(f"Cleaned up {deleted_count} expired sessions")

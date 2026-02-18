@@ -297,8 +297,25 @@ class TestSessionRepositoryDelete:
 class TestSessionRepositoryTransactions:
   """Tests for transaction control."""
 
-  def test_standalone_operations(self, test_db, sample_session):
+  def test_standalone_operations(
+    self,
+    test_db,
+    sample_session,
+    tmp_path,
+    monkeypatch
+  ):
     """Test repository without external connection (creates own)."""
+    # Force standalone repository connections to use a writable temp DB.
+    db_path = tmp_path / "standalone_repository.db"
+    monkeypatch.setenv("GRADING_DB_PATH", str(db_path))
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    create_schema(cursor)
+    conn.commit()
+    conn.close()
+
     repo = SessionRepository()  # No connection passed
 
     # This should work even though test_db is separate
