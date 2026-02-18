@@ -656,6 +656,86 @@ def test_finalize_concurrent_requests_allow_only_one_start(client, monkeypatch):
   assert sorted(statuses) == [200, 409]
 
 
+def test_autograde_all_concurrent_requests_allow_only_one_start(client,
+                                                                 monkeypatch):
+  """Concurrent autograde-all starts should allow one start and reject overlap."""
+  from grading_web_ui.web_api.routes import ai_grader as ai_routes
+
+  session_id = create_test_session(client, "Autograde-All Concurrency Test")
+  for doc_id in range(1, 4):
+    seed_submission_with_problem(session_id,
+                                 document_id=doc_id,
+                                 student_name=f"Student Auto {doc_id}",
+                                 file_hash=f"autograde-concurrency-{doc_id}",
+                                 problem_number=doc_id,
+                                 graded=False)
+
+  async def slow_fake_run_autograding_all(target_session_id: int,
+                                          problem_numbers: list,
+                                          totals_by_problem: dict,
+                                          settings: dict,
+                                          stream_id: str):
+    await asyncio.sleep(0.25)
+    workflow_locks.release("autograde", target_session_id)
+
+  monkeypatch.setattr(ai_routes, "run_autograding_all",
+                      slow_fake_run_autograding_all)
+
+  payload = {
+    "mode": "image-only",
+    "settings": {
+      "batch_size": "small",
+      "image_quality": "medium",
+      "include_answer": False,
+      "include_default_feedback": False,
+      "auto_accept": False,
+      "dry_run": True
+    }
+  }
+
+  def start_autograde_all() -> int:
+    return client.post(f"/api/ai-grader/{session_id}/autograde-all",
+                       json=payload).status_code
+
+  with ThreadPoolExecutor(max_workers=2) as executor:
+    statuses = list(executor.map(lambda _: start_autograde_all(), range(2)))
+
+  assert sorted(statuses) == [200, 409]
+
+
+def test_concurrent_grade_submissions_do_not_fail_with_db_locked(client):
+  """Concurrent grading requests should not fail with SQLite lock errors."""
+  session_id = create_test_session(client, "Concurrent Grading Lock Test")
+  problem_ids = []
+
+  for doc_id in range(1, 9):
+    _, problem_id = seed_submission_with_problem(session_id,
+                                                 document_id=doc_id,
+                                                 student_name=f"Student {doc_id}",
+                                                 file_hash=f"grade-lock-{doc_id}",
+                                                 graded=False,
+                                                 problem_number=1)
+    problem_ids.append(problem_id)
+
+  def submit_grade(problem_id: int) -> tuple[int, str]:
+    response = client.post(f"/api/problems/{problem_id}/grade",
+                           json={
+                             "score": 1.0,
+                             "feedback": "ok"
+                           })
+    body = response.text if hasattr(response, "text") else ""
+    return response.status_code, body
+
+  with ThreadPoolExecutor(max_workers=6) as executor:
+    results = list(executor.map(submit_grade, problem_ids))
+
+  statuses = [status for status, _ in results]
+  bodies = [body.lower() for _, body in results]
+
+  assert all(status == 200 for status in statuses)
+  assert all("database is locked" not in body for body in bodies)
+
+
 def test_finalize_lifecycle_starts_and_completes_with_background_task(client,
                                                                       monkeypatch):
   """Finalize endpoint should start and background task should drive status completion."""
