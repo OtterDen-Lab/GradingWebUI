@@ -747,6 +747,7 @@ class CanvasAssignment(LMSWrapper):
   
   def push_feedback(self, user_id, score: float, comments: str, attachments=None, keep_previous_best=True, clobber_feedback=False):
     log.debug(f"Adding feedback for {user_id}")
+    comments = comments or ""
     if attachments is None:
       attachments = []
     
@@ -821,7 +822,19 @@ class CanvasAssignment(LMSWrapper):
         os.remove(temp_path)
     
     if len(comments) > 0:
-      upload_buffer_as_file(comments.encode('utf-8'), "feedback.txt")
+      try:
+        submission.edit(
+          comment={
+            'text_comment': comments,
+          },
+        )
+      except (requests.exceptions.RequestException,
+              canvasapi.exceptions.CanvasException) as e:
+        log.warning(f"Failed to post inline feedback comment for {user_id}: {e}")
+        extra = _format_canvas_exception(e)
+        if extra:
+          log.warning(extra)
+        upload_buffer_as_file(comments.encode('utf-8'), "feedback.html")
     
     for i, attachment_buffer in enumerate(attachments):
       upload_buffer_as_file(attachment_buffer.read(), attachment_buffer.name)
