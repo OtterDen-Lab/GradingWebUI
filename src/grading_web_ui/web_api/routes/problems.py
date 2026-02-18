@@ -16,7 +16,7 @@ from ..repositories import ProblemRepository, SubmissionRepository
 from ..services.problem_service import ProblemService
 from ..auth import require_session_access, get_current_user
 
-from grading_web_ui.lms_interface import ai_helper
+from grading_web_ui import ai_helper
 
 from PIL import Image
 import io

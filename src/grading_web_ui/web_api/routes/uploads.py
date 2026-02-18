@@ -26,7 +26,7 @@ import logging
 import asyncio
 from ..services.exam_processor import ExamProcessor, PRESCAN_DPI_STEPS
 from ..services.qr_scanner import QRScanner
-from grading_web_ui.lms_interface.canvas_interface import CanvasInterface
+from lms_interface.canvas_interface import CanvasInterface
 from ..repositories import SessionRepository, SubmissionRepository, ProblemMetadataRepository, ProblemRepository
 from ..domain.common import SessionStatus
 

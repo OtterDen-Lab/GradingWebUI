@@ -62,7 +62,10 @@ Repository = "https://github.com/OtterDen-Lab/GradingWebUI"
 
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/grading_web_ui"]
+packages = ["src/grading_web_ui", "lms_interface"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/grading_web_ui/**", "lms_interface/**", "pyproject.toml", "README.md", "LICENSE"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

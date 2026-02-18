@@ -24,7 +24,7 @@ import numpy as np
 import cv2
 import concurrent.futures
 
-from grading_web_ui.lms_interface import ai_helper
+from grading_web_ui import ai_helper
 
 # Import QR scanner service
 from .qr_scanner import QRScanner

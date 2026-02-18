@@ -4,7 +4,8 @@
 - `src/grading_web_ui/` is the main Python package.
   - `web_api/` contains the FastAPI backend (routes, services, models, database).
   - `web_frontend/` holds the static frontend assets.
-  - `lms_interface/` provides Canvas and AI helper integrations.
+  - `lms_interface/` provides Canvas integrations (top-level vendored package).
+  - `grading_web_ui/ai_helper.py` provides AI helper integrations.
 - `tests/` contains unit and integration tests.
 - `docker/web-grading/` contains Docker build and compose files.
 - `WebUI/` contains documentation and planning notes.

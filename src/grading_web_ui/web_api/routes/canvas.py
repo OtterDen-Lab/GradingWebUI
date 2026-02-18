@@ -4,7 +4,7 @@ Canvas API integration endpoints.
 from fastapi import APIRouter, HTTPException
 import os
 
-from grading_web_ui.lms_interface.canvas_interface import CanvasInterface
+from lms_interface.canvas_interface import CanvasInterface
 
 router = APIRouter()
 

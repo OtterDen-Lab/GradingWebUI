@@ -8,7 +8,7 @@ import json
 from ..models import NameMatchRequest
 from ..database import get_db_connection
 from ..repositories import SessionRepository, SubmissionRepository
-from grading_web_ui.lms_interface.canvas_interface import CanvasInterface
+from lms_interface.canvas_interface import CanvasInterface
 from ..auth import require_session_access
 
 router = APIRouter()

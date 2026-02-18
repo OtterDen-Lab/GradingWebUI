@@ -17,8 +17,8 @@ from PIL import Image
 
 from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository
 from ..services.problem_service import ProblemService
-from grading_web_ui.lms_interface.canvas_interface import CanvasInterface
-from grading_web_ui.lms_interface.classes import Feedback
+from lms_interface.canvas_interface import CanvasInterface
+from lms_interface.classes import Feedback
 from .. import sse
 
 log = logging.getLogger(__name__)
@@ -541,7 +541,7 @@ class FinalizationService:
         log.warning(
           f"Failed to regenerate explanation for problem {problem.get('problem_number')}: {e}"
         )
-    return problem.get("ai_reasoning") or ""
+    return ""
 
   def _inline_local_images(self, html_text: str) -> str:
     def inline_src(src: str) -> str:

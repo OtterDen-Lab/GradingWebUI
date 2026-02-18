@@ -7,7 +7,7 @@ import base64
 import io
 import time
 from typing import Dict, List, Optional, Tuple
-from grading_web_ui.lms_interface.ai_helper import AI_Helper__Anthropic
+from grading_web_ui.ai_helper import AI_Helper__Anthropic
 from PIL import Image
 
 from ..repositories import ProblemRepository, ProblemMetadataRepository, SubmissionRepository
