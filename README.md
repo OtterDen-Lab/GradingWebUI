@@ -95,7 +95,7 @@ Optional overrides:
 make run RUN_IMAGE=autograder-web-grading:mytag RUN_ENV_FILE=.env
 ```
 
-### Publish a release image (multi-arch)
+### Publish a release image
 
 ```bash
 make publish v0.8.1
@@ -105,7 +105,13 @@ This pushes:
 - `samogden/webgraderui:v0.8.1`
 - `samogden/webgraderui:latest`
 
-Default platforms are `linux/amd64,linux/arm64` (override with `PUBLISH_PLATFORMS`).
+Default platform is `linux/amd64`.
+
+To publish multi-arch (requires buildx/QEMU support on your host):
+
+```bash
+make publish v0.8.1 PUBLISH_PLATFORMS=linux/amd64,linux/arm64
+```
 
 ### Deploy container with env-file validation
 

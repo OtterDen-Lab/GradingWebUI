@@ -15,7 +15,7 @@ DEPLOY_ENV_FILE ?= /etc/grading-web/web.env
 REGISTRY_IMAGE ?= samogden/webgraderui
 PUBLISH_VERSION ?= v0.8.1
 DEPLOY_TAG ?= latest
-PUBLISH_PLATFORMS ?= linux/amd64,linux/arm64
+PUBLISH_PLATFORMS ?= linux/amd64
 DOCKER_COMPOSE ?= docker compose -f docker/web-grading/docker-compose.prod.yml
 DEPLOY_ENV_VALIDATOR ?= scripts/validate_deploy_env.py
 
@@ -44,7 +44,8 @@ help:
 	@echo "  make run [RUN_IMAGE=autograder-web-grading:local] [RUN_ENV_FILE=.env]"
 	@echo "    Build local Docker image and run it via production compose."
 	@echo "  make publish [vX.Y.Z] [REGISTRY_IMAGE=samogden/webgraderui]"
-	@echo "    Build multi-arch image and push both :vX.Y.Z and :latest."
+	@echo "    Build and push :vX.Y.Z and :latest (default platform: linux/amd64)."
+	@echo "    Optional multi-arch: PUBLISH_PLATFORMS=linux/amd64,linux/arm64"
 	@echo "  make deploy [vX.Y.Z] [DEPLOY_ENV_FILE=/etc/grading-web/web.env]"
 	@echo "    Pull and run REGISTRY_IMAGE tag (defaults to :latest)."
 	@echo "  make image [RUN_IMAGE=autograder-web-grading:local]"
