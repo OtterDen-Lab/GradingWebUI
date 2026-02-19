@@ -2,6 +2,7 @@ import abc
 import json
 import os
 import random
+import re
 import ollama
 from typing import Tuple, Dict, List
 
@@ -42,6 +43,31 @@ class AI_Helper__Anthropic(AI_Helper):
     self.__class__._client = Anthropic()
 
   @classmethod
+  def _candidate_models(cls) -> List[str]:
+    primary = os.getenv("ANTHROPIC_MODEL",
+                        "claude-3-5-sonnet-latest").strip()
+    fallback_csv = os.getenv("ANTHROPIC_FALLBACK_MODELS",
+                             "claude-3-5-haiku-latest")
+    fallbacks = [
+      model.strip() for model in fallback_csv.split(",") if model.strip()
+    ]
+
+    models: List[str] = []
+    for model in [primary, *fallbacks]:
+      if model and model not in models:
+        models.append(model)
+    return models
+
+  @staticmethod
+  def _is_model_not_found_error(error: Exception) -> bool:
+    msg = str(error).lower()
+    if "not_found_error" in msg and "model" in msg:
+      return True
+    if "model" in msg and re.search(r"\bnot found\b", msg):
+      return True
+    return False
+
+  @classmethod
   def query_ai(cls,
                message: str,
                attachments: List[Tuple[str, str]],
@@ -70,24 +96,48 @@ class AI_Helper__Anthropic(AI_Helper):
       }, *attachment_messages]
     })
 
-    response = cls._client.messages.create(model="claude-3-7-sonnet-latest",
-                                           max_tokens=max_response_tokens,
-                                           messages=messages)
-    log.debug(response.content)
+    last_error = None
+    candidate_models = cls._candidate_models()
 
-    # Extract usage information
-    usage_info = {
-      "prompt_tokens":
-      response.usage.input_tokens if response.usage else 0,
-      "completion_tokens":
-      response.usage.output_tokens if response.usage else 0,
-      "total_tokens": (response.usage.input_tokens +
-                       response.usage.output_tokens) if response.usage else 0,
-      "provider":
-      "anthropic"
-    }
+    for index, model_name in enumerate(candidate_models):
+      try:
+        response = cls._client.messages.create(model=model_name,
+                                               max_tokens=max_response_tokens,
+                                               messages=messages)
+        log.debug(response.content)
 
-    return response.content[0].text, usage_info
+        # Extract usage information
+        usage_info = {
+          "prompt_tokens":
+          response.usage.input_tokens if response.usage else 0,
+          "completion_tokens":
+          response.usage.output_tokens if response.usage else 0,
+          "total_tokens":
+          (response.usage.input_tokens +
+           response.usage.output_tokens) if response.usage else 0,
+          "provider":
+          "anthropic",
+          "model":
+          model_name
+        }
+
+        return response.content[0].text, usage_info
+      except Exception as e:
+        last_error = e
+        is_model_error = cls._is_model_not_found_error(e)
+        has_next_model = index < (len(candidate_models) - 1)
+        if is_model_error and has_next_model:
+          log.warning(
+            "Anthropic model '%s' unavailable, trying fallback model '%s'",
+            model_name,
+            candidate_models[index + 1]
+          )
+          continue
+        raise
+
+    if last_error:
+      raise last_error
+    raise RuntimeError("Anthropic query failed with no candidate model attempts")
 
 
 class AI_Helper__OpenAI(AI_Helper):
