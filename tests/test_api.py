@@ -462,6 +462,62 @@ def test_prefetch_regeneration_warms_cache_for_problem(client, monkeypatch):
   assert call_count["count"] == call_count_before
 
 
+def test_manual_qr_payload_updates_problem_and_metadata(client):
+  """Manual QR payload endpoint should persist max_points and encrypted data."""
+  session_id = create_test_session(client, "Manual QR Payload")
+  _, problem_id = seed_submission_with_problem(
+    session_id,
+    problem_number=4,
+    qr_encrypted_data=None,
+    max_points=None,
+  )
+
+  response = client.post(
+    f"/api/problems/{problem_id}/manual-qr",
+    json={"payload_text": '{"q": 4, "pts": 9, "s": "manual-encrypted"}'}
+  )
+  assert response.status_code == 200
+  payload = response.json()
+  assert payload["status"] == "success"
+  assert payload["problem_number"] == 4
+  assert payload["max_points"] == 9.0
+  assert payload["has_qr_data"] is True
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute(
+      "SELECT max_points, qr_encrypted_data FROM problems WHERE id = ?",
+      (problem_id,)
+    )
+    row = cursor.fetchone()
+    assert row["max_points"] == 9.0
+    assert row["qr_encrypted_data"] == "manual-encrypted"
+
+    cursor.execute(
+      """
+      SELECT max_points FROM problem_metadata
+      WHERE session_id = ? AND problem_number = ?
+      """,
+      (session_id, 4)
+    )
+    metadata_row = cursor.fetchone()
+    assert metadata_row is not None
+    assert metadata_row["max_points"] == 9.0
+
+
+def test_manual_qr_payload_rejects_question_number_mismatch(client):
+  """Manual QR payload should reject JSON for the wrong problem number."""
+  session_id = create_test_session(client, "Manual QR Mismatch")
+  _, problem_id = seed_submission_with_problem(session_id, problem_number=2)
+
+  response = client.post(
+    f"/api/problems/{problem_id}/manual-qr",
+    json={"payload_text": '{"q": 7, "pts": 8, "s": "wrong-problem"}'}
+  )
+  assert response.status_code == 400
+  assert "does not match current problem number" in response.json()["detail"]
+
+
 def test_session_stats_blank_rate_counts_manual_blanks_only(client):
   """Stats blank metrics should use manual '-' marks, not AI/heuristic blank flags."""
   session_id = create_test_session(client, "Manual Blank Stats Test")

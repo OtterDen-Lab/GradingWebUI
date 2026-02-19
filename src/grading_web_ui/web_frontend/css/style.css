@@ -112,6 +112,15 @@ header h1 {
     background-color: #059669;
 }
 
+.btn-warning {
+    background-color: #f59e0b;
+    color: white;
+}
+
+.btn-warning:hover {
+    background-color: #d97706;
+}
+
 /* Upload Area */
 .upload-area {
     border: 2px dashed var(--gray-200);

@@ -68,6 +68,12 @@ function prefetchRegeneratedAnswer(problemId) {
     });
 }
 
+function invalidateRegeneratedAnswer(problemId) {
+    if (!problemId) return;
+    regeneratedAnswerCache.delete(problemId);
+    regeneratedAnswerRequests.delete(problemId);
+}
+
 function startSessionRegenerationPrefetch() {
     if (!currentSession || !currentSession.id) {
         return;
@@ -418,6 +424,11 @@ function handleGradingKeyboard(e) {
     // Don't handle if add tag dialog is open
     const addTagDialog = document.getElementById('add-tag-dialog');
     if (addTagDialog && addTagDialog.style.display === 'flex') {
+        return;
+    }
+
+    const manualQrDialog = document.getElementById('manual-qr-dialog');
+    if (manualQrDialog && manualQrDialog.style.display === 'flex') {
         return;
     }
 
@@ -1911,6 +1922,117 @@ closeAnswerX.addEventListener('click', () => {
 answerDialog.addEventListener('click', (e) => {
     if (e.target === answerDialog) {
         answerDialog.style.display = 'none';
+    }
+});
+
+// =============================================================================
+// MANUAL QR PAYLOAD FUNCTIONALITY
+// =============================================================================
+
+const manualQrBtn = document.getElementById('manual-qr-btn');
+const manualQrDialog = document.getElementById('manual-qr-dialog');
+const manualQrInput = document.getElementById('manual-qr-input');
+const manualQrStatus = document.getElementById('manual-qr-status');
+const manualQrCancelBtn = document.getElementById('manual-qr-cancel-btn');
+const manualQrApplyBtn = document.getElementById('manual-qr-apply-btn');
+
+function setManualQrStatus(message, isError = false) {
+    manualQrStatus.style.display = 'block';
+    manualQrStatus.style.color = isError ? 'var(--danger-color)' : 'var(--gray-700)';
+    manualQrStatus.textContent = message;
+}
+
+function resetManualQrDialogState() {
+    manualQrStatus.style.display = 'none';
+    manualQrStatus.textContent = '';
+    manualQrStatus.style.color = 'var(--gray-700)';
+}
+
+function closeManualQrDialog() {
+    manualQrDialog.style.display = 'none';
+    resetManualQrDialogState();
+}
+
+manualQrBtn.addEventListener('click', () => {
+    if (!currentProblem) {
+        alert('No problem loaded');
+        return;
+    }
+
+    resetManualQrDialogState();
+    manualQrDialog.style.display = 'flex';
+    manualQrInput.focus();
+});
+
+manualQrCancelBtn.addEventListener('click', closeManualQrDialog);
+
+manualQrDialog.addEventListener('click', (e) => {
+    if (e.target === manualQrDialog) {
+        closeManualQrDialog();
+    }
+});
+
+manualQrApplyBtn.addEventListener('click', async () => {
+    if (!currentProblem) {
+        alert('No problem loaded');
+        return;
+    }
+
+    const payloadText = manualQrInput.value.trim();
+    if (!payloadText) {
+        setManualQrStatus('Paste a decoded QR JSON payload first.', true);
+        return;
+    }
+
+    const problemId = currentProblem.id;
+    const problemNumber = currentProblem.problem_number;
+
+    manualQrApplyBtn.disabled = true;
+    manualQrCancelBtn.disabled = true;
+    setManualQrStatus('Applying payload...');
+
+    try {
+        const response = await fetch(`${API_BASE}/problems/${problemId}/manual-qr`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ payload_text: payloadText })
+        });
+
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (_error) {
+            payload = null;
+        }
+
+        if (!response.ok) {
+            throw new Error(payload?.detail || 'Failed to apply manual QR payload');
+        }
+
+        invalidateRegeneratedAnswer(problemId);
+        problemMaxPoints[problemNumber] = payload.max_points;
+
+        if (currentProblem && currentProblem.id === problemId) {
+            currentProblem.max_points = payload.max_points;
+            currentProblem.has_qr_data = Boolean(payload.has_qr_data);
+            updateMaxPointsDropdown();
+            document.getElementById('show-answer-btn').style.display =
+                currentProblem.has_qr_data ? 'inline-block' : 'none';
+
+            if (currentProblem.has_qr_data) {
+                prefetchRegeneratedAnswer(problemId);
+            }
+            await loadExplanation();
+        }
+
+        closeManualQrDialog();
+        showNotification(payload.message || 'Manual QR payload applied.');
+    } catch (error) {
+        console.error('Failed to apply manual QR payload:', error);
+        setManualQrStatus(error.message || 'Failed to apply manual QR payload.', true);
+    } finally {
+        manualQrApplyBtn.disabled = false;
+        manualQrCancelBtn.disabled = false;
     }
 });
 

@@ -147,6 +147,11 @@ class GradeSubmission(BaseModel):
   feedback: Optional[str] = None
 
 
+class ManualQRCodeSubmission(BaseModel):
+  """Request model for manually pasting decoded QR payload JSON."""
+  payload_text: str = Field(..., min_length=2, max_length=20000)
+
+
 class ProblemStatsResponse(BaseModel):
   """Response model for problem statistics"""
   problem_number: int

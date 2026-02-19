@@ -13,7 +13,7 @@ from typing import Optional
 import base64
 import fitz  # PyMuPDF
 
-from ..models import ProblemResponse, GradeSubmission
+from ..models import ProblemResponse, GradeSubmission, ManualQRCodeSubmission
 from ..database import get_db_connection, update_problem_stats
 from ..repositories import ProblemRepository, SubmissionRepository, SessionRepository
 from ..services.problem_service import ProblemService
@@ -74,6 +74,70 @@ def _set_cached_regeneration(problem_id: int, cache_key: tuple,
     if len(_regeneration_cache) > _regeneration_cache_max_entries:
       oldest_key = next(iter(_regeneration_cache))
       _regeneration_cache.pop(oldest_key, None)
+
+
+def _clear_cached_regeneration(problem_id: int) -> None:
+  with _regeneration_cache_lock:
+    _regeneration_cache.pop(problem_id, None)
+
+
+def _parse_manual_qr_payload(payload_text: str) -> dict:
+  if not payload_text or not payload_text.strip():
+    raise ValueError("QR payload is empty")
+
+  try:
+    payload = json.loads(payload_text.strip())
+  except Exception as exc:
+    raise ValueError(f"Invalid JSON payload: {exc}") from exc
+
+  if isinstance(payload, str):
+    try:
+      payload = json.loads(payload)
+    except Exception as exc:
+      raise ValueError(f"Invalid nested JSON payload: {exc}") from exc
+
+  if not isinstance(payload, dict):
+    raise ValueError("QR payload must decode to a JSON object")
+
+  question_number = (
+    payload.get("q") or payload.get("question_number") or
+    payload.get("questionNumber")
+  )
+  max_points = (
+    payload.get("pts") or payload.get("p") or payload.get("points") or
+    payload.get("max_points") or payload.get("maxPoints")
+  )
+  encrypted_data = (
+    payload.get("s") or payload.get("encrypted_data") or
+    payload.get("encryptedData")
+  )
+
+  if question_number is None:
+    raise ValueError("QR payload is missing question number ('q')")
+  if max_points is None:
+    raise ValueError("QR payload is missing max points ('pts')")
+
+  try:
+    parsed_question_number = int(question_number)
+  except (ValueError, TypeError) as exc:
+    raise ValueError(f"Invalid question number '{question_number}'") from exc
+
+  try:
+    parsed_max_points = float(max_points)
+  except (ValueError, TypeError) as exc:
+    raise ValueError(f"Invalid max points '{max_points}'") from exc
+
+  if parsed_max_points <= 0:
+    raise ValueError("max_points must be greater than 0")
+
+  if encrypted_data is not None and not isinstance(encrypted_data, str):
+    encrypted_data = str(encrypted_data)
+
+  return {
+    "question_number": parsed_question_number,
+    "max_points": parsed_max_points,
+    "encrypted_data": encrypted_data
+  }
 
 
 def _build_regeneration_response(problem_id: int, problem,
@@ -862,6 +926,74 @@ async def regenerate_answer(
       detail=f"Unexpected error during answer regeneration: {str(e)}")
 
 
+@router.post("/{problem_id}/manual-qr")
+async def apply_manual_qr_payload(
+  problem_id: int,
+  request: ManualQRCodeSubmission,
+  current_user: dict = Depends(get_current_user)
+):
+  """
+    Manually apply decoded QR JSON payload for the current problem.
+    Accepts payload text pasted from external QR decode tools.
+  """
+  from ..repositories import with_transaction
+
+  problem_repo = ProblemRepository()
+
+  problem = problem_repo.get_by_id(problem_id)
+  if not problem:
+    raise HTTPException(status_code=404, detail="Problem not found")
+
+  if current_user["role"] != "instructor":
+    from ..repositories.session_assignment_repository import SessionAssignmentRepository
+    assignment_repo = SessionAssignmentRepository()
+    if not assignment_repo.is_user_assigned(problem.session_id, current_user["user_id"]):
+      raise HTTPException(status_code=403, detail="You do not have access to this grading session")
+
+  try:
+    qr_data = _parse_manual_qr_payload(request.payload_text)
+  except ValueError as exc:
+    raise HTTPException(status_code=400, detail=str(exc))
+
+  if qr_data["question_number"] != problem.problem_number:
+    raise HTTPException(
+      status_code=400,
+      detail=(
+        f"QR payload question number {qr_data['question_number']} does not match "
+        f"current problem number {problem.problem_number}"
+      )
+    )
+
+  with with_transaction() as repos:
+    repos.problems.update_qr_data(
+      problem_id,
+      qr_data["max_points"],
+      qr_data.get("encrypted_data")
+    )
+    repos.metadata.upsert_max_points(
+      problem.session_id,
+      problem.problem_number,
+      qr_data["max_points"]
+    )
+
+  _clear_cached_regeneration(problem_id)
+
+  has_qr_data = bool(qr_data.get("encrypted_data"))
+  return {
+    "status": "success",
+    "problem_id": problem_id,
+    "problem_number": problem.problem_number,
+    "max_points": qr_data["max_points"],
+    "has_qr_data": has_qr_data,
+    "message": (
+      f"Manual QR payload applied for Problem {problem.problem_number} "
+      f"(max points: {qr_data['max_points']})"
+      if has_qr_data else
+      f"Manual payload applied for Problem {problem.problem_number}, but no encrypted answer metadata was present"
+    )
+  }
+
+
 @router.post("/{problem_id}/rescan-qr")
 async def rescan_qr_for_single_problem(
   problem_id: int,
@@ -956,6 +1088,8 @@ async def rescan_qr_for_single_problem(
 
       # Also update problem_metadata for this session
       repos.metadata.upsert_max_points(problem.session_id, problem.problem_number, qr_data["max_points"])
+
+    _clear_cached_regeneration(problem_id)
 
     log.info(
       f"QR re-scan complete for problem ID {problem_id}: QR code found and updated"
