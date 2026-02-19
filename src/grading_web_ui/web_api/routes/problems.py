@@ -13,9 +13,12 @@ from typing import Optional
 import base64
 import fitz  # PyMuPDF
 
-from ..models import ProblemResponse, GradeSubmission, ManualQRCodeSubmission
+from ..models import (ProblemResponse, GradeSubmission, ManualQRCodeSubmission,
+                      SubjectiveTriageSubmission)
 from ..database import get_db_connection, update_problem_stats
-from ..repositories import ProblemRepository, SubmissionRepository, SessionRepository
+from ..repositories import (ProblemRepository, SubmissionRepository,
+                            SessionRepository, ProblemMetadataRepository,
+                            SubjectiveTriageRepository)
 from ..services.problem_service import ProblemService
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from ..auth import require_session_access, get_current_user
@@ -39,6 +42,14 @@ _regeneration_cache_lock = threading.Lock()
 _regeneration_cache_max_entries = 2000
 _session_prefetch_tasks = {}
 _session_prefetch_tasks_lock = threading.Lock()
+
+_DEFAULT_SUBJECTIVE_BUCKETS = [
+  {"id": "perfect", "label": "Perfect", "color": "#16a34a"},
+  {"id": "excellent", "label": "Excellent", "color": "#22c55e"},
+  {"id": "good", "label": "Good", "color": "#3b82f6"},
+  {"id": "passable", "label": "Passable", "color": "#f59e0b"},
+  {"id": "poor_blank", "label": "Poor/Blank", "color": "#ef4444"},
+]
 
 
 def _cache_key_for_regeneration(problem, quiz_yaml_text: Optional[str]) -> tuple:
@@ -138,6 +149,15 @@ def _parse_manual_qr_payload(payload_text: str) -> dict:
     "max_points": parsed_max_points,
     "encrypted_data": encrypted_data
   }
+
+
+def _get_subjective_settings(session_id: int, problem_number: int) -> tuple[str, list[dict]]:
+  metadata_repo = ProblemMetadataRepository()
+  grading_mode = metadata_repo.get_grading_mode(session_id, problem_number)
+  buckets = metadata_repo.get_subjective_buckets(session_id, problem_number)
+  if not buckets:
+    buckets = [dict(bucket) for bucket in _DEFAULT_SUBJECTIVE_BUCKETS]
+  return grading_mode, buckets
 
 
 def _build_regeneration_response(problem_id: int, problem,
@@ -408,12 +428,23 @@ async def get_next_problem(
   problem_repo = ProblemRepository()
   submission_repo = SubmissionRepository()
 
-  # Get next ungraded problem (non-blank first, then blank)
-  problem = problem_repo.get_next_ungraded(session_id, problem_number)
+  triage_repo = SubjectiveTriageRepository()
+  grading_mode, _ = _get_subjective_settings(session_id, problem_number)
+
+  # In subjective mode, "next" means next untriaged response.
+  if grading_mode == "subjective":
+    problem = problem_repo.get_next_ungraded_untriaged(session_id, problem_number)
+  else:
+    problem = problem_repo.get_next_ungraded(session_id, problem_number)
   if not problem:
     raise HTTPException(
       status_code=404,
-      detail=f"No ungraded problems found for problem {problem_number}")
+      detail=(
+        f"No untriaged problems found for problem {problem_number}"
+        if grading_mode == "subjective"
+        else f"No ungraded problems found for problem {problem_number}"
+      )
+    )
 
   # Get counts for context (including blank counts)
   counts = problem_repo.get_counts_for_problem_number(session_id, problem_number)
@@ -421,7 +452,13 @@ async def get_next_problem(
   graded_count = counts["graded"]
   ungraded_blank = counts["ungraded_blank"]
   ungraded_nonblank = counts["ungraded_nonblank"]
-  current_index = graded_count + 1
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    session_id, problem_number
+  )
+  untriaged_count = max((total_count - graded_count) - triaged_count, 0)
+  current_index = (triaged_count + 1) if grading_mode == "subjective" else (graded_count + 1)
+
+  triage_entry = triage_repo.get_for_problem(problem.id)
 
   # Get image data (extract from PDF if needed)
   image_data = get_problem_image_data(problem, submission_repo)
@@ -444,7 +481,13 @@ async def get_next_problem(
     blank_method=problem.blank_method,
     blank_reasoning=problem.blank_reasoning,
     ai_reasoning=problem.ai_reasoning,
-    has_qr_data=bool(problem.qr_encrypted_data)
+    has_qr_data=bool(problem.qr_encrypted_data),
+    grading_mode=grading_mode,
+    subjective_triaged=bool(triage_entry),
+    subjective_bucket_id=triage_entry["bucket_id"] if triage_entry else None,
+    subjective_notes=triage_entry["notes"] if triage_entry else None,
+    subjective_triaged_count=triaged_count,
+    subjective_untriaged_count=untriaged_count
   )
 
 
@@ -459,12 +502,23 @@ async def get_previous_problem(
   problem_repo = ProblemRepository()
   submission_repo = SubmissionRepository()
 
-  # Get most recently graded problem
-  problem = problem_repo.get_previous_graded(session_id, problem_number)
+  triage_repo = SubjectiveTriageRepository()
+  grading_mode, _ = _get_subjective_settings(session_id, problem_number)
+
+  # In subjective mode, "previous" means most recently triaged response.
+  if grading_mode == "subjective":
+    problem = problem_repo.get_previous_triaged(session_id, problem_number)
+  else:
+    problem = problem_repo.get_previous_graded(session_id, problem_number)
   if not problem:
     raise HTTPException(
       status_code=404,
-      detail=f"No graded problems found for problem {problem_number}")
+      detail=(
+        f"No triaged problems found for problem {problem_number}"
+        if grading_mode == "subjective"
+        else f"No graded problems found for problem {problem_number}"
+      )
+    )
 
   # Get counts for context (including blank counts)
   counts = problem_repo.get_counts_for_problem_number(session_id, problem_number)
@@ -472,7 +526,13 @@ async def get_previous_problem(
   graded_count = counts["graded"]
   ungraded_blank = counts["ungraded_blank"]
   ungraded_nonblank = counts["ungraded_nonblank"]
-  current_index = graded_count
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    session_id, problem_number
+  )
+  untriaged_count = max((total_count - graded_count) - triaged_count, 0)
+  current_index = triaged_count if grading_mode == "subjective" else graded_count
+
+  triage_entry = triage_repo.get_for_problem(problem.id)
 
   # Get image data (extract from PDF if needed)
   image_data = get_problem_image_data(problem, submission_repo)
@@ -495,7 +555,249 @@ async def get_previous_problem(
     blank_method=problem.blank_method,
     blank_reasoning=problem.blank_reasoning,
     ai_reasoning=problem.ai_reasoning,
-    has_qr_data=bool(problem.qr_encrypted_data)
+    has_qr_data=bool(problem.qr_encrypted_data),
+    grading_mode=grading_mode,
+    subjective_triaged=bool(triage_entry),
+    subjective_bucket_id=triage_entry["bucket_id"] if triage_entry else None,
+    subjective_notes=triage_entry["notes"] if triage_entry else None,
+    subjective_triaged_count=triaged_count,
+    subjective_untriaged_count=untriaged_count
+  )
+
+
+@router.get("/{session_id}/{problem_number}/bucket/{bucket_id}/next",
+            response_model=ProblemResponse)
+async def get_next_problem_in_bucket(
+  session_id: int,
+  problem_number: int,
+  bucket_id: str,
+  current_problem_id: Optional[int] = None,
+  current_user: dict = Depends(require_session_access())
+):
+  """Get next triaged/ungraded response within one subjective bucket."""
+  problem_repo = ProblemRepository()
+  submission_repo = SubmissionRepository()
+  triage_repo = SubjectiveTriageRepository()
+  session_repo = SessionRepository()
+
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  grading_mode, buckets = _get_subjective_settings(session_id, problem_number)
+  if grading_mode != "subjective":
+    raise HTTPException(
+      status_code=400,
+      detail="Bucket navigation is only available in subjective mode"
+    )
+  valid_bucket_ids = {bucket.get("id") for bucket in buckets}
+  if bucket_id not in valid_bucket_ids:
+    raise HTTPException(status_code=404, detail="Bucket not found for this problem")
+
+  problem = problem_repo.get_next_triaged_in_bucket(
+    session_id, problem_number, bucket_id, current_problem_id
+  )
+  if not problem:
+    raise HTTPException(
+      status_code=404,
+      detail=f"No triaged problems found in bucket '{bucket_id}'"
+    )
+
+  counts = problem_repo.get_counts_for_problem_number(session_id, problem_number)
+  total_count = counts["total"]
+  graded_count = counts["graded"]
+  ungraded_blank = counts["ungraded_blank"]
+  ungraded_nonblank = counts["ungraded_nonblank"]
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    session_id, problem_number
+  )
+  untriaged_count = max((total_count - graded_count) - triaged_count, 0)
+  current_index = triaged_count if triaged_count > 0 else 1
+
+  triage_entry = triage_repo.get_for_problem(problem.id)
+  image_data = get_problem_image_data(problem, submission_repo)
+
+  return ProblemResponse(
+    id=problem.id,
+    problem_number=problem.problem_number,
+    submission_id=problem.submission_id,
+    image_data=image_data,
+    score=problem.score,
+    feedback=problem.feedback,
+    graded=problem.graded,
+    max_points=problem.max_points,
+    current_index=current_index,
+    total_count=total_count,
+    ungraded_blank=ungraded_blank,
+    ungraded_nonblank=ungraded_nonblank,
+    is_blank=problem.is_blank,
+    blank_confidence=problem.blank_confidence,
+    blank_method=problem.blank_method,
+    blank_reasoning=problem.blank_reasoning,
+    ai_reasoning=problem.ai_reasoning,
+    has_qr_data=bool(problem.qr_encrypted_data),
+    grading_mode=grading_mode,
+    subjective_triaged=bool(triage_entry),
+    subjective_bucket_id=triage_entry["bucket_id"] if triage_entry else None,
+    subjective_notes=triage_entry["notes"] if triage_entry else None,
+    subjective_triaged_count=triaged_count,
+    subjective_untriaged_count=untriaged_count
+  )
+
+
+@router.get("/{session_id}/{problem_number}/bucket/{bucket_id}/previous",
+            response_model=ProblemResponse)
+async def get_previous_problem_in_bucket(
+  session_id: int,
+  problem_number: int,
+  bucket_id: str,
+  current_problem_id: Optional[int] = None,
+  current_user: dict = Depends(require_session_access())
+):
+  """Get previous triaged/ungraded response within one subjective bucket."""
+  problem_repo = ProblemRepository()
+  submission_repo = SubmissionRepository()
+  triage_repo = SubjectiveTriageRepository()
+  session_repo = SessionRepository()
+
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  grading_mode, buckets = _get_subjective_settings(session_id, problem_number)
+  if grading_mode != "subjective":
+    raise HTTPException(
+      status_code=400,
+      detail="Bucket navigation is only available in subjective mode"
+    )
+  valid_bucket_ids = {bucket.get("id") for bucket in buckets}
+  if bucket_id not in valid_bucket_ids:
+    raise HTTPException(status_code=404, detail="Bucket not found for this problem")
+
+  problem = problem_repo.get_previous_triaged_in_bucket(
+    session_id, problem_number, bucket_id, current_problem_id
+  )
+  if not problem:
+    raise HTTPException(
+      status_code=404,
+      detail=f"No triaged problems found in bucket '{bucket_id}'"
+    )
+
+  counts = problem_repo.get_counts_for_problem_number(session_id, problem_number)
+  total_count = counts["total"]
+  graded_count = counts["graded"]
+  ungraded_blank = counts["ungraded_blank"]
+  ungraded_nonblank = counts["ungraded_nonblank"]
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    session_id, problem_number
+  )
+  untriaged_count = max((total_count - graded_count) - triaged_count, 0)
+  current_index = triaged_count if triaged_count > 0 else 1
+
+  triage_entry = triage_repo.get_for_problem(problem.id)
+  image_data = get_problem_image_data(problem, submission_repo)
+
+  return ProblemResponse(
+    id=problem.id,
+    problem_number=problem.problem_number,
+    submission_id=problem.submission_id,
+    image_data=image_data,
+    score=problem.score,
+    feedback=problem.feedback,
+    graded=problem.graded,
+    max_points=problem.max_points,
+    current_index=current_index,
+    total_count=total_count,
+    ungraded_blank=ungraded_blank,
+    ungraded_nonblank=ungraded_nonblank,
+    is_blank=problem.is_blank,
+    blank_confidence=problem.blank_confidence,
+    blank_method=problem.blank_method,
+    blank_reasoning=problem.blank_reasoning,
+    ai_reasoning=problem.ai_reasoning,
+    has_qr_data=bool(problem.qr_encrypted_data),
+    grading_mode=grading_mode,
+    subjective_triaged=bool(triage_entry),
+    subjective_bucket_id=triage_entry["bucket_id"] if triage_entry else None,
+    subjective_notes=triage_entry["notes"] if triage_entry else None,
+    subjective_triaged_count=triaged_count,
+    subjective_untriaged_count=untriaged_count
+  )
+
+
+@router.get("/{session_id}/{problem_number}/bucket/{bucket_id}/sample",
+            response_model=ProblemResponse)
+async def get_sample_problem_in_bucket(
+  session_id: int,
+  problem_number: int,
+  bucket_id: str,
+  current_user: dict = Depends(require_session_access())
+):
+  """Get a random triaged/ungraded response from one subjective bucket."""
+  problem_repo = ProblemRepository()
+  submission_repo = SubmissionRepository()
+  triage_repo = SubjectiveTriageRepository()
+  session_repo = SessionRepository()
+
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  grading_mode, buckets = _get_subjective_settings(session_id, problem_number)
+  if grading_mode != "subjective":
+    raise HTTPException(
+      status_code=400,
+      detail="Bucket sampling is only available in subjective mode"
+    )
+  valid_bucket_ids = {bucket.get("id") for bucket in buckets}
+  if bucket_id not in valid_bucket_ids:
+    raise HTTPException(status_code=404, detail="Bucket not found for this problem")
+
+  problem = problem_repo.get_random_triaged_in_bucket(
+    session_id, problem_number, bucket_id
+  )
+  if not problem:
+    raise HTTPException(
+      status_code=404,
+      detail=f"No triaged problems found in bucket '{bucket_id}'"
+    )
+
+  counts = problem_repo.get_counts_for_problem_number(session_id, problem_number)
+  total_count = counts["total"]
+  graded_count = counts["graded"]
+  ungraded_blank = counts["ungraded_blank"]
+  ungraded_nonblank = counts["ungraded_nonblank"]
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    session_id, problem_number
+  )
+  untriaged_count = max((total_count - graded_count) - triaged_count, 0)
+  current_index = triaged_count if triaged_count > 0 else 1
+
+  triage_entry = triage_repo.get_for_problem(problem.id)
+  image_data = get_problem_image_data(problem, submission_repo)
+
+  return ProblemResponse(
+    id=problem.id,
+    problem_number=problem.problem_number,
+    submission_id=problem.submission_id,
+    image_data=image_data,
+    score=problem.score,
+    feedback=problem.feedback,
+    graded=problem.graded,
+    max_points=problem.max_points,
+    current_index=current_index,
+    total_count=total_count,
+    ungraded_blank=ungraded_blank,
+    ungraded_nonblank=ungraded_nonblank,
+    is_blank=problem.is_blank,
+    blank_confidence=problem.blank_confidence,
+    blank_method=problem.blank_method,
+    blank_reasoning=problem.blank_reasoning,
+    ai_reasoning=problem.ai_reasoning,
+    has_qr_data=bool(problem.qr_encrypted_data),
+    grading_mode=grading_mode,
+    subjective_triaged=bool(triage_entry),
+    subjective_bucket_id=triage_entry["bucket_id"] if triage_entry else None,
+    subjective_notes=triage_entry["notes"] if triage_entry else None,
+    subjective_triaged_count=triaged_count,
+    subjective_untriaged_count=untriaged_count
   )
 
 
@@ -543,6 +845,10 @@ async def grade_problem(
 
     problem_repo.update_grade(problem_id, score_value, grade.feedback)
 
+  # If this response had a subjective triage assignment, clear it now that
+  # the response is explicitly graded.
+  SubjectiveTriageRepository().clear(problem_id)
+
   # Update statistics after grading
   update_problem_stats(problem.session_id)
 
@@ -575,6 +881,13 @@ async def get_problem(
 
   # Get context counts
   counts = problem_repo.get_counts_for_problem_number(problem.session_id, problem.problem_number)
+  triage_repo = SubjectiveTriageRepository()
+  grading_mode, _ = _get_subjective_settings(problem.session_id, problem.problem_number)
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    problem.session_id, problem.problem_number
+  )
+  untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
+  triage_entry = triage_repo.get_for_problem(problem.id)
 
   # Get image data (extract from PDF if needed)
   image_data = get_problem_image_data(problem, submission_repo)
@@ -594,7 +907,13 @@ async def get_problem(
     blank_method=problem.blank_method,
     blank_reasoning=problem.blank_reasoning,
     ai_reasoning=problem.ai_reasoning,
-    has_qr_data=bool(problem.qr_encrypted_data)
+    has_qr_data=bool(problem.qr_encrypted_data),
+    grading_mode=grading_mode,
+    subjective_triaged=bool(triage_entry),
+    subjective_bucket_id=triage_entry["bucket_id"] if triage_entry else None,
+    subjective_notes=triage_entry["notes"] if triage_entry else None,
+    subjective_triaged_count=triaged_count,
+    subjective_untriaged_count=untriaged_count
   )
 
 
@@ -924,6 +1243,101 @@ async def regenerate_answer(
     raise HTTPException(
       status_code=500,
       detail=f"Unexpected error during answer regeneration: {str(e)}")
+
+
+@router.post("/{problem_id}/subjective-triage")
+async def assign_subjective_triage(
+  problem_id: int,
+  request: SubjectiveTriageSubmission,
+  current_user: dict = Depends(get_current_user)
+):
+  """Assign current response to a subjective grading bucket."""
+  problem_repo = ProblemRepository()
+  triage_repo = SubjectiveTriageRepository()
+
+  problem = problem_repo.get_by_id(problem_id)
+  if not problem:
+    raise HTTPException(status_code=404, detail="Problem not found")
+
+  if current_user["role"] != "instructor":
+    from ..repositories.session_assignment_repository import SessionAssignmentRepository
+    assignment_repo = SessionAssignmentRepository()
+    if not assignment_repo.is_user_assigned(problem.session_id, current_user["user_id"]):
+      raise HTTPException(status_code=403, detail="You do not have access to this grading session")
+
+  grading_mode, buckets = _get_subjective_settings(
+    problem.session_id, problem.problem_number
+  )
+  if grading_mode != "subjective":
+    raise HTTPException(
+      status_code=400,
+      detail="Subjective triage is only available when grading mode is subjective"
+    )
+
+  valid_bucket_ids = {bucket.get("id") for bucket in buckets}
+  if request.bucket_id not in valid_bucket_ids:
+    raise HTTPException(
+      status_code=400,
+      detail=f"Unknown bucket id '{request.bucket_id}' for this problem"
+    )
+
+  triage_repo.upsert(
+    problem_id=problem.id,
+    session_id=problem.session_id,
+    problem_number=problem.problem_number,
+    bucket_id=request.bucket_id,
+    notes=request.notes
+  )
+
+  counts = problem_repo.get_counts_for_problem_number(problem.session_id, problem.problem_number)
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    problem.session_id, problem.problem_number
+  )
+  untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
+
+  return {
+    "status": "triaged",
+    "problem_id": problem_id,
+    "problem_number": problem.problem_number,
+    "bucket_id": request.bucket_id,
+    "triaged_count": triaged_count,
+    "untriaged_count": untriaged_count
+  }
+
+
+@router.delete("/{problem_id}/subjective-triage")
+async def clear_subjective_triage(
+  problem_id: int,
+  current_user: dict = Depends(get_current_user)
+):
+  """Clear subjective triage assignment for a response."""
+  problem_repo = ProblemRepository()
+  triage_repo = SubjectiveTriageRepository()
+
+  problem = problem_repo.get_by_id(problem_id)
+  if not problem:
+    raise HTTPException(status_code=404, detail="Problem not found")
+
+  if current_user["role"] != "instructor":
+    from ..repositories.session_assignment_repository import SessionAssignmentRepository
+    assignment_repo = SessionAssignmentRepository()
+    if not assignment_repo.is_user_assigned(problem.session_id, current_user["user_id"]):
+      raise HTTPException(status_code=403, detail="You do not have access to this grading session")
+
+  triage_repo.clear(problem_id)
+  counts = problem_repo.get_counts_for_problem_number(problem.session_id, problem.problem_number)
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    problem.session_id, problem.problem_number
+  )
+  untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
+
+  return {
+    "status": "cleared",
+    "problem_id": problem_id,
+    "problem_number": problem.problem_number,
+    "triaged_count": triaged_count,
+    "untriaged_count": untriaged_count
+  }
 
 
 @router.post("/{problem_id}/manual-qr")

@@ -308,6 +308,28 @@ class ProblemRepository(BaseRepository[Problem]):
         (session_id, problem_number)
       )
 
+  def get_next_ungraded_untriaged(self, session_id: int,
+                                  problem_number: int) -> Optional[Problem]:
+    """
+    Get next ungraded problem with no subjective triage assignment.
+
+    Used for subjective grading flow where responses are first bucketed.
+    """
+    with self._get_connection() as conn:
+      return self._execute_and_fetch_one(
+        conn,
+        """
+        SELECT p.*
+        FROM problems p
+        LEFT JOIN subjective_triage st ON st.problem_id = p.id
+        WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
+          AND st.problem_id IS NULL
+        ORDER BY p.is_blank ASC, RANDOM()
+        LIMIT 1
+        """,
+        (session_id, problem_number)
+      )
+
   def get_previous_graded(self, session_id: int, problem_number: int) -> Optional[Problem]:
     """
     Get most recently graded problem for a problem number.
@@ -331,6 +353,107 @@ class ProblemRepository(BaseRepository[Problem]):
         LIMIT 1
         """,
         (session_id, problem_number)
+      )
+
+  def get_previous_triaged(self, session_id: int,
+                           problem_number: int) -> Optional[Problem]:
+    """Get most recently triaged (but not graded) problem for a problem number."""
+    with self._get_connection() as conn:
+      return self._execute_and_fetch_one(
+        conn,
+        """
+        SELECT p.*
+        FROM problems p
+        JOIN subjective_triage st ON st.problem_id = p.id
+        WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
+        ORDER BY st.updated_at DESC
+        LIMIT 1
+        """,
+        (session_id, problem_number)
+      )
+
+  def get_next_triaged_in_bucket(self, session_id: int, problem_number: int,
+                                 bucket_id: str,
+                                 current_problem_id: Optional[int] = None) -> Optional[Problem]:
+    """Get next triaged/ungraded response within a specific subjective bucket."""
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+
+      if current_problem_id is not None:
+        cursor.execute("""
+          SELECT p.*
+          FROM problems p
+          JOIN subjective_triage st ON st.problem_id = p.id
+          WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
+            AND st.bucket_id = ? AND p.id > ?
+          ORDER BY p.id ASC
+          LIMIT 1
+        """, (session_id, problem_number, bucket_id, current_problem_id))
+        row = cursor.fetchone()
+        if row:
+          return self._row_to_domain(row)
+
+      cursor.execute("""
+        SELECT p.*
+        FROM problems p
+        JOIN subjective_triage st ON st.problem_id = p.id
+        WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
+          AND st.bucket_id = ?
+        ORDER BY p.id ASC
+        LIMIT 1
+      """, (session_id, problem_number, bucket_id))
+      row = cursor.fetchone()
+      return self._row_to_domain(row) if row else None
+
+  def get_previous_triaged_in_bucket(self, session_id: int, problem_number: int,
+                                     bucket_id: str,
+                                     current_problem_id: Optional[int] = None) -> Optional[Problem]:
+    """Get previous triaged/ungraded response within a specific subjective bucket."""
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+
+      if current_problem_id is not None:
+        cursor.execute("""
+          SELECT p.*
+          FROM problems p
+          JOIN subjective_triage st ON st.problem_id = p.id
+          WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
+            AND st.bucket_id = ? AND p.id < ?
+          ORDER BY p.id DESC
+          LIMIT 1
+        """, (session_id, problem_number, bucket_id, current_problem_id))
+        row = cursor.fetchone()
+        if row:
+          return self._row_to_domain(row)
+
+      cursor.execute("""
+        SELECT p.*
+        FROM problems p
+        JOIN subjective_triage st ON st.problem_id = p.id
+        WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
+          AND st.bucket_id = ?
+        ORDER BY p.id DESC
+        LIMIT 1
+      """, (session_id, problem_number, bucket_id))
+      row = cursor.fetchone()
+      return self._row_to_domain(row) if row else None
+
+  def get_random_triaged_in_bucket(self, session_id: int, problem_number: int,
+                                   bucket_id: str) -> Optional[Problem]:
+    """Get a random triaged/ungraded response from one subjective bucket."""
+    with self._get_connection() as conn:
+      return self._execute_and_fetch_one(
+        conn,
+        """
+        SELECT p.*
+        FROM problems p
+        JOIN subjective_triage st ON st.problem_id = p.id
+        WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
+          AND st.bucket_id = ?
+        ORDER BY RANDOM()
+        LIMIT 1
+        """,
+        (session_id, problem_number, bucket_id)
       )
 
   def update_grade(self, problem_id: int, score: float,
@@ -379,6 +502,44 @@ class ProblemRepository(BaseRepository[Problem]):
             blank_reasoning = 'Manually marked as blank by grader (dash in score field)'
         WHERE id = ?
       """, (feedback, problem_id))
+
+  def bulk_grade(self, problem_ids: List[int], score: float,
+                 feedback: Optional[str] = None,
+                 ai_reasoning: Optional[str] = None) -> int:
+    """
+    Apply the same numeric grade to many problem rows.
+
+    Returns number of rows updated.
+    """
+    if not problem_ids:
+      return 0
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      placeholders = ",".join("?" for _ in problem_ids)
+      cursor.execute(f"""
+        UPDATE problems
+        SET score = ?, feedback = ?, ai_reasoning = ?,
+            graded = 1, graded_at = CURRENT_TIMESTAMP
+        WHERE id IN ({placeholders})
+      """, (score, feedback, ai_reasoning, *problem_ids))
+      return int(cursor.rowcount or 0)
+
+  def bulk_ungrade(self, problem_ids: List[int]) -> int:
+    """Reopen graded problems by clearing score/feedback and graded flags."""
+    if not problem_ids:
+      return 0
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      placeholders = ",".join("?" for _ in problem_ids)
+      cursor.execute(f"""
+        UPDATE problems
+        SET score = NULL,
+            feedback = NULL,
+            graded = 0,
+            graded_at = NULL
+        WHERE id IN ({placeholders})
+      """, tuple(problem_ids))
+      return int(cursor.rowcount or 0)
 
   def update_transcription(self, problem_id: int, transcription: str, model: str) -> None:
     """

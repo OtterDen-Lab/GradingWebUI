@@ -11,6 +11,19 @@ const regeneratedAnswerCache = new Map();
 const regeneratedAnswerRequests = new Map();
 const MAX_REGENERATED_ANSWER_CACHE = 200;
 const regenerationSessionPrefetchStarted = new Set();
+const subjectiveSettingsByProblem = new Map();
+let currentSubjectiveSettings = null;
+let selectedSubjectiveBucketId = null;
+let activeSubjectiveBucketFilter = '';
+let subjectiveAssignInFlight = false;
+
+const DEFAULT_SUBJECTIVE_BUCKETS = [
+    { id: 'perfect', label: 'Perfect', color: '#16a34a' },
+    { id: 'excellent', label: 'Excellent', color: '#22c55e' },
+    { id: 'good', label: 'Good', color: '#3b82f6' },
+    { id: 'passable', label: 'Passable', color: '#f59e0b' },
+    { id: 'poor_blank', label: 'Poor/Blank', color: '#ef4444' }
+];
 
 function cacheRegeneratedAnswer(problemId, data) {
     regeneratedAnswerCache.set(problemId, data);
@@ -172,6 +185,453 @@ function updateMaxPointsDropdown() {
     scoreInput.max = maxPoints;
 }
 
+function cloneDefaultSubjectiveBuckets() {
+    return DEFAULT_SUBJECTIVE_BUCKETS.map((bucket) => ({ ...bucket }));
+}
+
+function sanitizeSubjectiveBucketId(label, fallbackIndex = 1) {
+    const slug = (label || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    return slug || `bucket_${fallbackIndex}`;
+}
+
+function getCurrentProblemMaxPoints() {
+    const maxPointsInput = document.getElementById('max-points-input');
+    const fromInput = parseFloat(maxPointsInput?.value || '');
+    if (!Number.isNaN(fromInput) && fromInput > 0) {
+        return fromInput;
+    }
+    const fromCache = parseFloat(problemMaxPoints[currentProblemNumber]);
+    if (!Number.isNaN(fromCache) && fromCache > 0) {
+        return fromCache;
+    }
+    return 8;
+}
+
+async function loadSubjectiveSettings(problemNumber, force = false) {
+    if (!currentSession || !problemNumber) return null;
+    if (!force && subjectiveSettingsByProblem.has(problemNumber)) {
+        currentSubjectiveSettings = subjectiveSettingsByProblem.get(problemNumber);
+        return currentSubjectiveSettings;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/subjective-settings/${problemNumber}`);
+        if (!response.ok) {
+            const message = await response.text();
+            throw new Error(`Failed to load subjective settings: ${message}`);
+        }
+        const payload = await response.json();
+        const settings = {
+            problem_number: problemNumber,
+            grading_mode: payload.grading_mode || 'calculation',
+            buckets: Array.isArray(payload.buckets) && payload.buckets.length > 0 ? payload.buckets : cloneDefaultSubjectiveBuckets(),
+            bucket_usage: payload.bucket_usage || {},
+            triaged_count: payload.triaged_count || 0,
+            finalized_count: payload.finalized_count || 0,
+            untriaged_count: payload.untriaged_count || 0,
+            total_count: payload.total_count || 0
+        };
+        subjectiveSettingsByProblem.set(problemNumber, settings);
+        currentSubjectiveSettings = settings;
+        return settings;
+    } catch (error) {
+        console.error('Failed to load subjective settings:', error);
+        const fallback = {
+            problem_number: problemNumber,
+            grading_mode: 'calculation',
+            buckets: cloneDefaultSubjectiveBuckets(),
+            bucket_usage: {},
+            triaged_count: 0,
+            finalized_count: 0,
+            untriaged_count: 0,
+            total_count: 0
+        };
+        subjectiveSettingsByProblem.set(problemNumber, fallback);
+        currentSubjectiveSettings = fallback;
+        return fallback;
+    }
+}
+
+function getCurrentSubjectiveSettings() {
+    if (!currentSubjectiveSettings || Number(currentSubjectiveSettings.problem_number) !== Number(currentProblemNumber)) {
+        const cached = subjectiveSettingsByProblem.get(Number(currentProblemNumber));
+        if (cached) {
+            currentSubjectiveSettings = cached;
+        }
+    }
+    return currentSubjectiveSettings;
+}
+
+function renderSubjectiveBucketButtons() {
+    const container = document.getElementById('subjective-bucket-buttons');
+    const settings = getCurrentSubjectiveSettings();
+    if (!container) return;
+
+    container.innerHTML = '';
+    if (!settings || !Array.isArray(settings.buckets)) return;
+
+    settings.buckets.forEach((bucket) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'subjective-bucket-btn';
+        if (selectedSubjectiveBucketId === bucket.id) {
+            button.classList.add('selected');
+        }
+        if (bucket.color) {
+            button.style.borderColor = bucket.color;
+            if (selectedSubjectiveBucketId === bucket.id) {
+                button.style.boxShadow = `0 0 0 2px ${bucket.color}33`;
+            }
+        }
+        const usage = Number(settings.bucket_usage?.[bucket.id] || 0);
+        button.textContent = usage > 0 ? `${bucket.label} (${usage})` : bucket.label;
+        button.onclick = async () => {
+            selectedSubjectiveBucketId = bucket.id;
+            renderSubjectiveBucketButtons();
+            if (settings.grading_mode === 'subjective' && currentProblem && !currentProblem.graded) {
+                await submitSubjectiveTriage({ triggeredByBucketClick: true });
+            }
+        };
+        container.appendChild(button);
+    });
+}
+
+function renderSubjectiveBucketFilter() {
+    const select = document.getElementById('subjective-view-filter');
+    const settings = getCurrentSubjectiveSettings();
+    if (!select || !settings) return;
+
+    const previous = activeSubjectiveBucketFilter || '';
+    select.innerHTML = '';
+
+    const allOption = document.createElement('option');
+    allOption.value = '';
+    allOption.textContent = 'All (normal flow)';
+    select.appendChild(allOption);
+
+    settings.buckets.forEach((bucket) => {
+        const usage = Number(settings.bucket_usage?.[bucket.id] || 0);
+        if (usage <= 0) return;
+        const option = document.createElement('option');
+        option.value = bucket.id;
+        option.textContent = `${bucket.label} (${usage})`;
+        select.appendChild(option);
+    });
+
+    const hasPrevious = [...select.options].some((opt) => opt.value === previous);
+    activeSubjectiveBucketFilter = hasPrevious ? previous : '';
+    select.value = activeSubjectiveBucketFilter;
+}
+
+function renderSubjectiveBucketHistogram() {
+    const container = document.getElementById('subjective-bucket-histogram');
+    const settings = getCurrentSubjectiveSettings();
+    if (!container || !settings || settings.grading_mode !== 'subjective') {
+        if (container) container.innerHTML = '';
+        return;
+    }
+
+    const buckets = settings.buckets || [];
+    const usage = settings.bucket_usage || {};
+    const triagedTotal = Math.max(Number(settings.triaged_count || 0), 0);
+    const untriaged = Math.max(Number(settings.untriaged_count || 0), 0);
+    const maxBucketCount = Math.max(
+        1,
+        ...buckets.map((bucket) => Number(usage[bucket.id] || 0))
+    );
+    const canAssignFromHistogram = Boolean(
+        settings.grading_mode === 'subjective' &&
+        currentProblem &&
+        !currentProblem.graded
+    );
+
+    container.innerHTML = '';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size: 12px; color: var(--gray-700); margin-bottom: 6px; font-weight: 600;';
+    title.textContent = canAssignFromHistogram
+        ? 'Bucket Distribution (click row to assign)'
+        : 'Bucket Distribution (triaged responses)';
+    container.appendChild(title);
+
+    buckets.forEach((bucket) => {
+        const count = Number(usage[bucket.id] || 0);
+        const relativePct = (count / maxBucketCount) * 100;
+        const sharePct = triagedTotal > 0 ? (count / triagedTotal) * 100 : 0;
+
+        const row = document.createElement('div');
+        row.className = 'subjective-histogram-row';
+        if (canAssignFromHistogram) {
+            row.classList.add('clickable');
+        }
+        if (selectedSubjectiveBucketId === bucket.id) {
+            row.classList.add('selected');
+        }
+        row.dataset.bucketId = bucket.id;
+
+        const label = document.createElement('div');
+        label.textContent = `${bucket.label} (${sharePct.toFixed(0)}%)`;
+
+        const track = document.createElement('div');
+        track.className = 'subjective-histogram-track';
+        const fill = document.createElement('div');
+        fill.className = 'subjective-histogram-fill';
+        fill.style.width = `${Math.max(0, Math.min(100, relativePct))}%`;
+        if (bucket.color) fill.style.background = bucket.color;
+        track.appendChild(fill);
+
+        const value = document.createElement('div');
+        value.style.textAlign = 'right';
+        value.textContent = String(count);
+
+        row.appendChild(label);
+        row.appendChild(track);
+        row.appendChild(value);
+
+        if (canAssignFromHistogram) {
+            row.onclick = async () => {
+                selectedSubjectiveBucketId = bucket.id;
+                renderSubjectiveBucketHistogram();
+                await submitSubjectiveTriage({ triggeredByBucketClick: true });
+            };
+        }
+
+        container.appendChild(row);
+    });
+
+    if (untriaged > 0) {
+        const remaining = document.createElement('div');
+        remaining.style.cssText = 'margin-top: 4px; font-size: 12px; color: var(--gray-700);';
+        remaining.textContent = `Remaining untriaged: ${untriaged}`;
+        container.appendChild(remaining);
+    }
+}
+
+function renderSubjectiveBucketEditor() {
+    const editor = document.getElementById('subjective-bucket-editor');
+    const settings = getCurrentSubjectiveSettings();
+    if (!editor || !settings) return;
+
+    editor.innerHTML = '';
+    settings.buckets.forEach((bucket, index) => {
+        const row = document.createElement('div');
+        row.className = 'subjective-bucket-row';
+        row.dataset.bucketId = bucket.id;
+
+        const labelInput = document.createElement('input');
+        labelInput.type = 'text';
+        labelInput.value = bucket.label || '';
+        labelInput.placeholder = 'Bucket label';
+
+        const colorInput = document.createElement('input');
+        colorInput.type = 'text';
+        colorInput.value = bucket.color || '';
+        colorInput.placeholder = '#hex color';
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn btn-secondary btn-small';
+        removeBtn.textContent = 'Remove';
+        removeBtn.onclick = () => {
+            settings.buckets.splice(index, 1);
+            if (selectedSubjectiveBucketId === bucket.id) {
+                selectedSubjectiveBucketId = null;
+            }
+            renderSubjectiveBucketEditor();
+            renderSubjectiveBucketButtons();
+        };
+
+        row.appendChild(labelInput);
+        row.appendChild(colorInput);
+        row.appendChild(removeBtn);
+        editor.appendChild(row);
+    });
+}
+
+function collectBucketsFromEditor() {
+    const editor = document.getElementById('subjective-bucket-editor');
+    if (!editor) return [];
+    const rows = [...editor.querySelectorAll('.subjective-bucket-row')];
+    const usedIds = new Set();
+
+    return rows.map((row, idx) => {
+        const labelInput = row.querySelector('input[type="text"]');
+        const colorInput = row.querySelectorAll('input[type="text"]')[1];
+        const label = (labelInput?.value || '').trim();
+        let bucketId = (row.dataset.bucketId || '').trim();
+        if (!bucketId) {
+            bucketId = sanitizeSubjectiveBucketId(label, idx + 1);
+        }
+        while (usedIds.has(bucketId)) {
+            bucketId = `${bucketId}_${idx + 1}`;
+        }
+        usedIds.add(bucketId);
+        row.dataset.bucketId = bucketId;
+        return {
+            id: bucketId,
+            label: label || `Bucket ${idx + 1}`,
+            color: (colorInput?.value || '').trim() || null
+        };
+    });
+}
+
+async function saveSubjectiveSettings() {
+    const settings = getCurrentSubjectiveSettings();
+    if (!settings || !currentSession || !currentProblemNumber) return;
+
+    let buckets = collectBucketsFromEditor();
+    // When switching into subjective mode, the editor may not be rendered yet.
+    // Fall back to in-memory settings/defaults so mode toggle can persist cleanly.
+    if (buckets.length === 0) {
+        if (Array.isArray(settings.buckets) && settings.buckets.length > 0) {
+            buckets = settings.buckets.map((bucket, index) => ({
+                id: bucket.id || sanitizeSubjectiveBucketId(bucket.label || '', index + 1),
+                label: (bucket.label || '').trim() || `Bucket ${index + 1}`,
+                color: (bucket.color || null)
+            }));
+        } else if (settings.grading_mode === 'subjective') {
+            buckets = cloneDefaultSubjectiveBuckets();
+        }
+    }
+    if (buckets.length === 0 && settings.grading_mode === 'subjective') {
+        alert('At least one bucket is required in subjective mode. Open "Manage Buckets" to add one.');
+        return;
+    }
+
+    const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/subjective-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            problem_number: Number(currentProblemNumber),
+            grading_mode: settings.grading_mode,
+            buckets
+        })
+    });
+
+    let payload = null;
+    try {
+        payload = await response.json();
+    } catch (_error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        throw new Error(payload?.detail || 'Failed to save subjective settings');
+    }
+
+    const updated = {
+        problem_number: Number(currentProblemNumber),
+        grading_mode: payload.grading_mode || settings.grading_mode,
+        buckets: payload.buckets || buckets,
+        bucket_usage: payload.bucket_usage || {},
+        triaged_count: payload.triaged_count || 0,
+        finalized_count: payload.finalized_count || 0,
+        untriaged_count: payload.untriaged_count || 0,
+        total_count: payload.total_count || settings.total_count || 0
+    };
+    subjectiveSettingsByProblem.set(Number(currentProblemNumber), updated);
+    currentSubjectiveSettings = updated;
+
+    if (selectedSubjectiveBucketId && !updated.buckets.some((b) => b.id === selectedSubjectiveBucketId)) {
+        selectedSubjectiveBucketId = null;
+    }
+    renderSubjectiveBucketEditor();
+    renderSubjectiveBucketButtons();
+    renderSubjectiveBucketFilter();
+    renderSubjectiveBucketHistogram();
+    updateSubjectiveFinalizeButton();
+}
+
+function applyGradingModeUI() {
+    const settings = getCurrentSubjectiveSettings();
+    const gradingModeSelect = document.getElementById('grading-mode-select');
+    const calculationRow = document.getElementById('calculation-input-row');
+    const subjectivePanel = document.getElementById('subjective-grading-panel');
+    const submitGradeBtn = document.getElementById('submit-grade-btn');
+    const subjectiveAssignBtn = document.getElementById('subjective-assign-btn');
+    const subjectiveClearBtn = document.getElementById('subjective-clear-btn');
+    const subjectiveFinalizeBtn = document.getElementById('subjective-finalize-btn');
+    const subjectiveReopenBtn = document.getElementById('subjective-reopen-btn');
+
+    const isSubjective = settings?.grading_mode === 'subjective';
+    if (gradingModeSelect) {
+        gradingModeSelect.value = isSubjective ? 'subjective' : 'calculation';
+    }
+    if (calculationRow) {
+        calculationRow.style.display = isSubjective ? 'none' : 'flex';
+    }
+    if (subjectivePanel) {
+        subjectivePanel.style.display = isSubjective ? 'block' : 'none';
+    }
+    if (submitGradeBtn) {
+        submitGradeBtn.style.display = isSubjective ? 'none' : 'inline-block';
+    }
+    if (subjectiveAssignBtn) {
+        subjectiveAssignBtn.style.display = isSubjective ? 'inline-block' : 'none';
+    }
+    if (subjectiveClearBtn) {
+        subjectiveClearBtn.style.display = isSubjective ? 'inline-block' : 'none';
+    }
+    if (subjectiveFinalizeBtn && !isSubjective) {
+        subjectiveFinalizeBtn.style.display = 'none';
+    }
+    if (subjectiveReopenBtn && !isSubjective) {
+        subjectiveReopenBtn.style.display = 'none';
+    }
+
+    if (isSubjective) {
+        renderSubjectiveBucketButtons();
+        renderSubjectiveBucketFilter();
+        renderSubjectiveBucketHistogram();
+        renderSubjectiveBucketEditor();
+    }
+    updateSubjectiveFinalizeButton();
+}
+
+function updateSubjectiveFinalizeButton() {
+    const finalizeBtn = document.getElementById('subjective-finalize-btn');
+    const reopenBtn = document.getElementById('subjective-reopen-btn');
+    const settings = getCurrentSubjectiveSettings();
+    if (!finalizeBtn || !reopenBtn) return;
+
+    if (!settings || settings.grading_mode !== 'subjective') {
+        finalizeBtn.style.display = 'none';
+        finalizeBtn.disabled = true;
+        finalizeBtn.title = '';
+        reopenBtn.style.display = 'none';
+        reopenBtn.disabled = true;
+        reopenBtn.title = '';
+        return;
+    }
+
+    const untriagedCount = Number(settings.untriaged_count || 0);
+    const triagedCount = Number(settings.triaged_count || 0);
+    const finalizedCount = Number(settings.finalized_count || 0);
+    const canFinalize = untriagedCount === 0 && triagedCount > 0;
+    const canReopen = finalizedCount > 0;
+
+    finalizeBtn.style.display = canFinalize ? 'inline-block' : 'none';
+    finalizeBtn.disabled = !canFinalize;
+    if (untriagedCount > 0) {
+        finalizeBtn.title = `${untriagedCount} responses still need bucket assignments`;
+    } else if (triagedCount === 0) {
+        finalizeBtn.title = 'No triaged responses to finalize';
+    } else {
+        finalizeBtn.title = '';
+    }
+
+    reopenBtn.style.display = canReopen ? 'inline-block' : 'none';
+    reopenBtn.disabled = !canReopen;
+    if (canReopen) {
+        reopenBtn.title = `${finalizedCount} finalized responses can be reopened`;
+    } else {
+        reopenBtn.title = '';
+    }
+}
+
 // Load available problem numbers
 async function loadProblemNumbers() {
     try {
@@ -216,9 +676,15 @@ async function loadProblemNumbers() {
         });
 
         currentProblemNumber = availableProblemNumbers[0] || 1;
+        activeSubjectiveBucketFilter = '';
         select.value = currentProblemNumber;
+        await loadSubjectiveSettings(currentProblemNumber, true);
+        applyGradingModeUI();
         select.onchange = async () => {
             currentProblemNumber = parseInt(select.value);
+            activeSubjectiveBucketFilter = '';
+            await loadSubjectiveSettings(currentProblemNumber, true);
+            applyGradingModeUI();
             updateMaxPointsDropdown();
             await updateOverallProgress(); // Update progress bar when changing problems
             await loadProblemOrMostRecent();
@@ -351,6 +817,10 @@ function setupScoreSync() {
 // Setup grading controls
 function setupGradingControls() {
     document.getElementById('submit-grade-btn').onclick = submitGrade;
+    document.getElementById('subjective-assign-btn').onclick = submitSubjectiveTriage;
+    document.getElementById('subjective-clear-btn').onclick = clearSubjectiveTriage;
+    document.getElementById('subjective-finalize-btn').onclick = openSubjectiveFinalizeDialog;
+    document.getElementById('subjective-reopen-btn').onclick = submitSubjectiveReopen;
     document.getElementById('next-problem-btn').onclick = loadNextProblem;
     document.getElementById('back-problem-btn').onclick = loadPreviousProblem;
     document.getElementById('view-stats-btn').onclick = () => {
@@ -398,6 +868,79 @@ function setupGradingControls() {
         }
     });
 
+    const gradingModeSelect = document.getElementById('grading-mode-select');
+    gradingModeSelect.addEventListener('change', async (e) => {
+        const mode = e.target.value === 'subjective' ? 'subjective' : 'calculation';
+        const settings = getCurrentSubjectiveSettings() || {
+            problem_number: Number(currentProblemNumber),
+            grading_mode: mode,
+            buckets: cloneDefaultSubjectiveBuckets(),
+            bucket_usage: {}
+        };
+        settings.grading_mode = mode;
+        if (mode === 'subjective' && (!Array.isArray(settings.buckets) || settings.buckets.length === 0)) {
+            settings.buckets = cloneDefaultSubjectiveBuckets();
+        }
+        currentSubjectiveSettings = settings;
+        subjectiveSettingsByProblem.set(Number(currentProblemNumber), settings);
+        applyGradingModeUI();
+
+        try {
+            await saveSubjectiveSettings();
+            await loadSubjectiveSettings(Number(currentProblemNumber), true);
+            applyGradingModeUI();
+            await loadProblemOrMostRecent();
+        } catch (error) {
+            console.error('Failed to save grading mode:', error);
+            alert(error.message || 'Failed to save grading mode');
+            await loadSubjectiveSettings(Number(currentProblemNumber), true);
+            applyGradingModeUI();
+        }
+    });
+
+    document.getElementById('subjective-add-bucket-btn').addEventListener('click', () => {
+        const settings = getCurrentSubjectiveSettings();
+        if (!settings) return;
+        const nextIndex = settings.buckets.length + 1;
+        settings.buckets.push({
+            id: `bucket_${Date.now()}_${nextIndex}`,
+            label: `Bucket ${nextIndex}`,
+            color: null
+        });
+        renderSubjectiveBucketEditor();
+        renderSubjectiveBucketButtons();
+    });
+
+    document.getElementById('subjective-save-settings-btn').addEventListener('click', async () => {
+        try {
+            await saveSubjectiveSettings();
+            showNotification('Subjective bucket settings saved.');
+        } catch (error) {
+            console.error('Failed to save subjective settings:', error);
+            alert(error.message || 'Failed to save subjective settings');
+        }
+    });
+
+    const subjectiveFilterSelect = document.getElementById('subjective-view-filter');
+    if (subjectiveFilterSelect) {
+        subjectiveFilterSelect.addEventListener('change', async (e) => {
+            activeSubjectiveBucketFilter = e.target.value || '';
+            if (!activeSubjectiveBucketFilter) {
+                await loadProblemOrMostRecent();
+                return;
+            }
+            try {
+                await loadProblemFromActiveBucketFilter('next', true);
+            } catch (error) {
+                console.error('Failed to apply bucket filter:', error);
+                alert('Failed to load filtered responses: ' + error.message);
+            }
+        });
+    }
+
+    document.getElementById('subjective-finalize-cancel-btn').onclick = closeSubjectiveFinalizeDialog;
+    document.getElementById('subjective-finalize-confirm-btn').onclick = submitSubjectiveFinalize;
+
     // Keyboard shortcuts
     document.addEventListener('keydown', handleGradingKeyboard);
 }
@@ -432,6 +975,11 @@ function handleGradingKeyboard(e) {
         return;
     }
 
+    const subjectiveFinalizeDialog = document.getElementById('subjective-finalize-dialog');
+    if (subjectiveFinalizeDialog && subjectiveFinalizeDialog.style.display === 'flex') {
+        return;
+    }
+
     // Don't handle if typing in textarea
     if (e.target.tagName === 'TEXTAREA') {
         return;
@@ -440,7 +988,11 @@ function handleGradingKeyboard(e) {
     // Enter key - submit and move to next
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        submitGrade();
+        if (getCurrentSubjectiveSettings()?.grading_mode === 'subjective') {
+            submitSubjectiveTriage();
+        } else {
+            submitGrade();
+        }
     }
 
     // Number keys 0-9 or dash (-) - quick score entry (but not when typing in rubric table or other inputs)
@@ -489,16 +1041,34 @@ function displayCurrentProblem() {
 
     // Update progress with blank count
     let progressText = `${currentProblem.current_index} / ${currentProblem.total_count}`;
-
-    // Add blank info if there are ungraded blanks
-    if (currentProblem.ungraded_blank > 0 || currentProblem.ungraded_nonblank > 0) {
-        const remaining = currentProblem.ungraded_blank + currentProblem.ungraded_nonblank;
+    if (currentProblem.grading_mode === 'subjective') {
+        progressText = `${currentProblem.subjective_triaged_count} triaged / ${currentProblem.total_count}`;
+        if (currentProblem.subjective_untriaged_count > 0) {
+            progressText += ` (${currentProblem.subjective_untriaged_count} remaining)`;
+        }
+    } else if (currentProblem.ungraded_blank > 0 || currentProblem.ungraded_nonblank > 0) {
         if (currentProblem.ungraded_blank > 0) {
             progressText += ` (${currentProblem.ungraded_blank} blank)`;
         }
     }
 
+    const settings = getCurrentSubjectiveSettings();
+    if (settings) {
+        settings.grading_mode = currentProblem.grading_mode || settings.grading_mode || 'calculation';
+        settings.triaged_count = currentProblem.subjective_triaged_count || 0;
+        settings.untriaged_count = currentProblem.subjective_untriaged_count || 0;
+        settings.total_count = currentProblem.total_count || settings.total_count || 0;
+        subjectiveSettingsByProblem.set(Number(currentProblemNumber), settings);
+        currentSubjectiveSettings = settings;
+    }
+    selectedSubjectiveBucketId = currentProblem.subjective_bucket_id || null;
+    const subjectiveNotesInput = document.getElementById('subjective-notes-input');
+    if (subjectiveNotesInput) {
+        subjectiveNotesInput.value = currentProblem.subjective_notes || '';
+    }
+
     document.getElementById('grading-progress').textContent = progressText;
+    applyGradingModeUI();
 
     // Update max points from cache
     updateMaxPointsDropdown();
@@ -634,6 +1204,11 @@ function displayCurrentProblem() {
 // Load problem for current problem number (ungraded if available, otherwise most recent)
 async function loadProblemOrMostRecent() {
     try {
+        if (shouldUseSubjectiveBucketFilter()) {
+            const loaded = await loadProblemFromActiveBucketFilter('next', true);
+            if (loaded) return;
+        }
+
         // Try to load next ungraded problem first
         const nextResponse = await fetch(
             `${API_BASE}/problems/${currentSession.id}/${currentProblemNumber}/next`
@@ -642,6 +1217,7 @@ async function loadProblemOrMostRecent() {
         if (nextResponse.ok) {
             // Found an ungraded problem, load it directly
             currentProblem = await nextResponse.json();
+            await loadSubjectiveSettings(currentProblemNumber, true);
             addToHistory(currentProblem);
             displayCurrentProblem();
         } else if (nextResponse.status === 404) {
@@ -652,6 +1228,7 @@ async function loadProblemOrMostRecent() {
 
             if (prevResponse.ok) {
                 currentProblem = await prevResponse.json();
+                await loadSubjectiveSettings(currentProblemNumber, true);
                 addToHistory(currentProblem);
                 displayCurrentProblem();
             } else {
@@ -662,6 +1239,43 @@ async function loadProblemOrMostRecent() {
         console.error('Failed to load problem:', error);
         alert('Failed to load problem: ' + error.message);
     }
+}
+
+function shouldUseSubjectiveBucketFilter() {
+    const settings = getCurrentSubjectiveSettings();
+    return Boolean(
+        settings &&
+        settings.grading_mode === 'subjective' &&
+        activeSubjectiveBucketFilter
+    );
+}
+
+async function loadProblemFromActiveBucketFilter(direction = 'next', reset = false) {
+    if (!currentSession || !currentProblemNumber || !activeSubjectiveBucketFilter) return false;
+
+    const endpoint = direction === 'previous' ? 'previous' : 'next';
+    const params = new URLSearchParams();
+    if (!reset && currentProblem?.id) {
+        params.set('current_problem_id', String(currentProblem.id));
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const url = `${API_BASE}/problems/${currentSession.id}/${currentProblemNumber}/bucket/${encodeURIComponent(activeSubjectiveBucketFilter)}/${endpoint}${query}`;
+
+    const response = await fetch(url);
+    if (response.status === 404) {
+        showNotification(`No responses found in bucket "${activeSubjectiveBucketFilter}" for this problem.`);
+        return false;
+    }
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to load bucket-filtered response');
+    }
+
+    currentProblem = await response.json();
+    await loadSubjectiveSettings(currentProblemNumber, true);
+    addToHistory(currentProblem);
+    displayCurrentProblem();
+    return true;
 }
 
 // Add problem to history
@@ -684,10 +1298,43 @@ function addToHistory(problem) {
 
 // Load previous problem from history
 async function loadPreviousProblem() {
+    if (shouldUseSubjectiveBucketFilter()) {
+        try {
+            await loadProblemFromActiveBucketFilter('previous', false);
+        } catch (error) {
+            console.error('Failed to load previous bucket-filtered problem:', error);
+            alert('Failed to load previous problem: ' + error.message);
+        }
+        return;
+    }
+
     if (historyIndex > 0) {
         // Go back in history
         historyIndex--;
-        currentProblem = problemHistory[historyIndex];
+        const cachedProblem = problemHistory[historyIndex];
+        currentProblem = cachedProblem;
+
+        // History snapshots can be stale (e.g., after grading/feedback edits).
+        // Refresh from API so Back always shows the latest saved state.
+        if (cachedProblem && cachedProblem.id) {
+            try {
+                const freshResponse = await fetch(`${API_BASE}/problems/${cachedProblem.id}`);
+                if (freshResponse.ok) {
+                    const freshProblem = await freshResponse.json();
+                    problemHistory[historyIndex] = freshProblem;
+                    currentProblem = freshProblem;
+                }
+            } catch (error) {
+                console.warn('Failed to refresh historical problem state, using cached snapshot:', error);
+            }
+        }
+
+        if (currentProblem && currentProblem.problem_number) {
+            currentProblemNumber = currentProblem.problem_number;
+            document.getElementById('problem-select').value = currentProblemNumber;
+            await loadSubjectiveSettings(currentProblemNumber, true);
+            applyGradingModeUI();
+        }
         displayCurrentProblem();
     } else {
         alert('No more previous problems in history');
@@ -712,14 +1359,49 @@ async function findNextUngradedProblem() {
     return null; // No ungraded problems found
 }
 
+async function maybeOfferSubjectiveFinalizeForCurrentProblem() {
+    const settings = await loadSubjectiveSettings(Number(currentProblemNumber), true);
+    if (!settings || settings.grading_mode !== 'subjective') {
+        return false;
+    }
+
+    const untriagedCount = Number(settings.untriaged_count || 0);
+    const triagedCount = Number(settings.triaged_count || 0);
+    const canFinalizeNow = untriagedCount === 0 && triagedCount > 0;
+    if (!canFinalizeNow) {
+        return false;
+    }
+
+    applyGradingModeUI();
+    const shouldFinalizeNow = confirm(
+        `All responses for Problem ${currentProblemNumber} are bucketed.\n\n` +
+        `Finalize subjective scores now?`
+    );
+    if (shouldFinalizeNow) {
+        await openSubjectiveFinalizeDialog();
+        return true;
+    }
+    return false;
+}
+
 // Load next ungraded problem
 async function loadNextProblem() {
     try {
+        if (shouldUseSubjectiveBucketFilter()) {
+            await loadProblemFromActiveBucketFilter('next', false);
+            return;
+        }
+
         const response = await fetch(
             `${API_BASE}/problems/${currentSession.id}/${currentProblemNumber}/next`
         );
 
         if (response.status === 404) {
+            const finalizeHandled = await maybeOfferSubjectiveFinalizeForCurrentProblem();
+            if (finalizeHandled) {
+                return;
+            }
+
             // No more problems for this number
             // Find next ungraded problem number across all problems
             const nextUngradedProblem = await findNextUngradedProblem();
@@ -729,9 +1411,11 @@ async function loadNextProblem() {
                 if (lastGradedProblemNumber === currentProblemNumber) {
                     // Show notification if we just graded something
                     lastGradedProblemNumber = null;
-                    showNotification(`All submissions for Problem ${currentProblemNumber} are graded! Moving to Problem ${nextUngradedProblem}...`, () => {
+                    showNotification(`All submissions for Problem ${currentProblemNumber} are graded! Moving to Problem ${nextUngradedProblem}...`, async () => {
                         currentProblemNumber = nextUngradedProblem;
                         document.getElementById('problem-select').value = currentProblemNumber;
+                        await loadSubjectiveSettings(currentProblemNumber, true);
+                        applyGradingModeUI();
                         updateMaxPointsDropdown();
                         loadNextProblem();
                     });
@@ -739,27 +1423,45 @@ async function loadNextProblem() {
                     // Silently move to next ungraded problem
                     currentProblemNumber = nextUngradedProblem;
                     document.getElementById('problem-select').value = currentProblemNumber;
+                    await loadSubjectiveSettings(currentProblemNumber, true);
+                    applyGradingModeUI();
                     updateMaxPointsDropdown();
                     loadNextProblem();
                 }
             } else {
-                // All problems are truly graded!
-                if (lastGradedProblemNumber === currentProblemNumber) {
-                    lastGradedProblemNumber = null;
-                    showNotification('All problems are graded! 🎉', () => {
+                // No more /next items available anywhere. This can mean either:
+                // 1) fully graded, or 2) subjective-triaged but not finalized.
+                let stats = null;
+                try {
+                    const statsResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}/stats`);
+                    if (statsResponse.ok) {
+                        stats = await statsResponse.json();
+                    }
+                } catch (_error) {
+                    stats = null;
+                }
+
+                const fullyGraded = stats && stats.problems_graded >= stats.total_problems;
+                if (fullyGraded) {
+                    if (lastGradedProblemNumber === currentProblemNumber) {
+                        lastGradedProblemNumber = null;
+                        showNotification('All problems are graded! 🎉', () => {
+                            navigateToSection('stats-section');
+                            loadStatistics();
+                        });
+                    } else {
                         navigateToSection('stats-section');
                         loadStatistics();
-                    });
+                    }
                 } else {
-                    // Already complete, go to stats
-                    navigateToSection('stats-section');
-                    loadStatistics();
+                    showNotification('No untriaged/ungraded responses remain in this pass. Subjective problems may still need final score assignment.');
                 }
             }
             return;
         }
 
         currentProblem = await response.json();
+        await loadSubjectiveSettings(currentProblemNumber, true);
 
         // Add to history and display
         addToHistory(currentProblem);
@@ -860,6 +1562,341 @@ async function submitGrade() {
         // Restore button state on error
         submitBtn.disabled = false;
         submitBtn.textContent = originalText;
+    }
+}
+
+async function submitSubjectiveTriage(options = {}) {
+    if (!currentProblem) return;
+    if (getCurrentSubjectiveSettings()?.grading_mode !== 'subjective') {
+        alert('Subjective mode is not enabled for this problem.');
+        return;
+    }
+    if (subjectiveAssignInFlight) {
+        return;
+    }
+    if (!selectedSubjectiveBucketId) {
+        alert('Select a bucket before assigning.');
+        return;
+    }
+
+    const notes = document.getElementById('subjective-notes-input').value.trim();
+    const assignBtn = document.getElementById('subjective-assign-btn');
+    const originalText = assignBtn.textContent;
+    subjectiveAssignInFlight = true;
+    assignBtn.disabled = true;
+    assignBtn.textContent = options.triggeredByBucketClick ? 'Applying...' : 'Assigning...';
+
+    try {
+        const response = await fetch(`${API_BASE}/problems/${currentProblem.id}/subjective-triage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                bucket_id: selectedSubjectiveBucketId,
+                notes: notes || null
+            })
+        });
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (_error) {
+            payload = null;
+        }
+
+        if (!response.ok) {
+            throw new Error(payload?.detail || 'Failed to assign subjective bucket');
+        }
+
+        await loadSubjectiveSettings(currentProblemNumber, true);
+        await updateOverallProgress();
+        await loadNextProblem();
+    } catch (error) {
+        console.error('Failed to assign subjective bucket:', error);
+        alert(error.message || 'Failed to assign subjective bucket');
+    } finally {
+        subjectiveAssignInFlight = false;
+        assignBtn.disabled = false;
+        assignBtn.textContent = originalText;
+    }
+}
+
+async function clearSubjectiveTriage() {
+    if (!currentProblem) return;
+    if (getCurrentSubjectiveSettings()?.grading_mode !== 'subjective') {
+        return;
+    }
+
+    const clearBtn = document.getElementById('subjective-clear-btn');
+    const originalText = clearBtn.textContent;
+    clearBtn.disabled = true;
+    clearBtn.textContent = 'Clearing...';
+    try {
+        const response = await fetch(`${API_BASE}/problems/${currentProblem.id}/subjective-triage`, {
+            method: 'DELETE'
+        });
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (_error) {
+            payload = null;
+        }
+        if (!response.ok) {
+            throw new Error(payload?.detail || 'Failed to clear subjective triage');
+        }
+        selectedSubjectiveBucketId = null;
+        document.getElementById('subjective-notes-input').value = '';
+        await loadSubjectiveSettings(currentProblemNumber, true);
+        renderSubjectiveBucketButtons();
+        renderSubjectiveBucketFilter();
+        renderSubjectiveBucketHistogram();
+        updateSubjectiveFinalizeButton();
+        await updateOverallProgress();
+    } catch (error) {
+        console.error('Failed to clear subjective triage:', error);
+        alert(error.message || 'Failed to clear subjective triage');
+    } finally {
+        clearBtn.disabled = false;
+        clearBtn.textContent = originalText;
+    }
+}
+
+function closeSubjectiveFinalizeDialog() {
+  const dialog = document.getElementById('subjective-finalize-dialog');
+  if (dialog) {
+    dialog.style.display = 'none';
+  }
+}
+
+async function openRandomBucketSample(bucketId) {
+    if (!currentSession || !currentProblemNumber || !bucketId) return;
+    try {
+        const response = await fetch(
+            `${API_BASE}/problems/${currentSession.id}/${currentProblemNumber}/bucket/${encodeURIComponent(bucketId)}/sample`
+        );
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (_error) {
+            payload = null;
+        }
+        if (!response.ok) {
+            throw new Error(payload?.detail || 'Failed to load bucket sample');
+        }
+
+        closeSubjectiveFinalizeDialog();
+        currentProblem = payload;
+        activeSubjectiveBucketFilter = bucketId;
+        await loadSubjectiveSettings(currentProblemNumber, true);
+        const filter = document.getElementById('subjective-view-filter');
+        if (filter) {
+            renderSubjectiveBucketFilter();
+            filter.value = bucketId;
+        }
+        addToHistory(currentProblem);
+        displayCurrentProblem();
+    } catch (error) {
+        console.error('Failed to load bucket sample:', error);
+        alert(error.message || 'Failed to load bucket sample');
+    }
+}
+
+async function submitSubjectiveReopen() {
+    if (!currentSession || !currentProblemNumber) return;
+
+    if (!confirm(`Reopen subjective scores for Problem ${currentProblemNumber}?\n\nThis will clear current scores/feedback and return responses to triaged state.`)) {
+        return;
+    }
+
+    const reopenBtn = document.getElementById('subjective-reopen-btn');
+    const originalText = reopenBtn.textContent;
+    reopenBtn.disabled = true;
+    reopenBtn.textContent = 'Reopening...';
+
+    try {
+        const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/subjective-reopen`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                problem_number: Number(currentProblemNumber)
+            })
+        });
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (_error) {
+            payload = null;
+        }
+        if (!response.ok) {
+            throw new Error(payload?.detail || 'Failed to reopen subjective scores');
+        }
+
+        await loadSubjectiveSettings(Number(currentProblemNumber), true);
+        await updateOverallProgress();
+        await loadProblemOrMostRecent();
+        showNotification(`Reopened ${payload.reopened_count || 0} responses for Problem ${currentProblemNumber}.`);
+    } catch (error) {
+        console.error('Failed to reopen subjective scores:', error);
+        alert(error.message || 'Failed to reopen subjective scores');
+    } finally {
+        reopenBtn.disabled = false;
+        reopenBtn.textContent = originalText;
+    }
+}
+
+function renderSubjectiveFinalizeRows(settings) {
+    const summary = document.getElementById('subjective-finalize-summary');
+    const rowsContainer = document.getElementById('subjective-finalize-rows');
+    if (!summary || !rowsContainer) return [];
+
+    const bucketUsage = settings?.bucket_usage || {};
+    const activeBuckets = (settings?.buckets || []).filter((bucket) => Number(bucketUsage[bucket.id] || 0) > 0);
+    const maxPoints = getCurrentProblemMaxPoints();
+
+    summary.textContent = `Problem ${currentProblemNumber}: ${settings?.triaged_count || 0} triaged response(s), ${activeBuckets.length} active bucket(s), max points ${maxPoints}.`;
+    rowsContainer.innerHTML = '';
+
+    activeBuckets.forEach((bucket) => {
+        const count = Number(bucketUsage[bucket.id] || 0);
+        const row = document.createElement('div');
+        row.className = 'subjective-finalize-row';
+        row.dataset.bucketId = bucket.id;
+
+        const label = document.createElement('div');
+        label.style.paddingTop = '6px';
+        label.innerHTML = `<strong>${bucket.label}</strong><div style="font-size: 12px; color: var(--gray-700);">${count} responses</div>`;
+        const sampleBtn = document.createElement('button');
+        sampleBtn.type = 'button';
+        sampleBtn.className = 'btn btn-secondary btn-small';
+        sampleBtn.style.marginTop = '6px';
+        sampleBtn.textContent = 'View Sample';
+        sampleBtn.onclick = async () => {
+            await openRandomBucketSample(bucket.id);
+        };
+        label.appendChild(sampleBtn);
+
+        const scoreInput = document.createElement('input');
+        scoreInput.type = 'number';
+        scoreInput.step = '0.25';
+        scoreInput.min = '0';
+        scoreInput.max = String(maxPoints);
+        scoreInput.placeholder = 'Score';
+        scoreInput.className = 'subjective-finalize-score';
+
+        const feedbackInput = document.createElement('textarea');
+        feedbackInput.rows = 2;
+        feedbackInput.maxLength = 4000;
+        feedbackInput.placeholder = 'Optional feedback applied to all responses in this bucket';
+        feedbackInput.className = 'subjective-finalize-feedback';
+
+        row.appendChild(label);
+        row.appendChild(scoreInput);
+        row.appendChild(feedbackInput);
+        rowsContainer.appendChild(row);
+    });
+
+    return activeBuckets;
+}
+
+async function openSubjectiveFinalizeDialog() {
+    const settings = await loadSubjectiveSettings(Number(currentProblemNumber), true);
+    if (!settings || settings.grading_mode !== 'subjective') {
+        alert('Subjective mode is not enabled for this problem.');
+        return;
+    }
+
+    const untriagedCount = Number(settings.untriaged_count || 0);
+    if (untriagedCount > 0) {
+        alert(`Assign buckets to all responses before finalizing. ${untriagedCount} responses remain untriaged.`);
+        return;
+    }
+
+    const activeBuckets = renderSubjectiveFinalizeRows(settings);
+    if (activeBuckets.length === 0) {
+        alert('No triaged responses remain to finalize for this problem.');
+        return;
+    }
+
+    document.getElementById('subjective-finalize-dialog').style.display = 'flex';
+}
+
+function collectSubjectiveFinalizePayload() {
+    const rows = [...document.querySelectorAll('#subjective-finalize-rows .subjective-finalize-row')];
+    const maxPoints = getCurrentProblemMaxPoints();
+
+    const bucketScores = rows.map((row) => {
+        const bucketId = row.dataset.bucketId;
+        const scoreInput = row.querySelector('.subjective-finalize-score');
+        const feedbackInput = row.querySelector('.subjective-finalize-feedback');
+        const scoreText = (scoreInput?.value || '').trim();
+        const score = parseFloat(scoreText);
+        if (!scoreText || Number.isNaN(score)) {
+            throw new Error(`Enter a numeric score for bucket "${bucketId}".`);
+        }
+        if (score < 0 || score > maxPoints) {
+            throw new Error(`Score for bucket "${bucketId}" must be between 0 and ${maxPoints}.`);
+        }
+        return {
+            bucket_id: bucketId,
+            score,
+            feedback: (feedbackInput?.value || '').trim() || null
+        };
+    });
+
+    return bucketScores;
+}
+
+async function submitSubjectiveFinalize() {
+    if (!currentSession || !currentProblemNumber) return;
+
+    let bucketScores;
+    try {
+        bucketScores = collectSubjectiveFinalizePayload();
+    } catch (error) {
+        alert(error.message || 'Please fill all bucket scores.');
+        return;
+    }
+
+    if (!confirm(`Apply subjective scores for Problem ${currentProblemNumber}? This will mark all triaged responses as graded.`)) {
+        return;
+    }
+
+    const confirmBtn = document.getElementById('subjective-finalize-confirm-btn');
+    const originalText = confirmBtn.textContent;
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Applying...';
+
+    try {
+        const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/subjective-finalize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                problem_number: Number(currentProblemNumber),
+                bucket_scores: bucketScores
+            })
+        });
+
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (_error) {
+            payload = null;
+        }
+
+        if (!response.ok) {
+            throw new Error(payload?.detail || 'Failed to finalize subjective scores');
+        }
+
+        closeSubjectiveFinalizeDialog();
+        await loadSubjectiveSettings(Number(currentProblemNumber), true);
+        await updateOverallProgress();
+        updateSubjectiveFinalizeButton();
+        await loadNextProblem();
+        showNotification(`Finalized ${payload.graded_count || 0} responses for Problem ${currentProblemNumber}.`);
+    } catch (error) {
+        console.error('Failed to finalize subjective scores:', error);
+        alert(error.message || 'Failed to finalize subjective scores');
+    } finally {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = originalText;
     }
 }
 

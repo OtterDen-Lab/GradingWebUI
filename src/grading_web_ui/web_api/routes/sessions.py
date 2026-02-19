@@ -25,12 +25,17 @@ from ..models import (
   SessionStatusChange,
   SessionCloneRequest,
   SessionCompareExportRequest,
+  SubjectiveSettingsUpdate,
+  SubjectiveFinalizeRequest,
+  SubjectiveReopenRequest,
 )
 from ..repositories import (SessionRepository, SubmissionRepository,
                             ProblemRepository, ProblemMetadataRepository,
-                            FeedbackTagRepository, ProblemStatsRepository)
+                            FeedbackTagRepository, ProblemStatsRepository,
+                            SubjectiveTriageRepository, with_transaction)
 from ..domain.common import SessionStatus as DomainSessionStatus
 from ..domain.session import GradingSession
+from ..database import update_problem_stats
 from lms_interface.canvas_interface import CanvasInterface
 from ..auth import get_current_user, require_instructor, require_session_access
 import os
@@ -43,6 +48,14 @@ QUIZ_YAML_FILENAME_KEY = "quiz_yaml_filename"
 QUIZ_YAML_IDS_KEY = "quiz_yaml_ids"
 QUIZ_YAML_DOC_COUNT_KEY = "quiz_yaml_doc_count"
 QUIZ_YAML_UPLOADED_AT_KEY = "quiz_yaml_uploaded_at"
+
+DEFAULT_SUBJECTIVE_BUCKETS = [
+  {"id": "perfect", "label": "Perfect", "color": "#16a34a"},
+  {"id": "excellent", "label": "Excellent", "color": "#22c55e"},
+  {"id": "good", "label": "Good", "color": "#3b82f6"},
+  {"id": "passable", "label": "Passable", "color": "#f59e0b"},
+  {"id": "poor_blank", "label": "Poor/Blank", "color": "#ef4444"},
+]
 
 
 def mock_roster_enabled() -> bool:
@@ -71,6 +84,40 @@ def _parse_quiz_yaml_text(yaml_text: str) -> tuple[int, List[str]]:
       ordered_ids.append(yaml_id)
 
   return len(docs), ordered_ids
+
+
+def _normalized_subjective_buckets(raw_buckets: Optional[List[dict]]) -> List[dict]:
+  if not raw_buckets:
+    return [dict(bucket) for bucket in DEFAULT_SUBJECTIVE_BUCKETS]
+
+  normalized: List[dict] = []
+  seen_ids = set()
+  for raw in raw_buckets:
+    if not isinstance(raw, dict):
+      continue
+    bucket_id = str(raw.get("id") or "").strip()
+    label = str(raw.get("label") or "").strip()
+    color = raw.get("color")
+    if not bucket_id or not label:
+      continue
+    if bucket_id in seen_ids:
+      raise HTTPException(
+        status_code=400,
+        detail=f"Duplicate bucket id '{bucket_id}' is not allowed"
+      )
+    seen_ids.add(bucket_id)
+    normalized.append({
+      "id": bucket_id,
+      "label": label,
+      "color": str(color).strip() if color is not None else None
+    })
+
+  if not normalized:
+    raise HTTPException(
+      status_code=400,
+      detail="At least one valid bucket is required for subjective mode"
+    )
+  return normalized
 
 
 def session_to_response(session: GradingSession) -> SessionResponse:
@@ -688,6 +735,283 @@ async def update_problem_max_points(
     "problem_number": problem_number,
     "max_points": max_points,
     "problems_updated": problems_updated
+  }
+
+
+@router.get("/{session_id}/subjective-settings/{problem_number}")
+async def get_subjective_settings(
+  session_id: int,
+  problem_number: int,
+  current_user: dict = Depends(require_session_access())
+):
+  """Get per-problem subjective grading settings and current triage counts."""
+  session_repo = SessionRepository()
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  metadata_repo = ProblemMetadataRepository()
+  triage_repo = SubjectiveTriageRepository()
+  problem_repo = ProblemRepository()
+
+  grading_mode = metadata_repo.get_grading_mode(session_id, problem_number)
+  buckets = _normalized_subjective_buckets(
+    metadata_repo.get_subjective_buckets(session_id, problem_number)
+  )
+
+  counts = problem_repo.get_counts_for_problem_number(session_id, problem_number)
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    session_id, problem_number
+  )
+  finalized_count = triage_repo.count_graded_for_problem_number(
+    session_id, problem_number
+  )
+  untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
+  bucket_usage = triage_repo.get_bucket_counts(session_id, problem_number)
+
+  return {
+    "problem_number": problem_number,
+    "grading_mode": grading_mode,
+    "buckets": buckets,
+    "total_count": counts["total"],
+    "graded_count": counts["graded"],
+    "triaged_count": triaged_count,
+    "finalized_count": finalized_count,
+    "untriaged_count": untriaged_count,
+    "bucket_usage": bucket_usage
+  }
+
+
+@router.put("/{session_id}/subjective-settings")
+async def update_subjective_settings(
+  session_id: int,
+  request: SubjectiveSettingsUpdate,
+  current_user: dict = Depends(require_session_access())
+):
+  """Update per-problem subjective grading mode and bucket configuration."""
+  session_repo = SessionRepository()
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  metadata_repo = ProblemMetadataRepository()
+  triage_repo = SubjectiveTriageRepository()
+  problem_repo = ProblemRepository()
+
+  grading_mode = request.grading_mode
+  buckets = _normalized_subjective_buckets(
+    [bucket.model_dump() for bucket in request.buckets]
+  )
+
+  used_bucket_ids = set(
+    triage_repo.get_used_bucket_ids(session_id, request.problem_number)
+  )
+  configured_bucket_ids = {bucket["id"] for bucket in buckets}
+  missing_used_ids = sorted(used_bucket_ids - configured_bucket_ids)
+  if missing_used_ids:
+    raise HTTPException(
+      status_code=400,
+      detail=(
+        "Cannot remove buckets with active triaged responses. "
+        f"Still in use: {', '.join(missing_used_ids)}"
+      )
+    )
+
+  metadata_repo.upsert_subjective_settings(
+    session_id,
+    request.problem_number,
+    grading_mode,
+    buckets
+  )
+
+  counts = problem_repo.get_counts_for_problem_number(session_id, request.problem_number)
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    session_id, request.problem_number
+  )
+  finalized_count = triage_repo.count_graded_for_problem_number(
+    session_id, request.problem_number
+  )
+  untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
+  bucket_usage = triage_repo.get_bucket_counts(session_id, request.problem_number)
+
+  return {
+    "status": "updated",
+    "session_id": session_id,
+    "problem_number": request.problem_number,
+    "grading_mode": grading_mode,
+    "buckets": buckets,
+    "total_count": counts["total"],
+    "graded_count": counts["graded"],
+    "triaged_count": triaged_count,
+    "finalized_count": finalized_count,
+    "untriaged_count": untriaged_count,
+    "bucket_usage": bucket_usage
+  }
+
+
+@router.post("/{session_id}/subjective-finalize")
+async def finalize_subjective_scores(
+  session_id: int,
+  request: SubjectiveFinalizeRequest,
+  current_user: dict = Depends(require_session_access())
+):
+  """Apply numeric scores to all triaged responses for one subjective problem."""
+  session_repo = SessionRepository()
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  problem_repo = ProblemRepository()
+  metadata_repo = ProblemMetadataRepository()
+  triage_repo = SubjectiveTriageRepository()
+
+  grading_mode = metadata_repo.get_grading_mode(session_id, request.problem_number)
+  if grading_mode != "subjective":
+    raise HTTPException(
+      status_code=400,
+      detail="Subjective finalize is only available when grading mode is subjective"
+    )
+
+  counts = problem_repo.get_counts_for_problem_number(session_id, request.problem_number)
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    session_id, request.problem_number
+  )
+  untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
+  if untriaged_count > 0:
+    raise HTTPException(
+      status_code=400,
+      detail=(
+        "Cannot finalize subjective grading until all responses are bucketed. "
+        f"{untriaged_count} responses remain untriaged."
+      )
+    )
+
+  bucket_problem_ids = triage_repo.get_ungraded_problem_ids_by_bucket(
+    session_id, request.problem_number
+  )
+  active_bucket_ids = sorted(
+    [bucket_id for bucket_id, ids in bucket_problem_ids.items() if ids]
+  )
+  if not active_bucket_ids:
+    raise HTTPException(
+      status_code=400,
+      detail="No triaged responses remain to finalize for this problem."
+    )
+
+  provided_scores = {
+    score.bucket_id: score for score in request.bucket_scores
+  }
+  missing_bucket_scores = sorted(
+    [bucket_id for bucket_id in active_bucket_ids if bucket_id not in provided_scores]
+  )
+  if missing_bucket_scores:
+    raise HTTPException(
+      status_code=400,
+      detail=(
+        "Missing score assignments for active buckets: "
+        f"{', '.join(missing_bucket_scores)}"
+      )
+    )
+
+  graded_updates = []
+  total_graded_now = 0
+  with with_transaction() as repos:
+    for bucket_id in active_bucket_ids:
+      problem_ids = bucket_problem_ids.get(bucket_id, [])
+      if not problem_ids:
+        continue
+      bucket_score = provided_scores[bucket_id]
+      updated_rows = repos.problems.bulk_grade(
+        problem_ids,
+        bucket_score.score,
+        bucket_score.feedback
+      )
+      total_graded_now += updated_rows
+      graded_updates.append({
+        "bucket_id": bucket_id,
+        "score": bucket_score.score,
+        "feedback": bucket_score.feedback,
+        "count": updated_rows
+      })
+
+  update_problem_stats(session_id)
+
+  updated_counts = problem_repo.get_counts_for_problem_number(
+    session_id, request.problem_number
+  )
+  remaining_triaged = triage_repo.count_ungraded_for_problem_number(
+    session_id, request.problem_number
+  )
+  finalized_count = triage_repo.count_graded_for_problem_number(
+    session_id, request.problem_number
+  )
+
+  return {
+    "status": "finalized",
+    "session_id": session_id,
+    "problem_number": request.problem_number,
+    "graded_count": total_graded_now,
+    "bucket_updates": graded_updates,
+    "problem_counts": updated_counts,
+    "remaining_triaged": remaining_triaged,
+    "finalized_count": finalized_count
+  }
+
+
+@router.post("/{session_id}/subjective-reopen")
+async def reopen_subjective_scores(
+  session_id: int,
+  request: SubjectiveReopenRequest,
+  current_user: dict = Depends(require_session_access())
+):
+  """Reopen previously finalized subjective scores for one problem number."""
+  session_repo = SessionRepository()
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  problem_repo = ProblemRepository()
+  metadata_repo = ProblemMetadataRepository()
+  triage_repo = SubjectiveTriageRepository()
+
+  grading_mode = metadata_repo.get_grading_mode(session_id, request.problem_number)
+  if grading_mode != "subjective":
+    raise HTTPException(
+      status_code=400,
+      detail="Subjective reopen is only available when grading mode is subjective"
+    )
+
+  finalized_problem_ids = triage_repo.get_graded_problem_ids_for_problem_number(
+    session_id, request.problem_number
+  )
+  if not finalized_problem_ids:
+    raise HTTPException(
+      status_code=400,
+      detail="No finalized subjective responses were found to reopen."
+    )
+
+  with with_transaction() as repos:
+    reopened_count = repos.problems.bulk_ungrade(finalized_problem_ids)
+
+  update_problem_stats(session_id)
+
+  counts = problem_repo.get_counts_for_problem_number(session_id, request.problem_number)
+  triaged_count = triage_repo.count_ungraded_for_problem_number(
+    session_id, request.problem_number
+  )
+  finalized_count = triage_repo.count_graded_for_problem_number(
+    session_id, request.problem_number
+  )
+  untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
+  bucket_usage = triage_repo.get_bucket_counts(session_id, request.problem_number)
+
+  return {
+    "status": "reopened",
+    "session_id": session_id,
+    "problem_number": request.problem_number,
+    "reopened_count": reopened_count,
+    "total_count": counts["total"],
+    "graded_count": counts["graded"],
+    "triaged_count": triaged_count,
+    "finalized_count": finalized_count,
+    "untriaged_count": untriaged_count,
+    "bucket_usage": bucket_usage
   }
 
 

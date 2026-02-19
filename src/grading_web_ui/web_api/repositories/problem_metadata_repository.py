@@ -1,6 +1,7 @@
 """
 Repository for problem metadata (max_points, rubrics, etc.).
 """
+import json
 from typing import Optional, Dict, Tuple, List
 import sqlite3
 
@@ -79,8 +80,9 @@ class ProblemMetadataRepository(BaseRepository):
           """
           INSERT INTO problem_metadata
           (session_id, problem_number, max_points, question_text, grading_rubric,
-           default_feedback, default_feedback_threshold, ai_grading_notes, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           default_feedback, default_feedback_threshold, ai_grading_notes,
+           grading_mode, subjective_buckets_json, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           """,
           (
             session_id,
@@ -91,6 +93,8 @@ class ProblemMetadataRepository(BaseRepository):
             None if clear_default_feedback else row.get("default_feedback"),
             row.get("default_feedback_threshold", 100.0),
             None if clear_ai_grading_notes else row.get("ai_grading_notes"),
+            row.get("grading_mode", "calculation"),
+            row.get("subjective_buckets_json"),
             row.get("updated_at"),
           ),
         )
@@ -210,6 +214,58 @@ class ProblemMetadataRepository(BaseRepository):
 
       row = cursor.fetchone()
       return row["question_text"] if row else None
+
+  def get_grading_mode(self, session_id: int, problem_number: int) -> str:
+    """Get grading mode for a problem number."""
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        SELECT grading_mode FROM problem_metadata
+        WHERE session_id = ? AND problem_number = ?
+      """, (session_id, problem_number))
+      row = cursor.fetchone()
+      mode = row["grading_mode"] if row else None
+      if mode not in ("calculation", "subjective"):
+        return "calculation"
+      return mode
+
+  def get_subjective_buckets(self, session_id: int,
+                             problem_number: int) -> Optional[List[Dict]]:
+    """Get subjective bucket config as parsed list."""
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        SELECT subjective_buckets_json FROM problem_metadata
+        WHERE session_id = ? AND problem_number = ?
+      """, (session_id, problem_number))
+      row = cursor.fetchone()
+      if not row or not row["subjective_buckets_json"]:
+        return None
+      try:
+        parsed = json.loads(row["subjective_buckets_json"])
+      except Exception:
+        return None
+      if not isinstance(parsed, list):
+        return None
+      return [bucket for bucket in parsed if isinstance(bucket, dict)]
+
+  def upsert_subjective_settings(self, session_id: int, problem_number: int,
+                                 grading_mode: str,
+                                 buckets: List[Dict]) -> None:
+    """Insert or update subjective settings for a problem number."""
+    buckets_json = json.dumps(buckets)
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        INSERT INTO problem_metadata
+        (session_id, problem_number, grading_mode, subjective_buckets_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(session_id, problem_number)
+        DO UPDATE SET
+          grading_mode = excluded.grading_mode,
+          subjective_buckets_json = excluded.subjective_buckets_json,
+          updated_at = CURRENT_TIMESTAMP
+      """, (session_id, problem_number, grading_mode, buckets_json))
 
   def get_ai_grading_notes(self, session_id: int,
                            problem_number: int) -> Optional[str]:

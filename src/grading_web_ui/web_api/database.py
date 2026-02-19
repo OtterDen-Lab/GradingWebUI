@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 24
+CURRENT_SCHEMA_VERSION = 25
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -343,10 +343,32 @@ def create_schema(cursor):
             default_feedback TEXT,
             default_feedback_threshold REAL DEFAULT 100.0,
             ai_grading_notes TEXT,
+            grading_mode TEXT DEFAULT 'calculation',
+            subjective_buckets_json TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (session_id) REFERENCES grading_sessions(id),
             UNIQUE(session_id, problem_number)
         )
+    """)
+
+  # Subjective triage assignments (per-response bucket sorting prior to scoring)
+  cursor.execute("""
+        CREATE TABLE subjective_triage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            problem_id INTEGER NOT NULL UNIQUE,
+            session_id INTEGER NOT NULL,
+            problem_number INTEGER NOT NULL,
+            bucket_id TEXT NOT NULL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE CASCADE,
+            FOREIGN KEY (session_id) REFERENCES grading_sessions(id) ON DELETE CASCADE
+        )
+    """)
+  cursor.execute("""
+        CREATE INDEX idx_subjective_triage_session_problem
+        ON subjective_triage(session_id, problem_number)
     """)
 
   # Feedback tags (reusable grading comments)
@@ -529,6 +551,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 24:
     migrate_to_v24(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (24)")
+
+  if from_version < 25:
+    migrate_to_v25(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (25)")
 
 
 def migrate_to_v2(cursor):
@@ -1030,6 +1056,47 @@ def migrate_to_v24(cursor):
     cursor.execute(
       "ALTER TABLE problem_metadata ADD COLUMN ai_grading_notes TEXT")
     log.info("Added ai_grading_notes column")
+
+
+def migrate_to_v25(cursor):
+  """Add subjective grading metadata and triage assignment table."""
+  log.info(
+    "Migrating to schema version 25: adding subjective grading settings and triage table"
+  )
+
+  cursor.execute("PRAGMA table_info(problem_metadata)")
+  existing_columns = {row[1] for row in cursor.fetchall()}
+
+  if 'grading_mode' not in existing_columns:
+    cursor.execute(
+      "ALTER TABLE problem_metadata ADD COLUMN grading_mode TEXT DEFAULT 'calculation'"
+    )
+    log.info("Added grading_mode column")
+
+  if 'subjective_buckets_json' not in existing_columns:
+    cursor.execute(
+      "ALTER TABLE problem_metadata ADD COLUMN subjective_buckets_json TEXT"
+    )
+    log.info("Added subjective_buckets_json column")
+
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS subjective_triage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      problem_id INTEGER NOT NULL UNIQUE,
+      session_id INTEGER NOT NULL,
+      problem_number INTEGER NOT NULL,
+      bucket_id TEXT NOT NULL,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES grading_sessions(id) ON DELETE CASCADE
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_subjective_triage_session_problem
+    ON subjective_triage(session_id, problem_number)
+  """)
 
 
 def update_problem_stats(session_id: int):

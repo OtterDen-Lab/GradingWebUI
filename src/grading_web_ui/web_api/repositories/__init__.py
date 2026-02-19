@@ -12,6 +12,7 @@ from .problem_repository import ProblemRepository
 from .problem_metadata_repository import ProblemMetadataRepository
 from .feedback_tag_repository import FeedbackTagRepository
 from .problem_stats_repository import ProblemStatsRepository
+from .subjective_triage_repository import SubjectiveTriageRepository
 
 __all__ = [
   "SessionRepository",
@@ -20,6 +21,7 @@ __all__ = [
   "ProblemMetadataRepository",
   "FeedbackTagRepository",
   "ProblemStatsRepository",
+  "SubjectiveTriageRepository",
   "with_transaction",
   "RepositoryFactory",
 ]
@@ -92,6 +94,7 @@ class RepositoryFactory:
     self._metadata = None
     self._feedback_tags = None
     self._problem_stats = None
+    self._subjective_triage = None
 
   @property
   def sessions(self) -> SessionRepository:
@@ -134,3 +137,10 @@ class RepositoryFactory:
     if self._problem_stats is None:
       self._problem_stats = ProblemStatsRepository(self._conn)
     return self._problem_stats
+
+  @property
+  def subjective_triage(self) -> SubjectiveTriageRepository:
+    """Get or create SubjectiveTriageRepository with shared connection."""
+    if self._subjective_triage is None:
+      self._subjective_triage = SubjectiveTriageRepository(self._conn)
+    return self._subjective_triage

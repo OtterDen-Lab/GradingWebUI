@@ -518,6 +518,312 @@ def test_manual_qr_payload_rejects_question_number_mismatch(client):
   assert "does not match current problem number" in response.json()["detail"]
 
 
+def test_subjective_settings_and_triage_flow(client, monkeypatch):
+  """Subjective mode should support bucket edits and triage iteration."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  monkeypatch.setattr(
+    problems_routes,
+    "get_problem_image_data",
+    lambda problem, submission_repo=None: ""
+  )
+
+  session_id = create_test_session(client, "Subjective Flow")
+  _, problem_id_a = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=3
+  )
+  _, problem_id_b = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=3
+  )
+  _, problem_id_c = seed_submission_with_problem(
+    session_id, document_id=3, problem_number=3
+  )
+
+  update_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 3,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "perfect", "label": "Perfect"},
+        {"id": "good", "label": "Good"},
+      ]
+    }
+  )
+  assert update_response.status_code == 200
+  assert update_response.json()["grading_mode"] == "subjective"
+
+  triage_response = client.post(
+    f"/api/problems/{problem_id_a}/subjective-triage",
+    json={"bucket_id": "perfect", "notes": "Strong work"}
+  )
+  assert triage_response.status_code == 200
+  assert triage_response.json()["status"] == "triaged"
+
+  next_response = client.get(f"/api/problems/{session_id}/3/next")
+  assert next_response.status_code == 200
+  next_payload = next_response.json()
+  assert next_payload["grading_mode"] == "subjective"
+  assert next_payload["id"] in {problem_id_b, problem_id_c}
+  assert next_payload["id"] != problem_id_a
+
+  previous_response = client.get(f"/api/problems/{session_id}/3/previous")
+  assert previous_response.status_code == 200
+  previous_payload = previous_response.json()
+  assert previous_payload["id"] == problem_id_a
+  assert previous_payload["subjective_bucket_id"] == "perfect"
+  assert previous_payload["subjective_triaged"] is True
+
+  # Removing a bucket that is actively used should fail
+  invalid_update = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 3,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "good", "label": "Good"},
+      ]
+    }
+  )
+  assert invalid_update.status_code == 400
+  assert "Cannot remove buckets with active triaged responses" in invalid_update.json()["detail"]
+
+  # Adding buckets after triaging should work (bucket-count change support)
+  valid_update = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 3,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "perfect", "label": "Perfect"},
+        {"id": "excellent", "label": "Excellent"},
+        {"id": "good", "label": "Good"},
+      ]
+    }
+  )
+  assert valid_update.status_code == 200
+  updated_payload = valid_update.json()
+  assert len(updated_payload["buckets"]) == 3
+
+
+def test_subjective_finalize_applies_bucket_scores(client):
+  """Finalizing subjective buckets should grade all triaged responses."""
+  session_id = create_test_session(client, "Subjective Finalize")
+  _, problem_id_a = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=4, max_points=8.0
+  )
+  _, problem_id_b = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=4, max_points=8.0
+  )
+  _, problem_id_c = seed_submission_with_problem(
+    session_id, document_id=3, problem_number=4, max_points=8.0
+  )
+
+  mode_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 4,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "perfect", "label": "Perfect"},
+        {"id": "good", "label": "Good"},
+      ]
+    }
+  )
+  assert mode_response.status_code == 200
+
+  for problem_id, bucket_id in [
+    (problem_id_a, "perfect"),
+    (problem_id_b, "good"),
+    (problem_id_c, "good"),
+  ]:
+    triage_response = client.post(
+      f"/api/problems/{problem_id}/subjective-triage",
+      json={"bucket_id": bucket_id}
+    )
+    assert triage_response.status_code == 200
+
+  finalize_response = client.post(
+    f"/api/sessions/{session_id}/subjective-finalize",
+    json={
+      "problem_number": 4,
+      "bucket_scores": [
+        {"bucket_id": "perfect", "score": 8.0, "feedback": "Excellent work"},
+        {"bucket_id": "good", "score": 6.0, "feedback": "Mostly correct"},
+      ]
+    }
+  )
+  assert finalize_response.status_code == 200
+  payload = finalize_response.json()
+  assert payload["status"] == "finalized"
+  assert payload["graded_count"] == 3
+  assert payload["remaining_triaged"] == 0
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute("""
+      SELECT id, graded, score, feedback
+      FROM problems
+      WHERE session_id = ? AND problem_number = ?
+    """, (session_id, 4))
+    rows = {row["id"]: dict(row) for row in cursor.fetchall()}
+
+    assert rows[problem_id_a]["graded"] == 1
+    assert rows[problem_id_a]["score"] == 8.0
+    assert rows[problem_id_a]["feedback"] == "Excellent work"
+
+    assert rows[problem_id_b]["graded"] == 1
+    assert rows[problem_id_b]["score"] == 6.0
+    assert rows[problem_id_b]["feedback"] == "Mostly correct"
+
+    assert rows[problem_id_c]["graded"] == 1
+    assert rows[problem_id_c]["score"] == 6.0
+    assert rows[problem_id_c]["feedback"] == "Mostly correct"
+
+    cursor.execute("""
+      SELECT COUNT(*) AS count
+      FROM subjective_triage
+      WHERE session_id = ? AND problem_number = ?
+    """, (session_id, 4))
+    assert cursor.fetchone()["count"] == 3
+
+
+def test_subjective_reopen_restores_triaged_state(client):
+  """Reopen should clear finalized grades and return to triaged/ungraded."""
+  session_id = create_test_session(client, "Subjective Reopen")
+  _, problem_id_a = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=5, max_points=8.0
+  )
+  _, problem_id_b = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=5, max_points=8.0
+  )
+
+  mode_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 5,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "good", "label": "Good"},
+      ]
+    }
+  )
+  assert mode_response.status_code == 200
+
+  for problem_id in [problem_id_a, problem_id_b]:
+    triage_response = client.post(
+      f"/api/problems/{problem_id}/subjective-triage",
+      json={"bucket_id": "good"}
+    )
+    assert triage_response.status_code == 200
+
+  finalize_response = client.post(
+    f"/api/sessions/{session_id}/subjective-finalize",
+    json={
+      "problem_number": 5,
+      "bucket_scores": [
+        {"bucket_id": "good", "score": 6.0}
+      ]
+    }
+  )
+  assert finalize_response.status_code == 200
+
+  reopen_response = client.post(
+    f"/api/sessions/{session_id}/subjective-reopen",
+    json={"problem_number": 5}
+  )
+  assert reopen_response.status_code == 200
+  payload = reopen_response.json()
+  assert payload["status"] == "reopened"
+  assert payload["reopened_count"] == 2
+  assert payload["triaged_count"] == 2
+  assert payload["graded_count"] == 0
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute("""
+      SELECT id, graded, score, feedback
+      FROM problems
+      WHERE session_id = ? AND problem_number = ?
+      ORDER BY id
+    """, (session_id, 5))
+    rows = [dict(row) for row in cursor.fetchall()]
+    assert len(rows) == 2
+    for row in rows:
+      assert row["graded"] == 0
+      assert row["score"] is None
+      assert row["feedback"] is None
+
+
+def test_subjective_bucket_navigation_endpoints(client, monkeypatch):
+  """Bucket navigation should iterate triaged responses within a bucket."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  monkeypatch.setattr(
+    problems_routes,
+    "get_problem_image_data",
+    lambda problem, submission_repo=None: ""
+  )
+
+  session_id = create_test_session(client, "Subjective Bucket Nav")
+  _, problem_id_a = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=6
+  )
+  _, problem_id_b = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=6
+  )
+  _, problem_id_c = seed_submission_with_problem(
+    session_id, document_id=3, problem_number=6
+  )
+
+  mode_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 6,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "good", "label": "Good"},
+        {"id": "poor_blank", "label": "Poor/Blank"},
+      ]
+    }
+  )
+  assert mode_response.status_code == 200
+
+  for problem_id, bucket_id in [
+    (problem_id_a, "good"),
+    (problem_id_b, "good"),
+    (problem_id_c, "poor_blank"),
+  ]:
+    triage_response = client.post(
+      f"/api/problems/{problem_id}/subjective-triage",
+      json={"bucket_id": bucket_id}
+    )
+    assert triage_response.status_code == 200
+
+  first = client.get(f"/api/problems/{session_id}/6/bucket/good/next")
+  assert first.status_code == 200
+  first_id = first.json()["id"]
+  assert first_id in {problem_id_a, problem_id_b}
+
+  second = client.get(
+    f"/api/problems/{session_id}/6/bucket/good/next?current_problem_id={first_id}"
+  )
+  assert second.status_code == 200
+  second_id = second.json()["id"]
+  assert second_id in {problem_id_a, problem_id_b}
+  assert second_id != first_id
+
+  previous = client.get(
+    f"/api/problems/{session_id}/6/bucket/good/previous?current_problem_id={second_id}"
+  )
+  assert previous.status_code == 200
+  assert previous.json()["id"] == first_id
+
+  sample = client.get(f"/api/problems/{session_id}/6/bucket/good/sample")
+  assert sample.status_code == 200
+  assert sample.json()["id"] in {problem_id_a, problem_id_b}
+
+
 def test_session_stats_blank_rate_counts_manual_blanks_only(client):
   """Stats blank metrics should use manual '-' marks, not AI/heuristic blank flags."""
   session_id = create_test_session(client, "Manual Blank Stats Test")

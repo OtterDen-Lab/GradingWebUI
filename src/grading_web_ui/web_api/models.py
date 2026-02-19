@@ -133,6 +133,14 @@ class ProblemResponse(BaseModel):
   # QR code availability flag (for "Show Answer" button)
   has_qr_data: bool = False
 
+  # Subjective triage metadata
+  grading_mode: str = "calculation"
+  subjective_triaged: bool = False
+  subjective_bucket_id: Optional[str] = None
+  subjective_notes: Optional[str] = None
+  subjective_triaged_count: int = 0
+  subjective_untriaged_count: int = 0
+
   model_config = ConfigDict(from_attributes=True)
 
 
@@ -150,6 +158,44 @@ class GradeSubmission(BaseModel):
 class ManualQRCodeSubmission(BaseModel):
   """Request model for manually pasting decoded QR payload JSON."""
   payload_text: str = Field(..., min_length=2, max_length=20000)
+
+
+class SubjectiveBucket(BaseModel):
+  """Subjective grading bucket configuration."""
+  id: str = Field(..., min_length=1, max_length=80)
+  label: str = Field(..., min_length=1, max_length=120)
+  color: Optional[str] = Field(None, max_length=32)
+
+
+class SubjectiveSettingsUpdate(BaseModel):
+  """Update subjective grading mode/settings for a problem number."""
+  problem_number: int
+  grading_mode: str = Field(..., pattern="^(calculation|subjective)$")
+  buckets: List[SubjectiveBucket] = []
+
+
+class SubjectiveTriageSubmission(BaseModel):
+  """Assign one response to a subjective bucket."""
+  bucket_id: str = Field(..., min_length=1, max_length=80)
+  notes: Optional[str] = Field(None, max_length=4000)
+
+
+class SubjectiveBucketFinalizeScore(BaseModel):
+  """Score assignment for one subjective bucket."""
+  bucket_id: str = Field(..., min_length=1, max_length=80)
+  score: float
+  feedback: Optional[str] = Field(None, max_length=4000)
+
+
+class SubjectiveFinalizeRequest(BaseModel):
+  """Finalize subjective triage for a problem number into numeric scores."""
+  problem_number: int
+  bucket_scores: List[SubjectiveBucketFinalizeScore] = []
+
+
+class SubjectiveReopenRequest(BaseModel):
+  """Reopen a previously finalized subjective problem."""
+  problem_number: int
 
 
 class ProblemStatsResponse(BaseModel):
