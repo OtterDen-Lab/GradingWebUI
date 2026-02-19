@@ -210,6 +210,29 @@ function getCurrentProblemMaxPoints() {
     return 8;
 }
 
+function updateProblemSelectUngradedCounts(problemStats = []) {
+    const select = document.getElementById('problem-select');
+    if (!select) return;
+
+    const ungradedByProblem = {};
+    if (Array.isArray(problemStats)) {
+        problemStats.forEach((ps) => {
+            const problemNumber = Number(ps.problem_number);
+            if (Number.isNaN(problemNumber)) return;
+            const numTotal = Number(ps.num_total || 0);
+            const numGraded = Number(ps.num_graded || 0);
+            ungradedByProblem[problemNumber] = Math.max(numTotal - numGraded, 0);
+        });
+    }
+
+    [...select.options].forEach((option) => {
+        const problemNumber = Number(option.value);
+        if (Number.isNaN(problemNumber)) return;
+        const ungradedCount = Number(ungradedByProblem[problemNumber] || 0);
+        option.textContent = `Problem ${problemNumber} (${ungradedCount})`;
+    });
+}
+
 async function loadSubjectiveSettings(problemNumber, force = false) {
     if (!currentSession || !problemNumber) return null;
     if (!force && subjectiveSettingsByProblem.has(problemNumber)) {
@@ -656,24 +679,16 @@ async function loadProblemNumbers() {
         }
         availableProblemNumbers = data.problem_numbers;
 
-        // Build a map of problem number -> ungraded count
-        const ungradedCounts = {};
-        if (Array.isArray(stats.problem_stats)) {
-            stats.problem_stats.forEach(ps => {
-                ungradedCounts[ps.problem_number] = ps.num_total - ps.num_graded;
-            });
-        }
-
         const select = document.getElementById('problem-select');
         select.innerHTML = '';
 
         availableProblemNumbers.forEach(num => {
             const option = document.createElement('option');
             option.value = num;
-            const ungradedCount = ungradedCounts[num] || 0;
-            option.textContent = `Problem ${num} (${ungradedCount})`;
+            option.textContent = `Problem ${num} (0)`;
             select.appendChild(option);
         });
+        updateProblemSelectUngradedCounts(stats.problem_stats);
 
         currentProblemNumber = availableProblemNumbers[0] || 1;
         activeSubjectiveBucketFilter = '';
@@ -707,6 +722,7 @@ async function updateOverallProgress() {
         }
 
         const stats = await response.json();
+        updateProblemSelectUngradedCounts(stats.problem_stats);
         const clampPercent = (value) => Math.max(0, Math.min(100, value));
 
         const percentage = clampPercent(stats.progress_percentage || 0);
