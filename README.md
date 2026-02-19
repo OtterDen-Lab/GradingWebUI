@@ -73,43 +73,52 @@ For more details, see `docker/web-grading/README.md`.
 
 ## Deployment Quick Reference
 
-Use `docker/web-grading/docker-compose.yml` for development (local source mounted, fast iteration).
-Use `docker/web-grading/docker-compose.prod.yml` for deployment-style runs (image-only, server env file).
+Primary workflows from the repo root:
 
-### Local dev with Docker Compose (build from local source)
-
-```bash
-make docker-up-build
-```
-
-### One-command local redeploy (rebuild + keep existing volumes)
+### Run local dev server
 
 ```bash
-make deploy
+make dev
 ```
 
-This validates `docker/web-grading/.env`, rebuilds containers, and redeploys in place.
+(`make run` is kept as an alias.)
+
+### Build a local Docker image
+
+```bash
+make image
+```
+
+Or set a custom tag:
+
+```bash
+make image DOCKER_IMAGE=autograder-web-grading:mytag
+```
+
+### Deploy container with env-file validation
+
+```bash
+make deploy DOCKER_ENV_FILE=/etc/grading-web/web.env
+```
+
+This validates env configuration, builds the image if needed, and starts
+`docker/web-grading/docker-compose.prod.yml` with:
+- `GRADING_WEB_IMAGE=$(DOCKER_IMAGE)`
+- `GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE)`
+
 Named volumes (including `grading-data`) are preserved.
 
-### Local server-style run (image + env file injection)
+If you deploy from a remote registry image instead of a local build, use
+direct Compose commands:
 
 ```bash
-GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3 \
+GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 \
+GRADING_WEB_ENV_FILE=/etc/grading-web/web.env \
+docker compose -f docker/web-grading/docker-compose.prod.yml pull
+
+GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 \
 GRADING_WEB_ENV_FILE=/etc/grading-web/web.env \
 docker compose -f docker/web-grading/docker-compose.prod.yml up -d
-```
-
-### Update to a newer image tag
-
-```bash
-make docker-prod-pull DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 DOCKER_ENV_FILE=/etc/grading-web/web.env
-make docker-prod-up DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 DOCKER_ENV_FILE=/etc/grading-web/web.env
-```
-
-Or use the combined production redeploy target:
-
-```bash
-make deploy-prod DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 DOCKER_ENV_FILE=/etc/grading-web/web.env
 ```
 
 ## Features

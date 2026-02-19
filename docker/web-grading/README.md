@@ -97,12 +97,11 @@ Use the production compose file with a server-only env file.
    ```
 
 Equivalent Make targets from repo root:
-- `make docker-prod-pull DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3 DOCKER_ENV_FILE=/etc/grading-web/web.env`
-- `make docker-prod-up DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3 DOCKER_ENV_FILE=/etc/grading-web/web.env`
-- `make deploy-prod DOCKER_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3 DOCKER_ENV_FILE=/etc/grading-web/web.env`
+- `make image DOCKER_IMAGE=autograder-web-grading:local`
+- `make deploy DOCKER_ENV_FILE=/etc/grading-web/web.env DOCKER_IMAGE=autograder-web-grading:local`
 
-For local source-based redeploys (build + up, with persistent volumes preserved):
-- `make deploy`
+`make deploy` validates env config, builds the image if needed, and starts
+`docker-compose.prod.yml` with persistent volumes preserved.
 
 ## Getting API Keys
 
