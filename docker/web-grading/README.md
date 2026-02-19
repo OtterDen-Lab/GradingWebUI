@@ -83,25 +83,22 @@ Use the production compose file with a server-only env file.
 
 2. **Deploy a tagged image:**
    ```bash
-   export GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.2
-   export GRADING_WEB_ENV_FILE=/etc/grading-web/web.env
-   docker compose -f docker/web-grading/docker-compose.prod.yml pull
-   docker compose -f docker/web-grading/docker-compose.prod.yml up -d
+   make deploy v0.8.1 DEPLOY_ENV_FILE=/etc/grading-web/web.env
    ```
 
 3. **Upgrade to a new release:**
    ```bash
-   export GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3
-   docker compose -f docker/web-grading/docker-compose.prod.yml pull
-   docker compose -f docker/web-grading/docker-compose.prod.yml up -d
+   make deploy latest DEPLOY_ENV_FILE=/etc/grading-web/web.env
    ```
 
 Equivalent Make targets from repo root:
-- `make image DOCKER_IMAGE=autograder-web-grading:local`
-- `make deploy DOCKER_ENV_FILE=/etc/grading-web/web.env DOCKER_IMAGE=autograder-web-grading:local`
-- `GRADING_BOOTSTRAP_ADMIN_PASSWORD='strong-temp-secret' make deploy DOCKER_ENV_FILE=/etc/grading-web/web.env`
+- `make debug` (local uvicorn, no Docker)
+- `make run` (build local image and run via production compose)
+- `make publish v0.8.1` (publish `samogden/webgraderui:v0.8.1` and `latest`)
+- `make deploy v0.8.1 DEPLOY_ENV_FILE=/etc/grading-web/web.env`
+- `GRADING_BOOTSTRAP_ADMIN_PASSWORD='strong-temp-secret' make deploy DEPLOY_ENV_FILE=/etc/grading-web/web.env`
 
-`make deploy` validates env config, builds the image if needed, and starts
+`make deploy` validates env config, pulls the selected image tag, and starts
 `docker-compose.prod.yml` with persistent volumes preserved.
 
 ## Getting API Keys
@@ -405,10 +402,8 @@ docker-compose up -d
 
 ### Production Update (image-based)
 ```bash
-export GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.3
-export GRADING_WEB_ENV_FILE=/etc/grading-web/web.env
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+cd /path/to/GradingWebUI
+make deploy latest DEPLOY_ENV_FILE=/etc/grading-web/web.env
 ```
 
 ### Database Migrations

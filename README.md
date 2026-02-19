@@ -78,41 +78,57 @@ Primary workflows from the repo root:
 ### Run local dev server
 
 ```bash
-make dev
+make debug
 ```
 
-(`make run` is kept as an alias.)
+(`make dev` is kept as an alias.)
 
-### Build a local Docker image
+### Build and run local Docker image
 
 ```bash
-make image
+make run
 ```
 
-Or set a custom tag:
+Optional overrides:
 
 ```bash
-make image DOCKER_IMAGE=autograder-web-grading:mytag
+make run RUN_IMAGE=autograder-web-grading:mytag RUN_ENV_FILE=.env
 ```
+
+### Publish a release image (multi-arch)
+
+```bash
+make publish v0.8.1
+```
+
+This pushes:
+- `samogden/webgraderui:v0.8.1`
+- `samogden/webgraderui:latest`
+
+Default platforms are `linux/amd64,linux/arm64` (override with `PUBLISH_PLATFORMS`).
 
 ### Deploy container with env-file validation
 
 ```bash
-make deploy DOCKER_ENV_FILE=/etc/grading-web/web.env
+make deploy v0.8.1 DEPLOY_ENV_FILE=/etc/grading-web/web.env
 ```
 
-This validates env configuration, builds the image if needed, and starts
-`docker/web-grading/docker-compose.prod.yml` with:
-- `GRADING_WEB_IMAGE=$(DOCKER_IMAGE)`
-- `GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE)`
+Or deploy `latest`:
 
-Named volumes (including `grading-data`) are preserved.
+```bash
+make deploy DEPLOY_ENV_FILE=/etc/grading-web/web.env
+```
+
+This validates env configuration and starts
+`docker/web-grading/docker-compose.prod.yml` with:
+- `GRADING_WEB_IMAGE=$(REGISTRY_IMAGE):$(DEPLOY_TAG)`
+- `GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE)`
 
 One-time bootstrap admin without editing env file:
 
 ```bash
 GRADING_BOOTSTRAP_ADMIN_PASSWORD='use-a-strong-temp-secret' \
-make deploy DOCKER_ENV_FILE=/etc/grading-web/web.env
+make deploy DEPLOY_ENV_FILE=/etc/grading-web/web.env
 ```
 
 After first successful login, remove that variable from your shell/session
@@ -122,11 +138,11 @@ If you deploy from a remote registry image instead of a local build, use
 direct Compose commands:
 
 ```bash
-GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 \
+GRADING_WEB_IMAGE=samogden/webgraderui:v0.8.1 \
 GRADING_WEB_ENV_FILE=/etc/grading-web/web.env \
 docker compose -f docker/web-grading/docker-compose.prod.yml pull
 
-GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.5.4 \
+GRADING_WEB_IMAGE=samogden/webgraderui:v0.8.1 \
 GRADING_WEB_ENV_FILE=/etc/grading-web/web.env \
 docker compose -f docker/web-grading/docker-compose.prod.yml up -d
 ```
