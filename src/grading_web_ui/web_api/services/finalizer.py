@@ -17,6 +17,7 @@ from PIL import Image
 
 from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository
 from ..services.problem_service import ProblemService
+from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from lms_interface.canvas_interface import CanvasInterface
 from lms_interface.classes import Feedback
 from .. import sse
@@ -26,6 +27,16 @@ log = logging.getLogger(__name__)
 
 class FinalizationService:
   """Handles finalization of grading sessions"""
+  AUTO_EXPLANATION_DISCLAIMER = (
+    "Note: The explanation below is automatically generated and might not be correct."
+  )
+
+  @staticmethod
+  def _submission_label(submission: Dict) -> str:
+    submission_id = submission.get("id")
+    if submission_id is not None:
+      return f"submission {submission_id}"
+    return "submission"
 
   def __init__(self, session_id: int, temp_dir: Path, stream_id: str,
                event_loop):
@@ -42,6 +53,7 @@ class FinalizationService:
     self.steps_per_submission = 3
     self.total_steps = 0
     self.current_step = 0
+    self.last_persisted_step = 0
     self.quiz_yaml_text = None
 
   def finalize(self):
@@ -66,36 +78,36 @@ class FinalizationService:
     # Process each submission
     for i, submission in enumerate(submissions, 1):
       self.current_submission = i
-      student_name = submission['student_name'] or 'Unknown'
+      submission_label = self._submission_label(submission)
 
       try:
         # Generate annotated PDF
         self._update_progress(
-          f"Processing {i}/{len(submissions)}: Generating PDF for {student_name}"
+          f"Processing {i}/{len(submissions)}: Generating PDF for {submission_label}"
         )
         pdf_path = self._create_annotated_pdf(submission)
 
         # Generate comments
         self._update_progress(
-          f"Processing {i}/{len(submissions)}: Preparing comments for {student_name}"
+          f"Processing {i}/{len(submissions)}: Preparing comments for {submission_label}"
         )
         comments = self._generate_comments(submission)
 
         # Upload to Canvas
         self._update_progress(
-          f"Processing {i}/{len(submissions)}: Uploading to Canvas for {student_name}"
+          f"Processing {i}/{len(submissions)}: Uploading to Canvas for {submission_label}"
         )
         self._upload_to_canvas(submission, pdf_path, comments)
 
         log.info(
-          f"Successfully uploaded submission {i}/{len(submissions)} for {student_name}"
+          f"Successfully uploaded submission {i}/{len(submissions)} for {submission_label}"
         )
 
       except Exception as e:
         log.error(f"Failed to process submission {submission['id']}: {e}",
                   exc_info=True)
         self._update_progress(
-          f"Processing {i}/{len(submissions)}: ERROR - Failed for {student_name}: {str(e)}"
+          f"Processing {i}/{len(submissions)}: ERROR - Failed for {submission_label}: {str(e)}"
         )
         # Continue with other submissions
 
@@ -287,7 +299,6 @@ class FinalizationService:
     quiz_name = (submission.get("session_name")
                  or submission.get("assignment_name")
                  or "Grading Feedback")
-    student_name = submission.get("student_name") or "Unknown Student"
     total_score = sum(p["score"] for p in submission["problems"])
     total_max = sum(
       p["max_points"] for p in submission["problems"] if p.get("max_points") is not None
@@ -338,10 +349,13 @@ class FinalizationService:
             f"problem {problem['problem_number']}: {e}"
           )
 
-      feedback_html = self._render_text_or_html(problem.get("feedback"))
-      explanation_html = self._render_text_or_html(
-        self._get_explanation_html(problem)
-      )
+      explanation_source = self._get_explanation_html(problem)
+      explanation_html = self._render_text_or_html(explanation_source)
+
+      feedback_source = problem.get("feedback") or ""
+      if explanation_source:
+        feedback_source = self._strip_auto_generated_explanation(feedback_source)
+      feedback_html = self._render_text_or_html(feedback_source)
 
       explanation_section = ""
       if explanation_html:
@@ -500,7 +514,6 @@ class FinalizationService:
 <body>
   <header>
     <h1>{html.escape(quiz_name)}</h1>
-    <div class="meta">Student: {html.escape(student_name)}</div>
     <div class="summary">Total Score: {html.escape(score_summary)}</div>
   </header>
   {"".join(problem_sections)}
@@ -509,6 +522,38 @@ class FinalizationService:
 """
 
     return html_doc
+
+  def _strip_auto_generated_explanation(self, feedback_text: str) -> str:
+    if not feedback_text:
+      return ""
+
+    marker = self.AUTO_EXPLANATION_DISCLAIMER
+    idx = feedback_text.find(marker)
+    if idx < 0:
+      return feedback_text
+
+    separator = "\n\n---\n\n"
+
+    # Include a separator immediately before the disclaimer in the removed block.
+    start = idx
+    before_marker = feedback_text[:idx]
+    if before_marker.endswith(separator):
+      start = idx - len(separator)
+    elif before_marker.rstrip().endswith("---"):
+      start = len(before_marker.rstrip()[:-3].rstrip())
+
+    # Preserve trailing manual notes if they were added after the auto block.
+    # We treat the next markdown separator as the end of the legacy auto block.
+    end = len(feedback_text)
+    trailing_sep_idx = feedback_text.find(separator, idx + len(marker))
+    if trailing_sep_idx >= 0:
+      end = trailing_sep_idx + len(separator)
+
+    kept_prefix = feedback_text[:start].rstrip()
+    kept_suffix = feedback_text[end:].lstrip()
+    if kept_prefix and kept_suffix:
+      return f"{kept_prefix}\n\n{kept_suffix}"
+    return kept_prefix or kept_suffix
 
   def _render_text_or_html(self, text: str) -> str:
     if not text:
@@ -534,11 +579,11 @@ class FinalizationService:
     qr_data = problem.get("qr_encrypted_data")
     if qr_data:
       try:
-        from QuizGenerator.regenerate import regenerate_from_encrypted
-        result = regenerate_from_encrypted(encrypted_data=qr_data,
-                                           points=problem.get("max_points") or 0.0,
-                                           image_mode="inline",
-                                           yaml_text=self.quiz_yaml_text)
+        result = regenerate_from_encrypted_compat(
+          encrypted_data=qr_data,
+          points=problem.get("max_points") or 0.0,
+          image_mode="inline",
+          yaml_text=self.quiz_yaml_text)
         explanation_html = result.get("explanation_html") or result.get("explanation_markdown")
         if explanation_html:
           return explanation_html
@@ -597,7 +642,7 @@ class FinalizationService:
 
     # Canvas expects file-like objects
     pdf_file = io.BytesIO(pdf_bytes)
-    pdf_file.name = f"graded_exam_{submission['student_name']}.pdf"
+    pdf_file.name = f"graded_exam_submission_{submission['id']}.pdf"
 
     # Upload to Canvas
     self.assignment.push_feedback(score=sum(p["score"]
@@ -613,12 +658,21 @@ class FinalizationService:
     # Increment step counter
     self.current_step += 1
 
-    # Update database
-    session_repo = SessionRepository()
-    session = session_repo.get_by_id(self.session_id)
-    if session:
-      session.processing_message = message
-      session_repo.update(session)
+    should_persist = (
+      self.current_step == 1
+      or self.current_step >= self.total_steps
+      or "ERROR" in message
+      or (self.current_step - self.last_persisted_step) >= self.steps_per_submission
+    )
+
+    # Persist to DB less frequently to reduce lock churn during long finalization runs.
+    if should_persist:
+      session_repo = SessionRepository()
+      session = session_repo.get_by_id(self.session_id)
+      if session:
+        session.processing_message = message
+        session_repo.update(session)
+      self.last_persisted_step = self.current_step
 
     # Send SSE progress event based on steps completed
     if self.total_steps > 0:

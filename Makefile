@@ -11,9 +11,14 @@ DOCKER_COMPOSE ?= docker compose -f docker/web-grading/docker-compose.yml
 DOCKER_COMPOSE_PROD ?= docker compose -f docker/web-grading/docker-compose.prod.yml
 DOCKER_IMAGE ?= ghcr.io/otterden-lab/gradingwebui:latest
 DOCKER_ENV_FILE ?= /etc/grading-web/web.env
+DOCKER_LOCAL_ENV_FILE ?= docker/web-grading/.env
+DEPLOY_ENV_VALIDATOR ?= scripts/validate_deploy_env.py
 QUIZGEN_PATH ?= /Users/ssogden/repos/teaching/QuizGeneration
 
-.PHONY: help install install-quizgen-local run run-reload test test-api docker-build docker-up docker-up-build docker-restart-web docker-logs docker-down docker-ps docker-shell docker-prod-pull docker-prod-up docker-prod-down docker-prod-logs docker-prod-ps
+.PHONY: help install install-quizgen-local run run-reload test test-api \
+	docker-build docker-up docker-up-build docker-restart-web docker-logs docker-down docker-ps docker-shell \
+	docker-prod-pull docker-prod-up docker-prod-down docker-prod-logs docker-prod-ps \
+	validate-local-env validate-prod-env deploy deploy-prod
 
 help:
 	@echo "Targets:"
@@ -36,6 +41,10 @@ help:
 	@echo "  docker-prod-down   Stop production container(s)"
 	@echo "  docker-prod-logs   Tail production logs"
 	@echo "  docker-prod-ps     Show production service status"
+	@echo "  validate-local-env Validate docker/web-grading/.env for local deploy"
+	@echo "  validate-prod-env  Validate server env file for production deploy"
+	@echo "  deploy             Validate env + rebuild/redeploy local Docker stack"
+	@echo "  deploy-prod        Validate env + pull/redeploy production image stack"
 
 install:
 	@if command -v $(UV) >/dev/null 2>&1; then \
@@ -106,4 +115,19 @@ docker-prod-logs:
 	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) logs -f
 
 docker-prod-ps:
+	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) ps
+
+validate-local-env:
+	@$(PYTHON) $(DEPLOY_ENV_VALIDATOR) $(DOCKER_LOCAL_ENV_FILE)
+
+validate-prod-env:
+	@$(PYTHON) $(DEPLOY_ENV_VALIDATOR) $(DOCKER_ENV_FILE) --require-prod-pair
+
+deploy: validate-local-env
+	$(DOCKER_COMPOSE) up -d --build
+	$(DOCKER_COMPOSE) ps
+
+deploy-prod: validate-prod-env
+	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) pull
+	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) up -d
 	GRADING_WEB_IMAGE=$(DOCKER_IMAGE) GRADING_WEB_ENV_FILE=$(DOCKER_ENV_FILE) $(DOCKER_COMPOSE_PROD) ps

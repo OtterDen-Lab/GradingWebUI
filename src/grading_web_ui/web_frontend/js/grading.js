@@ -683,13 +683,14 @@ async function submitGrade() {
     // Auto-include explanation if checkbox is enabled and explanation is available
     const includeExplanation = document.getElementById('include-explanation-checkbox');
     if (includeExplanation && includeExplanation.checked && currentProblem && explanationCache[currentProblem.id]) {
-        const explanation = explanationCache[currentProblem.id];
-        const explanationWithDisclaimer = 'Note: The explanation below is automatically generated and might not be correct.\n\n' + explanation;
+        const cachedExplanation = explanationCache[currentProblem.id];
+        const explanationText = cachedExplanation.markdown || cachedExplanation.html || '';
+        const explanationWithDisclaimer = 'Note: The explanation below is automatically generated and might not be correct.\n\n' + explanationText;
 
-        if (feedback.trim()) {
+        if (explanationText && feedback.trim()) {
             // Append explanation with separator if there's existing feedback
             feedback = feedback + '\n\n---\n\n' + explanationWithDisclaimer;
-        } else {
+        } else if (explanationText) {
             // Use explanation alone if no custom feedback
             feedback = explanationWithDisclaimer;
         }
@@ -2429,7 +2430,7 @@ function updateSortIndicators(column) {
 // EXPLANATION LOADING AND AUTO-INCLUDE IN FEEDBACK
 // =============================================================================
 
-// Cache for explanations { problemId: markdownText }
+// Cache for explanations { problemId: { html?: string, markdown?: string } }
 let explanationCache = {};
 
 // Load explanation from QR code if available
@@ -2468,9 +2469,11 @@ async function loadExplanation() {
 
         const data = await response.json();
 
-        if (data.explanation_markdown) {
-            // Cache explanation
-            explanationCache[currentProblem.id] = data.explanation_markdown;
+        if (data.explanation_html || data.explanation_markdown) {
+            explanationCache[currentProblem.id] = {
+                html: data.explanation_html || null,
+                markdown: data.explanation_markdown || null
+            };
             if (viewBtn) {
                 viewBtn.disabled = false;
                 viewBtn.textContent = 'View Explanation';
@@ -2495,7 +2498,10 @@ function showExplanationDialog() {
         return;
     }
 
-    const htmlContent = marked.parse(explanationCache[currentProblem.id]);
+    const explanation = explanationCache[currentProblem.id];
+    const htmlContent = explanation.html
+        ? explanation.html
+        : marked.parse(explanation.markdown || '');
     content.innerHTML = htmlContent;
     dialog.style.display = 'flex';
 

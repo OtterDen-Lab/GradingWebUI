@@ -2,13 +2,15 @@
 Main FastAPI application entry point.
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from dotenv import load_dotenv
 import subprocess
 import tomllib
+import logging
+from time import perf_counter
 
 # Load environment variables from .env file
 load_dotenv()
@@ -61,7 +63,11 @@ DISPLAY_VERSION = f"v{PROJECT_VERSION}" + ("+" if _is_ahead_of_tag(PROJECT_VERSI
 
 
 from .database import init_database, get_db_connection
+from .services.quiz_encryption import install_quizgenerator_key_provider
+from .services.runtime_metrics import RuntimeMetrics
+from .startup_config import validate_startup_configuration
 from .routes import sessions, problems, uploads, canvas, matching, finalize, ai_grader, alignment, feedback_tags, auth, assignments
+from .auth import require_instructor
 
 # Optional debug routes (may not exist on all deployments)
 try:
@@ -74,6 +80,14 @@ except ImportError:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   """Lifespan event handler for startup/shutdown"""
+  log = logging.getLogger(__name__)
+
+  # Ensure QuizGenerator key access does not mutate process env at runtime.
+  install_quizgenerator_key_provider()
+
+  for warning in validate_startup_configuration():
+    log.warning("Startup config: %s", warning)
+
   # Startup: Initialize database
   init_database()
 
@@ -108,12 +122,60 @@ app.add_middleware(
   allow_headers=["*"],
 )
 
+_runtime_metrics = RuntimeMetrics()
+
+
+@app.middleware("http")
+async def request_metrics_middleware(request, call_next):
+  start = perf_counter()
+  route = request.url.path
+  try:
+    response = await call_next(request)
+    route_obj = request.scope.get("route")
+    if route_obj and getattr(route_obj, "path", None):
+      route = route_obj.path
+    _runtime_metrics.record(route, response.status_code)
+    if response.status_code >= 500:
+      logging.getLogger(__name__).error(
+        "request_error method=%s route=%s status=%s duration_ms=%.2f",
+        request.method,
+        route,
+        response.status_code,
+        (perf_counter() - start) * 1000.0,
+      )
+    return response
+  except Exception:
+    route_obj = request.scope.get("route")
+    if route_obj and getattr(route_obj, "path", None):
+      route = route_obj.path
+    _runtime_metrics.record(route, 500)
+    logging.getLogger(__name__).exception(
+      "request_exception method=%s route=%s duration_ms=%.2f",
+      request.method,
+      route,
+      (perf_counter() - start) * 1000.0,
+    )
+    raise
+
 
 # Health check endpoint (must be before static files mount)
 @app.get("/api/health")
 async def health_check():
   """Health check endpoint"""
-  return {"status": "healthy", "version": PROJECT_VERSION}
+  metrics = _runtime_metrics.snapshot()
+  return {
+    "status": "healthy",
+    "version": PROJECT_VERSION,
+    "uptime_seconds": metrics["uptime_seconds"],
+    "requests_total": metrics["requests_total"],
+    "requests_5xx_total": metrics["requests_5xx_total"],
+  }
+
+
+@app.get("/api/metrics")
+async def metrics(current_user: dict = Depends(require_instructor)):
+  """Basic runtime metrics (instructor only)."""
+  return _runtime_metrics.snapshot()
 
 
 @app.get("/api/version")

@@ -12,6 +12,7 @@ from ..repositories import SessionRepository, ProblemRepository, SubmissionRepos
 from ..database import update_problem_stats
 from ..services.ai_grader import AIGraderService
 from .. import sse
+from .. import workflow_locks
 from ..auth import require_instructor
 
 router = APIRouter()
@@ -82,6 +83,20 @@ class SaveRubricRequest(BaseModel):
   """Request to save/update a rubric"""
   problem_number: int
   rubric: str
+
+
+def acquire_autograde_lock(session_id: int) -> None:
+  """Prevent concurrent autograde/finalize runs for the same session."""
+  acquired, conflict = workflow_locks.acquire_with_conflicts(
+    "autograde", session_id, ("finalize", ))
+  if acquired:
+    return
+  if conflict == "finalize":
+    raise HTTPException(
+      status_code=409,
+      detail="Cannot start autograding while finalization is in progress")
+  raise HTTPException(status_code=409,
+                      detail="Autograding is already in progress for this session")
 
 
 @router.get("/{session_id}/autograde-stream")
@@ -239,12 +254,17 @@ async def start_autograde_all(
     raise HTTPException(status_code=400,
                         detail="No ungraded problems found for this session")
 
-  stream_id = sse.make_stream_id("autograde", session_id)
-  sse.create_stream(stream_id)
+  acquire_autograde_lock(session_id)
 
-  settings = request.settings.model_dump()
-  background_tasks.add_task(run_autograding_all, session_id, problem_numbers,
-                            totals_by_problem, settings, stream_id)
+  stream_id = sse.make_stream_id("autograde", session_id)
+  try:
+    sse.create_stream(stream_id)
+    settings = request.settings.model_dump()
+    background_tasks.add_task(run_autograding_all, session_id, problem_numbers,
+                              totals_by_problem, settings, stream_id)
+  except Exception:
+    workflow_locks.release("autograde", session_id)
+    raise
 
   start_message = "Image-only autograding started"
   if settings.get("dry_run"):
@@ -287,14 +307,20 @@ async def _start_autograde_text(session_id: int, request: AutogradeRequest,
   metadata_repo.upsert_max_points(session_id, request.problem_number,
                                   request.max_points)
 
+  acquire_autograde_lock(session_id)
+
   # Create SSE stream for progress updates
   stream_id = sse.make_stream_id("autograde", session_id)
-  sse.create_stream(stream_id)
+  try:
+    sse.create_stream(stream_id)
 
-  # Start background autograding
-  background_tasks.add_task(run_autograding, session_id,
-                            request.problem_number, request.max_points,
-                            stream_id, request.auto_accept)
+    # Start background autograding
+    background_tasks.add_task(run_autograding, session_id,
+                              request.problem_number, request.max_points,
+                              stream_id, request.auto_accept)
+  except Exception:
+    workflow_locks.release("autograde", session_id)
+    raise
 
   return AutogradeResponse(
     status="started",
@@ -325,12 +351,17 @@ async def _start_autograde_image(session_id: int, request: AutogradeRequest,
       f"No ungraded problems found for problem number {request.problem_number}"
     )
 
-  stream_id = sse.make_stream_id("autograde", session_id)
-  sse.create_stream(stream_id)
+  acquire_autograde_lock(session_id)
 
-  settings = request.settings.model_dump()
-  background_tasks.add_task(run_autograding_image, session_id,
-                            request.problem_number, settings, stream_id)
+  stream_id = sse.make_stream_id("autograde", session_id)
+  try:
+    sse.create_stream(stream_id)
+    settings = request.settings.model_dump()
+    background_tasks.add_task(run_autograding_image, session_id,
+                              request.problem_number, settings, stream_id)
+  except Exception:
+    workflow_locks.release("autograde", session_id)
+    raise
 
   start_message = "Image-only autograding started"
   if settings.get("dry_run"):
@@ -402,6 +433,8 @@ async def run_autograding_image(session_id: int, problem_number: int,
       "error": str(e),
       "message": f"Autograding failed: {str(e)}"
     })
+  finally:
+    workflow_locks.release("autograde", session_id)
 
 
 async def run_autograding_all(session_id: int, problem_numbers: list,
@@ -475,6 +508,8 @@ async def run_autograding_all(session_id: int, problem_numbers: list,
       "error": str(e),
       "message": f"Autograding failed: {str(e)}"
     })
+  finally:
+    workflow_locks.release("autograde", session_id)
 
 
 async def run_autograding(session_id: int, problem_number: int,
@@ -548,6 +583,8 @@ async def run_autograding(session_id: int, problem_number: int,
       "error": str(e),
       "message": f"Autograding failed: {str(e)}"
     })
+  finally:
+    workflow_locks.release("autograde", session_id)
 
 
 @router.post("/{session_id}/generate-rubric",

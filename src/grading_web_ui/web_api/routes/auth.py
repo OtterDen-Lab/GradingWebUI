@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Response, Depends, Request
 from typing import List
 from datetime import datetime
 import logging
+import os
 
 from ..auth import get_current_user, require_instructor
 from ..services.auth_service import AuthService
@@ -21,6 +22,20 @@ from ..models import (
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+
+
+def get_cookie_secure_setting() -> bool:
+  """Read secure cookie behavior from environment (secure by default)."""
+  value = os.getenv("AUTH_COOKIE_SECURE", "true").strip().lower()
+  return value in ("1", "true", "yes", "on")
+
+
+def get_cookie_samesite_setting() -> str:
+  """Read SameSite policy from environment with safe fallback."""
+  value = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
+  if value in ("strict", "lax", "none"):
+    return value
+  return "lax"
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -70,13 +85,16 @@ async def login(request: Request, response: Response,
       conn
     )
 
+  secure_cookie = get_cookie_secure_setting()
+  same_site = get_cookie_samesite_setting()
+
   # Set HTTP-only cookie
   response.set_cookie(
     key="auth_session_id",
     value=session_id,
     httponly=True,
-    secure=False,  # Set to True in production with HTTPS
-    samesite="lax",
+    secure=secure_cookie,
+    samesite=same_site,
     max_age=24 * 60 * 60  # 24 hours
   )
 
@@ -111,7 +129,11 @@ async def logout(
     Success message
   """
   # Delete session cookie
-  response.delete_cookie(key="auth_session_id")
+  response.delete_cookie(
+    key="auth_session_id",
+    httponly=True,
+    secure=get_cookie_secure_setting(),
+    samesite=get_cookie_samesite_setting())
 
   log.info(f"User {user['username']} logged out")
 

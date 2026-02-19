@@ -9,6 +9,8 @@ import tempfile
 import zipfile
 import hashlib
 import logging
+import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 import yaml
@@ -54,6 +56,69 @@ def compute_file_hash(file_path: Path) -> str:
     for byte_block in iter(lambda: f.read(4096), b""):
       sha256_hash.update(byte_block)
   return sha256_hash.hexdigest()
+
+
+def sanitize_uploaded_filename(raw_filename: str) -> str:
+  """
+  Return a safe filename for local filesystem writes.
+
+  Removes path separators and normalizes suspicious characters so uploaded
+  names cannot escape the target directory.
+  """
+  trimmed = (raw_filename or "").strip()
+  if not trimmed:
+    raise HTTPException(status_code=400, detail="Uploaded file name is empty")
+
+  normalized = trimmed.replace("\\", "/")
+  candidate = Path(normalized).name.strip()
+  if not candidate or candidate in (".", ".."):
+    raise HTTPException(status_code=400,
+                        detail=f"Invalid uploaded filename '{raw_filename}'")
+
+  safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", candidate)
+  safe_name = safe_name.strip(". ")
+  if not safe_name:
+    raise HTTPException(status_code=400,
+                        detail=f"Invalid uploaded filename '{raw_filename}'")
+
+  return safe_name
+
+
+def extract_pdf_files_safely(zip_path: Path, extract_dir: Path) -> List[Path]:
+  """
+  Extract only PDF files from zip archive after traversal checks.
+  """
+  extracted_pdfs: List[Path] = []
+  extract_root = extract_dir.resolve()
+
+  with zipfile.ZipFile(zip_path, "r") as zip_ref:
+    for member in zip_ref.infolist():
+      member_name = member.filename.replace("\\", "/")
+      if not member_name or member_name.endswith("/"):
+        continue
+      if "\x00" in member_name:
+        raise HTTPException(status_code=400,
+                            detail="Zip archive contains invalid file paths")
+
+      member_path = Path(member_name)
+      if member_path.is_absolute() or ".." in member_path.parts:
+        raise HTTPException(status_code=400,
+                            detail="Zip archive contains unsafe file paths")
+
+      destination = (extract_root / member_path).resolve()
+      if extract_root not in destination.parents:
+        raise HTTPException(status_code=400,
+                            detail="Zip archive contains unsafe file paths")
+
+      if destination.suffix.lower() != ".pdf":
+        continue
+
+      destination.parent.mkdir(parents=True, exist_ok=True)
+      with zip_ref.open(member, "r") as src_file, open(destination, "wb") as out_file:
+        shutil.copyfileobj(src_file, out_file)
+      extracted_pdfs.append(destination)
+
+  return extracted_pdfs
 
 
 def parse_uploaded_quiz_yaml(content: bytes, filename: str) -> Dict[str, Any]:
@@ -157,9 +222,10 @@ async def upload_exams(
   for file in files:
     # Handle duplicate filenames by appending a counter
     # This can happen when dragging folders with same filenames in different subdirectories
-    base_filename = (file.filename or "").strip()
-    if not base_filename:
+    original_filename = (file.filename or "").strip()
+    if not original_filename:
       continue
+    base_filename = sanitize_uploaded_filename(original_filename)
     if base_filename in filename_counter:
       filename_counter[base_filename] += 1
       # Insert counter before extension: "file.pdf" -> "file_1.pdf"
@@ -205,11 +271,8 @@ async def upload_exams(
     extract_dir = temp_dir / "extracted"
     extract_dir.mkdir()
 
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-      zip_ref.extractall(extract_dir)
-
     # Find all PDFs in extracted directory and compute their hashes
-    saved_files = list(extract_dir.rglob("*.pdf"))
+    saved_files = extract_pdf_files_safely(zip_path, extract_dir)
     file_metadata = {}
     for pdf_path in saved_files:
       file_hash = compute_file_hash(pdf_path)

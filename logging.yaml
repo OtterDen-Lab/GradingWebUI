@@ -21,18 +21,24 @@ handlers:
     stream: ext://sys.stdout
 
   file:
-    class: logging.FileHandler
+    class: logging.handlers.RotatingFileHandler
     level: DEBUG
     formatter: detailed
     filename: ${LOG_FILE:-teachingtools.log}
     mode: a
+    maxBytes: ${LOG_MAX_BYTES:-10485760}
+    backupCount: ${LOG_BACKUP_COUNT:-5}
+    encoding: utf-8
 
   error_file:
-    class: logging.FileHandler
+    class: logging.handlers.RotatingFileHandler
     level: ERROR
     formatter: detailed
     filename: ${ERROR_LOG_FILE:-teachingtools_errors.log}
     mode: a
+    maxBytes: ${ERROR_LOG_MAX_BYTES:-10485760}
+    backupCount: ${ERROR_LOG_BACKUP_COUNT:-5}
+    encoding: utf-8
 
 loggers:
   grading_web_ui:

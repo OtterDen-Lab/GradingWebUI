@@ -14,6 +14,7 @@ from ..models import ProblemResponse, GradeSubmission
 from ..database import get_db_connection, update_problem_stats
 from ..repositories import ProblemRepository, SubmissionRepository, SessionRepository
 from ..services.problem_service import ProblemService
+from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from ..auth import require_session_access, get_current_user
 
 from grading_web_ui import ai_helper
@@ -587,16 +588,6 @@ async def regenerate_answer(
     raise HTTPException(status_code=400,
                         detail="QR code data not available for this problem")
 
-  # Import QuizGenerator regeneration function
-  try:
-    from QuizGenerator.regenerate import regenerate_from_encrypted
-  except ImportError:
-    raise HTTPException(
-      status_code=500,
-      detail=
-      "QuizGenerator module not available. Please install it (pip install QuizGenerator>=0.4.0) to use answer regeneration."
-    )
-
   try:
     session_metadata = SessionRepository().get_metadata(problem.session_id) or {}
     quiz_yaml_text = session_metadata.get("quiz_yaml_text")
@@ -604,9 +595,10 @@ async def regenerate_answer(
       quiz_yaml_text = None
 
     # Regenerate the answer using encrypted QR data
-    result = regenerate_from_encrypted(encrypted_data=problem.qr_encrypted_data,
-                                       points=problem.max_points or 0.0,
-                                       yaml_text=quiz_yaml_text)
+    result = regenerate_from_encrypted_compat(
+      encrypted_data=problem.qr_encrypted_data,
+      points=problem.max_points or 0.0,
+      yaml_text=quiz_yaml_text)
 
     # Extract metadata from result (returned by regenerate)
     question_type = result.get('question_type')
@@ -695,12 +687,22 @@ async def regenerate_answer(
     if 'answer_key_html' in result:
       response['answer_key_html'] = result['answer_key_html']
 
+    # Include explanation HTML if available
+    if 'explanation_html' in result:
+      response['explanation_html'] = result['explanation_html']
+
     # Include explanation markdown if available
     if 'explanation_markdown' in result:
       response['explanation_markdown'] = result['explanation_markdown']
 
     return response
 
+  except ImportError:
+    raise HTTPException(
+      status_code=500,
+      detail=
+      "QuizGenerator module not available. Please install it (pip install QuizGenerator>=0.4.0) to use answer regeneration."
+    )
   except ValueError as e:
     error_msg = str(e)
     if "Must provide yaml_path, yaml_text, or yaml_docs." in error_msg:

@@ -11,6 +11,7 @@ from .submission_repository import SubmissionRepository
 from .problem_repository import ProblemRepository
 from .problem_metadata_repository import ProblemMetadataRepository
 from .feedback_tag_repository import FeedbackTagRepository
+from .problem_stats_repository import ProblemStatsRepository
 
 __all__ = [
   "SessionRepository",
@@ -18,6 +19,7 @@ __all__ = [
   "ProblemRepository",
   "ProblemMetadataRepository",
   "FeedbackTagRepository",
+  "ProblemStatsRepository",
   "with_transaction",
   "RepositoryFactory",
 ]
@@ -88,6 +90,8 @@ class RepositoryFactory:
     self._submissions = None
     self._problems = None
     self._metadata = None
+    self._feedback_tags = None
+    self._problem_stats = None
 
   @property
   def sessions(self) -> SessionRepository:
@@ -116,3 +120,17 @@ class RepositoryFactory:
     if self._metadata is None:
       self._metadata = ProblemMetadataRepository(self._conn)
     return self._metadata
+
+  @property
+  def feedback_tags(self) -> FeedbackTagRepository:
+    """Get or create FeedbackTagRepository with shared connection."""
+    if self._feedback_tags is None:
+      self._feedback_tags = FeedbackTagRepository(self._conn)
+    return self._feedback_tags
+
+  @property
+  def problem_stats(self) -> ProblemStatsRepository:
+    """Get or create ProblemStatsRepository with shared connection."""
+    if self._problem_stats is None:
+      self._problem_stats = ProblemStatsRepository(self._conn)
+    return self._problem_stats

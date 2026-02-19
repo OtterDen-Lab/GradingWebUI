@@ -17,6 +17,7 @@ from ..repositories import (
   SubmissionRepository,
 )
 from .problem_service import ProblemService
+from .quiz_regeneration import regenerate_from_encrypted_compat
 
 log = logging.getLogger(__name__)
 
@@ -860,16 +861,13 @@ class AIGraderService:
       return None
 
     try:
-      from QuizGenerator.regenerate import regenerate_from_encrypted
-    except ImportError:
-      log.warning("QuizGenerator not available; skipping reference answer")
-      return None
-
-    try:
-      result = regenerate_from_encrypted(
+      result = regenerate_from_encrypted_compat(
         encrypted_data=encrypted_data,
         points=problem_row.get("max_points") or 0.0,
         yaml_text=self._get_session_quiz_yaml_text(session_id))
+    except ImportError:
+      log.warning("QuizGenerator not available; skipping reference answer")
+      return None
     except Exception as e:
       log.warning(f"Failed to regenerate answer: {e}")
       return None

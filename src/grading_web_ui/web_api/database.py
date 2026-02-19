@@ -2,33 +2,159 @@
 Database connection and schema management.
 """
 import sqlite3
+import os
+import shutil
 from pathlib import Path
 from typing import Optional
 from contextlib import contextmanager
 import logging
+from datetime import datetime
 
 log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
 CURRENT_SCHEMA_VERSION = 24
+BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
+BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
+BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
+BOOTSTRAP_ADMIN_FULL_NAME_ENV = "GRADING_BOOTSTRAP_ADMIN_FULL_NAME"
+DB_MIGRATION_BACKUP_DIR_ENV = "GRADING_DB_MIGRATION_BACKUP_DIR"
+DB_CREATE_MIGRATION_BACKUP_ENV = "GRADING_DB_CREATE_MIGRATION_BACKUP"
 
 
 def get_db_path() -> Path:
   """Get database path from environment or use default"""
-  import os
   db_path = os.getenv("GRADING_DB_PATH", str(DEFAULT_DB_PATH))
   path = Path(db_path)
   path.parent.mkdir(parents=True, exist_ok=True)
   return path
 
 
+def _is_truthy(value: str) -> bool:
+  return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _should_create_migration_backup() -> bool:
+  return _is_truthy(os.getenv(DB_CREATE_MIGRATION_BACKUP_ENV, "true"))
+
+
+def _get_migration_backup_dir(db_path: Path) -> Path:
+  configured = os.getenv(DB_MIGRATION_BACKUP_DIR_ENV, "").strip()
+  backup_dir = Path(configured) if configured else db_path.parent
+  backup_dir.mkdir(parents=True, exist_ok=True)
+  return backup_dir
+
+
+def _create_pre_migration_backup(db_path: Path, from_version: int) -> Optional[Path]:
+  """
+  Create a pre-migration backup for rollback safety.
+
+  Returns backup path when a backup is created, otherwise None.
+  """
+  if not _should_create_migration_backup():
+    log.warning(
+      "Skipping pre-migration backup because %s=false",
+      DB_CREATE_MIGRATION_BACKUP_ENV)
+    return None
+
+  if not db_path.exists():
+    return None
+
+  backup_dir = _get_migration_backup_dir(db_path)
+  db_related_paths = [
+    db_path,
+    Path(f"{db_path}-wal"),
+    Path(f"{db_path}-shm"),
+  ]
+  db_size = sum(path.stat().st_size for path in db_related_paths if path.exists())
+  # Require at least 2x DB size (or 5MB minimum) in backup destination.
+  required_free_bytes = max(db_size * 2, 5 * 1024 * 1024)
+  free_bytes = shutil.disk_usage(str(backup_dir)).free
+  if free_bytes < required_free_bytes:
+    raise RuntimeError(
+      f"Insufficient disk space for pre-migration backup in {backup_dir}. "
+      f"Required {required_free_bytes} bytes, available {free_bytes} bytes.")
+
+  timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+  backup_path = backup_dir / f"{db_path.name}.v{from_version}.bak-{timestamp}"
+  source_conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+  backup_conn = sqlite3.connect(str(backup_path))
+  try:
+    # SQLite backup API creates a consistent snapshot and includes WAL state.
+    source_conn.backup(backup_conn)
+    backup_conn.commit()
+  finally:
+    backup_conn.close()
+    source_conn.close()
+  log.warning("Created pre-migration backup at %s", backup_path)
+  return backup_path
+
+
+def _get_busy_timeout_ms() -> int:
+  raw_value = os.getenv("GRADING_DB_BUSY_TIMEOUT_MS", "30000").strip()
+  try:
+    return max(1000, int(raw_value))
+  except ValueError:
+    return 30000
+
+
+def _get_connect_timeout_seconds() -> float:
+  raw_value = os.getenv("GRADING_DB_CONNECT_TIMEOUT_SECONDS", "30").strip()
+  try:
+    return max(1.0, float(raw_value))
+  except ValueError:
+    return 30.0
+
+
+def maybe_create_bootstrap_admin(cursor, email_required: bool = False):
+  """
+  Create initial admin user only when explicitly configured via environment.
+  """
+  password = os.getenv(BOOTSTRAP_ADMIN_PASSWORD_ENV, "").strip()
+  if not password:
+    log.info(
+      "Skipping bootstrap admin creation because %s is not set",
+      BOOTSTRAP_ADMIN_PASSWORD_ENV)
+    return
+
+  username = os.getenv(BOOTSTRAP_ADMIN_USERNAME_ENV, "admin").strip() or "admin"
+  email = os.getenv(BOOTSTRAP_ADMIN_EMAIL_ENV, "").strip() or None
+  full_name = (os.getenv(BOOTSTRAP_ADMIN_FULL_NAME_ENV, "Administrator").strip()
+               or "Administrator")
+
+  if email_required and not email:
+    email = f"{username}@example.com"
+
+  cursor.execute("SELECT id FROM users WHERE username = ? LIMIT 1", (username, ))
+  if cursor.fetchone():
+    log.info("Bootstrap admin user '%s' already exists; skipping", username)
+    return
+
+  import bcrypt
+  password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+  cursor.execute(
+    """
+      INSERT INTO users (username, email, password_hash, full_name, role)
+      VALUES (?, ?, ?, ?, ?)
+    """, (username, email, password_hash, full_name, "instructor"))
+  log.info("Created bootstrap admin user '%s' from environment config", username)
+
+
 @contextmanager
 def get_db_connection():
   """Context manager for database connections"""
   db_path = get_db_path()
-  conn = sqlite3.connect(str(db_path))
+  conn = sqlite3.connect(str(db_path), timeout=_get_connect_timeout_seconds())
   conn.row_factory = sqlite3.Row  # Enable column access by name
+  conn.execute("PRAGMA foreign_keys = ON")
+  conn.execute(f"PRAGMA busy_timeout = {_get_busy_timeout_ms()}")
+  try:
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+  except sqlite3.OperationalError:
+    # WAL may be unavailable on some filesystems; continue with defaults.
+    log.warning("Could not enable SQLite WAL mode for %s", db_path)
   try:
     yield conn
     conn.commit()
@@ -41,7 +167,8 @@ def get_db_connection():
 
 def init_database():
   """Initialize database with schema"""
-  log.info(f"Initializing database at {get_db_path()}")
+  db_path = get_db_path()
+  log.info(f"Initializing database at {db_path}")
 
   with get_db_connection() as conn:
     cursor = conn.cursor()
@@ -52,9 +179,24 @@ def init_database():
     if current_version == 0:
       # Create new database
       create_schema(cursor)
+    elif current_version > CURRENT_SCHEMA_VERSION:
+      raise RuntimeError(
+        f"Database schema version {current_version} is newer than supported "
+        f"application schema version {CURRENT_SCHEMA_VERSION}. "
+        "Downgrades are not supported. Use a matching/newer application version.")
     elif current_version < CURRENT_SCHEMA_VERSION:
+      # Preflight backup before in-place migrations for rollback safety.
+      _create_pre_migration_backup(db_path, current_version)
       # Run migrations
       run_migrations(cursor, current_version)
+
+    # Always allow bootstrap-admin creation on startup when users table exists.
+    # This provides an operator recovery path if the DB was initialized without
+    # bootstrap credentials and currently has no instructor account.
+    cursor.execute(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users' LIMIT 1")
+    if cursor.fetchone():
+      maybe_create_bootstrap_admin(cursor)
 
     log.info(f"Database ready (schema version {CURRENT_SCHEMA_VERSION})")
 
@@ -281,20 +423,7 @@ def create_schema(cursor):
     "CREATE INDEX idx_session_assignments_session ON session_assignments(session_id)"
   )
 
-  # Create default admin user (password: changeme123)
-  import bcrypt
-  password_hash = bcrypt.hashpw("changeme123".encode(),
-                                bcrypt.gensalt()).decode()
-  cursor.execute(
-    """
-        INSERT INTO users (username, email, password_hash, full_name, role)
-        VALUES (?, ?, ?, ?, ?)
-    """,
-    ("admin", "admin@example.com", password_hash, "Administrator",
-     "instructor"))
-
-  log.info(
-    "Created default admin user (username: admin, password: changeme123)")
+  maybe_create_bootstrap_admin(cursor)
 
   # Record schema version
   cursor.execute("INSERT INTO _schema_version (version) VALUES (?)",
@@ -847,20 +976,7 @@ def migrate_to_v22(cursor):
     "CREATE INDEX idx_session_assignments_session ON session_assignments(session_id)"
   )
 
-  # Create default admin user (password: changeme123)
-  import bcrypt
-  password_hash = bcrypt.hashpw("changeme123".encode(),
-                                bcrypt.gensalt()).decode()
-  cursor.execute(
-    """
-        INSERT INTO users (username, email, password_hash, full_name, role)
-        VALUES (?, ?, ?, ?, ?)
-    """,
-    ("admin", "admin@example.com", password_hash, "Administrator",
-     "instructor"))
-
-  log.info(
-    "Created default admin user (username: admin, password: changeme123)")
+  maybe_create_bootstrap_admin(cursor, email_required=True)
   log.info("Successfully added authentication and RBAC tables")
 
 

@@ -10,11 +10,11 @@ from datetime import datetime
 import yaml
 
 import logging
-import json
 import base64
 import fitz
 from ..services.qr_scanner import QRScanner
 from ..services.exam_processor import ExamProcessor
+from ..services.quiz_encryption import set_runtime_encryption_key
 
 from ..models import (
   SessionCreate,
@@ -26,16 +26,17 @@ from ..models import (
   SessionCloneRequest,
   SessionCompareExportRequest,
 )
-from ..database import get_db_connection  # Still needed for unrefactored endpoints
-from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository, ProblemMetadataRepository
+from ..repositories import (SessionRepository, SubmissionRepository,
+                            ProblemRepository, ProblemMetadataRepository,
+                            FeedbackTagRepository, ProblemStatsRepository)
 from ..domain.common import SessionStatus as DomainSessionStatus
 from ..domain.session import GradingSession
 from lms_interface.canvas_interface import CanvasInterface
-from ..services.qr_scanner import QRScanner
 from ..auth import get_current_user, require_instructor, require_session_access
 import os
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 MOCK_ROSTER_ENV = "ALLOW_MOCK_ROSTER"
 QUIZ_YAML_TEXT_KEY = "quiz_yaml_text"
 QUIZ_YAML_FILENAME_KEY = "quiz_yaml_filename"
@@ -385,14 +386,17 @@ async def get_session_stats(
 
     # Get counts
     counts = problem_repo.get_counts_for_problem_number(session_id, problem_num)
+    manual_blank_counts = problem_repo.get_manual_blank_counts_for_problem_number(
+      session_id, problem_num)
     num_total = counts["total"]
     num_graded = counts["graded"]
-    num_blank_ungraded = counts["ungraded_blank"]
+    num_blank_ungraded = manual_blank_counts["ungraded_manual_blank"]
     num_blank_total = num_blank + num_blank_ungraded
 
     # Debug log
     log.info(
-      f"[STATS] Problem {problem_num}: total={num_total}, graded={num_graded}, blank_ungraded={num_blank_ungraded}, blank_total={num_blank_total}"
+      f"[STATS] Problem {problem_num}: total={num_total}, graded={num_graded}, "
+      f"manual_blank_ungraded={num_blank_ungraded}, manual_blank_total={num_blank_total}"
     )
 
     # Calculate statistics
@@ -876,45 +880,16 @@ async def clone_session(
     if new_problems:
       repos.problems.bulk_create(new_problems)
 
-    # Copy problem metadata with optional clearing
-    with repos.sessions._get_connection() as conn:
-      cursor = conn.cursor()
-      cursor.execute("SELECT * FROM problem_metadata WHERE session_id = ?",
-                     (session_id,))
-      metadata_rows = cursor.fetchall()
-      for row in metadata_rows:
-        cursor.execute("""
-          INSERT INTO problem_metadata
-          (session_id, problem_number, max_points, question_text, grading_rubric,
-           default_feedback, default_feedback_threshold, ai_grading_notes)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-          created_session.id,
-          row["problem_number"],
-          row["max_points"],
-          row["question_text"],
-          row["grading_rubric"],
-          None if request.clear_default_feedback else row["default_feedback"],
-          row["default_feedback_threshold"] if row["default_feedback_threshold"] is not None else 100.0,
-          None if request.clear_ai_grading_notes else row["ai_grading_notes"]
-        ))
+    source_metadata = repos.metadata.list_by_session(session_id)
+    repos.metadata.bulk_insert_for_session(
+      created_session.id,
+      source_metadata,
+      clear_default_feedback=request.clear_default_feedback,
+      clear_ai_grading_notes=request.clear_ai_grading_notes,
+    )
 
-      # Copy feedback tags
-      cursor.execute("SELECT * FROM feedback_tags WHERE session_id = ?",
-                     (session_id,))
-      for tag in cursor.fetchall():
-        cursor.execute("""
-          INSERT INTO feedback_tags
-          (session_id, problem_number, short_name, comment_text, use_count, created_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-          created_session.id,
-          tag["problem_number"],
-          tag["short_name"],
-          tag["comment_text"],
-          tag["use_count"],
-          tag["created_at"]
-        ))
+    source_tags = repos.feedback_tags.get_by_session(session_id)
+    repos.feedback_tags.bulk_insert_for_session(created_session.id, source_tags)
 
     # Update counts
     created_session.total_exams = len(submissions_list)
@@ -936,6 +911,9 @@ async def export_session(
   session_repo = SessionRepository()
   submission_repo = SubmissionRepository()
   problem_repo = ProblemRepository()
+  metadata_repo = ProblemMetadataRepository()
+  feedback_tag_repo = FeedbackTagRepository()
+  problem_stats_repo = ProblemStatsRepository()
 
   # Get session metadata
   session = session_repo.get_by_id(session_id)
@@ -955,25 +933,9 @@ async def export_session(
     sub_dict["problems"] = [asdict(p) for p in problems_list]
     submissions.append(sub_dict)
 
-  # Get problem stats, metadata, and feedback tags using direct SQL
-  # (These tables don't have repositories yet and are less critical)
-  with get_db_connection() as conn:
-    cursor = conn.cursor()
-
-    # Get problem stats
-    cursor.execute("SELECT * FROM problem_stats WHERE session_id = ?",
-                   (session_id, ))
-    problem_stats = [dict(row) for row in cursor.fetchall()]
-
-    # Get problem metadata
-    cursor.execute("SELECT * FROM problem_metadata WHERE session_id = ?",
-                   (session_id, ))
-    problem_metadata = [dict(row) for row in cursor.fetchall()]
-
-    # Get feedback tags
-    cursor.execute("SELECT * FROM feedback_tags WHERE session_id = ?",
-                   (session_id, ))
-    feedback_tags = [dict(row) for row in cursor.fetchall()]
+  problem_stats = problem_stats_repo.list_by_session(session_id)
+  problem_metadata = metadata_repo.list_by_session(session_id)
+  feedback_tags = [asdict(tag) for tag in feedback_tag_repo.get_by_session(session_id)]
 
   # Build export structure
   export_data = {
@@ -1015,6 +977,7 @@ async def export_session_comparison(
                         detail="At least two session_ids are required")
 
   repo = SessionRepository()
+  problem_repo = ProblemRepository()
   sessions = []
   missing = []
   for session_id in session_ids:
@@ -1034,35 +997,19 @@ async def export_session_comparison(
       metadata_name = session.metadata.get("session_name")
     session_names[session.id] = metadata_name or session.assignment_name or f"Session {session.id}"
 
-  with get_db_connection() as conn:
-    cursor = conn.cursor()
-
-    data = defaultdict(lambda: defaultdict(dict))
-
-    for session_id in session_ids:
-      cursor.execute("""
-        SELECT s.file_hash,
-               p.problem_number,
-               p.score,
-               p.feedback,
-               p.graded,
-               p.is_blank,
-               p.submission_id
-        FROM problems p
-        JOIN submissions s ON p.submission_id = s.id
-        WHERE p.session_id = ? AND s.file_hash IS NOT NULL
-      """, (session_id,))
-
-      for row in cursor.fetchall():
-        file_hash = row["file_hash"]
-        problem_number = row["problem_number"]
-        data[file_hash][problem_number][session_id] = {
-          "submission_id": row["submission_id"],
-          "score": row["score"],
-          "feedback": row["feedback"],
-          "graded": row["graded"],
-          "is_blank": row["is_blank"],
-        }
+  data = defaultdict(lambda: defaultdict(dict))
+  for session_id in session_ids:
+    rows = problem_repo.get_comparison_rows_for_session(session_id)
+    for row in rows:
+      file_hash = row["file_hash"]
+      problem_number = row["problem_number"]
+      data[file_hash][problem_number][session_id] = {
+        "submission_id": row["submission_id"],
+        "score": row["score"],
+        "feedback": row["feedback"],
+        "graded": row["graded"],
+        "is_blank": row["is_blank"],
+      }
 
   # Build CSV
   output = io.StringIO()
@@ -1209,46 +1156,9 @@ async def import_session(
         if problems_to_create:
           repos.problems.bulk_create(problems_to_create)
 
-      # Import problem stats, metadata, and feedback tags using direct SQL
-      # (These tables don't have full repositories yet, okay for import)
-      conn = repos.sessions._get_connection().__enter__()  # Get underlying connection
-      cursor = conn.cursor()
-
-      # Import problem stats
-      for stat in problem_stats:
-        cursor.execute(
-          """
-          INSERT INTO problem_stats
-          (session_id, problem_number, avg_score, num_graded, num_total, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-          """,
-          (new_session_id, stat["problem_number"], stat.get("avg_score"),
-           stat.get("num_graded", 0), stat.get("num_total", 0), datetime.now()))
-
-      # Import problem metadata (max_points, default_feedback, etc.)
-      for metadata in problem_metadata:
-        cursor.execute(
-          """
-          INSERT INTO problem_metadata
-          (session_id, problem_number, max_points, default_feedback, default_feedback_threshold, ai_grading_notes)
-          VALUES (?, ?, ?, ?, ?, ?)
-          """,
-          (new_session_id, metadata["problem_number"],
-           metadata.get("max_points"), metadata.get("default_feedback"),
-           metadata.get("default_feedback_threshold", 100.0),
-           metadata.get("ai_grading_notes")))
-
-      # Import feedback tags
-      for tag in feedback_tags:
-        cursor.execute(
-          """
-          INSERT INTO feedback_tags
-          (session_id, problem_number, short_name, comment_text, use_count, created_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-          """,
-          (new_session_id, tag["problem_number"], tag["short_name"],
-           tag["comment_text"], tag.get("use_count", 0),
-           tag.get("created_at", datetime.now())))
+      repos.problem_stats.bulk_insert_for_session(new_session_id, problem_stats)
+      repos.metadata.bulk_insert_for_session(new_session_id, problem_metadata)
+      repos.feedback_tags.bulk_insert_for_session(new_session_id, feedback_tags)
 
       log.info(
         f"Imported {len(submissions)} submissions, {sum(len(s.get('problems', [])) for s in submissions)} problems, {len(problem_metadata)} metadata entries, and {len(feedback_tags)} feedback tags"
@@ -1275,13 +1185,18 @@ async def test_encryption_key(
   current_user: dict = Depends(require_instructor)
 ):
   """Test if an encryption key can decrypt sample QR code data (instructor only)"""
-  from ..services.qr_scanner import MinimalQuestionQRCode
-  import logging
-  log = logging.getLogger(__name__)
+  try:
+    from QuizGenerator.qrcode_generator import QuestionQRCode
+  except ImportError:
+    raise HTTPException(
+      status_code=500,
+      detail=
+      "QuizGenerator module not available. Please install QuizGenerator to test encryption keys."
+    )
 
   try:
     # Try to decrypt with the provided key
-    metadata = MinimalQuestionQRCode.decrypt_question_data(
+    metadata = QuestionQRCode.decrypt_question_data(
       encrypted_data, encryption_key.encode())
 
     return {
@@ -1303,22 +1218,21 @@ async def set_encryption_key(
   current_user: dict = Depends(require_instructor)
 ):
   """
-    Set the encryption key for the current session (instructor only, runtime only, not persisted).
-    This is a workaround for when the QUIZ_ENCRYPTION_KEY env var isn't available.
+    Set an in-memory encryption key for this process (instructor only).
+    The key is not persisted and is lost when the server restarts.
     """
-  import logging
-  log = logging.getLogger(__name__)
+  try:
+    set_runtime_encryption_key(encryption_key)
+  except ValueError as exc:
+    raise HTTPException(status_code=400, detail=str(exc))
 
-  # Set the environment variable for this process
-  os.environ['QUIZ_ENCRYPTION_KEY'] = encryption_key
-
-  log.info("Encryption key updated for current session (runtime only)")
+  log.info("Runtime encryption key updated for current process (in-memory)")
 
   return {
     "status":
     "success",
     "message":
-    "Encryption key set for current session. This will be lost when the server restarts."
+    "Runtime encryption key set for this process. It will be lost when the server restarts."
   }
 
 
