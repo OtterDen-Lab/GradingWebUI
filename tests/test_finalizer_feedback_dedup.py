@@ -57,3 +57,31 @@ def test_strip_auto_generated_explanation_preserves_trailing_manual_notes():
     == "Please show one more intermediate step.\n\n"
     "Manual postscript: include units in the final answer."
   )
+
+
+def test_render_text_or_html_preformats_ascii_layout_feedback():
+  service = _service()
+  ascii_feedback = (
+    "State machine:\n"
+    "+-----+    +-----+\n"
+    "|  A  | -> |  B  |\n"
+    "+-----+    +-----+"
+  )
+
+  rendered = service._render_text_or_html(ascii_feedback,
+                                          prefer_preformatted=True)
+
+  assert rendered.startswith("<pre ")
+  assert "preformatted-text" in rendered
+  assert "|  A  |" in rendered
+
+
+def test_render_text_or_html_preformats_plain_feedback_when_requested():
+  service = _service()
+  feedback = "Good setup. Please show one more algebra step."
+
+  rendered = service._render_text_or_html(feedback, prefer_preformatted=True)
+
+  assert rendered.startswith("<pre ")
+  assert "preformatted-text" in rendered
+  assert "Good setup." in rendered

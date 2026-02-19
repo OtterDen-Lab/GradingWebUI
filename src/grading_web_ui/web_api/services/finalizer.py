@@ -355,7 +355,8 @@ class FinalizationService:
       feedback_source = problem.get("feedback") or ""
       if explanation_source:
         feedback_source = self._strip_auto_generated_explanation(feedback_source)
-      feedback_html = self._render_text_or_html(feedback_source)
+      feedback_html = self._render_text_or_html(feedback_source,
+                                                prefer_preformatted=True)
 
       explanation_section = ""
       if explanation_html:
@@ -509,6 +510,18 @@ class FinalizationService:
       padding: 2px 4px;
       border-radius: 4px;
     }}
+    .preformatted-text {{
+      margin: 0;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+      white-space: pre-wrap;
+      overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.35;
+    }}
   </style>
 </head>
 <body>
@@ -555,15 +568,23 @@ class FinalizationService:
       return f"{kept_prefix}\n\n{kept_suffix}"
     return kept_prefix or kept_suffix
 
-  def _render_text_or_html(self, text: str) -> str:
+  def _render_text_or_html(self,
+                           text: str,
+                           *,
+                           prefer_preformatted: bool = False) -> str:
     if not text:
       return ""
     if self._looks_like_html(text):
       return self._inline_local_images(text)
+    if prefer_preformatted:
+      return self._render_preformatted_text(text)
     rendered = self._render_markdown(text)
     if rendered:
       return self._inline_local_images(rendered)
     return f"<p>{html.escape(text).replace(chr(10), '<br>')}</p>"
+
+  def _render_preformatted_text(self, text: str) -> str:
+    return f"<pre class=\"preformatted-text\">{html.escape(text)}</pre>"
 
   def _looks_like_html(self, text: str) -> bool:
     return bool(re.search(r"<(p|div|span|ul|ol|li|br|strong|em|table|img|h[1-6])[\s/>]", text, re.IGNORECASE))
