@@ -826,7 +826,7 @@ class CanvasAssignment(LMSWrapper):
       return bool(re.search(r"<(html|body|div|p|table|img|h[1-6]|ul|ol|li|br|strong|em|figure)[\s/>]",
                             text,
                             re.IGNORECASE))
-
+    
     if len(comments) > 0:
       if looks_like_html(comments):
         upload_buffer_as_file(comments.encode('utf-8'), "feedback.html")
