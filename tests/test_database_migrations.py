@@ -3,6 +3,7 @@ Upgrade-path and preflight tests for database migrations.
 """
 from pathlib import Path
 import sqlite3
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -104,3 +105,49 @@ def test_init_database_rejects_newer_schema_version(monkeypatch, tmp_path):
 
   with pytest.raises(RuntimeError, match="newer than supported"):
     init_database()
+
+
+def test_pre_migration_backup_includes_uncheckpointed_wal_changes(monkeypatch,
+                                                                  tmp_path):
+  db_path = tmp_path / "wal_source.db"
+  backup_dir = tmp_path / "backups"
+  conn = sqlite3.connect(str(db_path))
+  try:
+    cursor = conn.cursor()
+    assert cursor.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower() == "wal"
+    cursor.execute("PRAGMA wal_autocheckpoint=0")
+    cursor.execute("CREATE TABLE wal_state_test (value INTEGER)")
+    conn.commit()
+    cursor.execute("INSERT INTO wal_state_test (value) VALUES (42)")
+    conn.commit()
+
+    wal_path = Path(f"{db_path}-wal")
+    assert wal_path.exists()
+    assert wal_path.stat().st_size > 0
+
+    monkeypatch.setenv("GRADING_DB_MIGRATION_BACKUP_DIR", str(backup_dir))
+    monkeypatch.setenv("GRADING_DB_CREATE_MIGRATION_BACKUP", "true")
+
+    backup_path = db_module._create_pre_migration_backup(db_path, from_version=23)
+    assert backup_path is not None
+    assert backup_path.exists()
+
+    backup_conn = sqlite3.connect(str(backup_path))
+    try:
+      backup_count = backup_conn.execute(
+        "SELECT COUNT(*) FROM wal_state_test").fetchone()[0]
+      assert backup_count == 1
+    finally:
+      backup_conn.close()
+
+    # Document expected failure mode of file-only copy when WAL contains commits.
+    plain_copy_path = tmp_path / "plain_copy.db"
+    shutil.copy2(str(db_path), str(plain_copy_path))
+    plain_copy_conn = sqlite3.connect(str(plain_copy_path))
+    try:
+      with pytest.raises(sqlite3.OperationalError):
+        plain_copy_conn.execute("SELECT COUNT(*) FROM wal_state_test").fetchone()
+    finally:
+      plain_copy_conn.close()
+  finally:
+    conn.close()

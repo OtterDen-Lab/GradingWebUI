@@ -68,17 +68,17 @@ async def finalize_session(
       status_code=400,
       detail=f"Cannot finalize: {ungraded_count} problems still ungraded")
 
-  if workflow_locks.is_active("autograde", session_id):
-    raise HTTPException(
-      status_code=409,
-      detail="Cannot finalize while autograding is in progress for this session")
-
-  if session.status == SessionStatus.FINALIZING or workflow_locks.is_active(
-      "finalize", session_id):
+  if session.status == SessionStatus.FINALIZING:
     raise HTTPException(status_code=409,
                         detail="Finalization is already running for this session")
 
-  if not workflow_locks.acquire("finalize", session_id):
+  acquired, conflict = workflow_locks.acquire_with_conflicts(
+    "finalize", session_id, ("autograde", ))
+  if not acquired:
+    if conflict == "autograde":
+      raise HTTPException(
+        status_code=409,
+        detail="Cannot finalize while autograding is in progress for this session")
     raise HTTPException(status_code=409,
                         detail="Finalization is already running for this session")
 

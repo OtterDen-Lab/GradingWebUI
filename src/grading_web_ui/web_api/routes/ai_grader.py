@@ -87,13 +87,16 @@ class SaveRubricRequest(BaseModel):
 
 def acquire_autograde_lock(session_id: int) -> None:
   """Prevent concurrent autograde/finalize runs for the same session."""
-  if workflow_locks.is_active("finalize", session_id):
+  acquired, conflict = workflow_locks.acquire_with_conflicts(
+    "autograde", session_id, ("finalize", ))
+  if acquired:
+    return
+  if conflict == "finalize":
     raise HTTPException(
       status_code=409,
       detail="Cannot start autograding while finalization is in progress")
-  if not workflow_locks.acquire("autograde", session_id):
-    raise HTTPException(status_code=409,
-                        detail="Autograding is already in progress for this session")
+  raise HTTPException(status_code=409,
+                      detail="Autograding is already in progress for this session")
 
 
 @router.get("/{session_id}/autograde-stream")

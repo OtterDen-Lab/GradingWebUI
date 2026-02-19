@@ -62,7 +62,12 @@ def _create_pre_migration_backup(db_path: Path, from_version: int) -> Optional[P
     return None
 
   backup_dir = _get_migration_backup_dir(db_path)
-  db_size = db_path.stat().st_size
+  db_related_paths = [
+    db_path,
+    Path(f"{db_path}-wal"),
+    Path(f"{db_path}-shm"),
+  ]
+  db_size = sum(path.stat().st_size for path in db_related_paths if path.exists())
   # Require at least 2x DB size (or 5MB minimum) in backup destination.
   required_free_bytes = max(db_size * 2, 5 * 1024 * 1024)
   free_bytes = shutil.disk_usage(str(backup_dir)).free
@@ -73,7 +78,15 @@ def _create_pre_migration_backup(db_path: Path, from_version: int) -> Optional[P
 
   timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
   backup_path = backup_dir / f"{db_path.name}.v{from_version}.bak-{timestamp}"
-  shutil.copy2(str(db_path), str(backup_path))
+  source_conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+  backup_conn = sqlite3.connect(str(backup_path))
+  try:
+    # SQLite backup API creates a consistent snapshot and includes WAL state.
+    source_conn.backup(backup_conn)
+    backup_conn.commit()
+  finally:
+    backup_conn.close()
+    source_conn.close()
   log.warning("Created pre-migration backup at %s", backup_path)
   return backup_path
 
