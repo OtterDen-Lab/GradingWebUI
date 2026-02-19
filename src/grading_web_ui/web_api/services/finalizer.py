@@ -532,11 +532,28 @@ class FinalizationService:
     if idx < 0:
       return feedback_text
 
-    trimmed = feedback_text[:idx].rstrip()
-    # Remove common separator if present before disclaimer block.
-    if trimmed.endswith("---"):
-      trimmed = trimmed[:-3].rstrip()
-    return trimmed
+    separator = "\n\n---\n\n"
+
+    # Include a separator immediately before the disclaimer in the removed block.
+    start = idx
+    before_marker = feedback_text[:idx]
+    if before_marker.endswith(separator):
+      start = idx - len(separator)
+    elif before_marker.rstrip().endswith("---"):
+      start = len(before_marker.rstrip()[:-3].rstrip())
+
+    # Preserve trailing manual notes if they were added after the auto block.
+    # We treat the next markdown separator as the end of the legacy auto block.
+    end = len(feedback_text)
+    trailing_sep_idx = feedback_text.find(separator, idx + len(marker))
+    if trailing_sep_idx >= 0:
+      end = trailing_sep_idx + len(separator)
+
+    kept_prefix = feedback_text[:start].rstrip()
+    kept_suffix = feedback_text[end:].lstrip()
+    if kept_prefix and kept_suffix:
+      return f"{kept_prefix}\n\n{kept_suffix}"
+    return kept_prefix or kept_suffix
 
   def _render_text_or_html(self, text: str) -> str:
     if not text:

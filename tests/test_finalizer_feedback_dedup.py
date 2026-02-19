@@ -41,3 +41,19 @@ def test_strip_auto_generated_explanation_returns_empty_when_only_auto_block():
   )
 
   assert service._strip_auto_generated_explanation(feedback) == ""
+
+
+def test_strip_auto_generated_explanation_preserves_trailing_manual_notes():
+  service = _service()
+  feedback = (
+    "Please show one more intermediate step.\n\n---\n\n"
+    "Note: The explanation below is automatically generated and might not be correct.\n\n"
+    "Auto explanation text...\n\n---\n\n"
+    "Manual postscript: include units in the final answer."
+  )
+
+  assert (
+    service._strip_auto_generated_explanation(feedback)
+    == "Please show one more intermediate step.\n\n"
+    "Manual postscript: include units in the final answer."
+  )

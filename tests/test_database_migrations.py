@@ -107,6 +107,37 @@ def test_init_database_rejects_newer_schema_version(monkeypatch, tmp_path):
     init_database()
 
 
+def test_init_database_bootstraps_admin_on_subsequent_startup(monkeypatch,
+                                                              tmp_path):
+  db_path = tmp_path / "bootstrap_recovery.db"
+  monkeypatch.setenv("GRADING_DB_PATH", str(db_path))
+  monkeypatch.delenv("GRADING_BOOTSTRAP_ADMIN_USERNAME", raising=False)
+  monkeypatch.delenv("GRADING_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
+  monkeypatch.delenv("GRADING_BOOTSTRAP_ADMIN_EMAIL", raising=False)
+
+  init_database()
+
+  conn = sqlite3.connect(str(db_path))
+  cursor = conn.cursor()
+  cursor.execute("SELECT COUNT(*) FROM users")
+  assert cursor.fetchone()[0] == 0
+  conn.close()
+
+  monkeypatch.setenv("GRADING_BOOTSTRAP_ADMIN_USERNAME", "recovery_admin")
+  monkeypatch.setenv("GRADING_BOOTSTRAP_ADMIN_PASSWORD", "test-password")
+  monkeypatch.setenv("GRADING_BOOTSTRAP_ADMIN_EMAIL", "recovery@example.com")
+
+  init_database()
+
+  conn = sqlite3.connect(str(db_path))
+  cursor = conn.cursor()
+  cursor.execute("SELECT username, role FROM users WHERE username = ?",
+                 ("recovery_admin", ))
+  row = cursor.fetchone()
+  conn.close()
+  assert row == ("recovery_admin", "instructor")
+
+
 def test_pre_migration_backup_includes_uncheckpointed_wal_changes(monkeypatch,
                                                                   tmp_path):
   db_path = tmp_path / "wal_source.db"

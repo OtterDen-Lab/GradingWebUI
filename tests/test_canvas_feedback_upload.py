@@ -102,6 +102,23 @@ def test_push_feedback_posts_plain_text_inline_comment():
   assert submission.uploaded_paths == []
 
 
+def test_push_feedback_uploads_html_with_tag_attributes():
+  submission = _FakeSubmission()
+  assignment, _ = _build_assignment(submission)
+
+  result = assignment.push_feedback(
+    user_id=123,
+    score=88.0,
+    comments='<p class="feedback">Formatted feedback</p>',
+    attachments=[],
+  )
+
+  assert result is True
+  assert not any("comment" in edit for edit in submission.edits)
+  assert any(os.path.basename(path) == "feedback.html"
+             for path in submission.uploaded_paths)
+
+
 def test_push_feedback_falls_back_to_txt_attachment_for_plain_text():
   submission = _FakeSubmission(fail_comment_edit=True)
   assignment, _ = _build_assignment(submission)

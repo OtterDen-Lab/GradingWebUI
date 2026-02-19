@@ -824,7 +824,7 @@ class CanvasAssignment(LMSWrapper):
     def looks_like_html(text: str) -> bool:
       if not text:
         return False
-      return bool(re.search(r"<(html|body|div|p|table|img|h[1-6]|ul|ol|li|br|strong|em|figure)[\\s/>]",
+      return bool(re.search(r"<(html|body|div|p|table|img|h[1-6]|ul|ol|li|br|strong|em|figure)[\s/>]",
                             text,
                             re.IGNORECASE))
     

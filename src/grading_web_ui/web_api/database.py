@@ -190,6 +190,14 @@ def init_database():
       # Run migrations
       run_migrations(cursor, current_version)
 
+    # Always allow bootstrap-admin creation on startup when users table exists.
+    # This provides an operator recovery path if the DB was initialized without
+    # bootstrap credentials and currently has no instructor account.
+    cursor.execute(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users' LIMIT 1")
+    if cursor.fetchone():
+      maybe_create_bootstrap_admin(cursor)
+
     log.info(f"Database ready (schema version {CURRENT_SCHEMA_VERSION})")
 
 
