@@ -5,8 +5,8 @@ import itertools
 import logging
 import os
 import queue
-import re
 import random
+import re
 import tempfile
 import threading
 import time
@@ -748,7 +748,6 @@ class CanvasAssignment(LMSWrapper):
   
   def push_feedback(self, user_id, score: float, comments: str, attachments=None, keep_previous_best=True, clobber_feedback=False):
     log.debug(f"Adding feedback for {user_id}")
-    comments = comments or ""
     if attachments is None:
       attachments = []
     
@@ -827,7 +826,7 @@ class CanvasAssignment(LMSWrapper):
       return bool(re.search(r"<(html|body|div|p|table|img|h[1-6]|ul|ol|li|br|strong|em|figure)[\s/>]",
                             text,
                             re.IGNORECASE))
-    
+
     if len(comments) > 0:
       if looks_like_html(comments):
         upload_buffer_as_file(comments.encode('utf-8'), "feedback.html")
