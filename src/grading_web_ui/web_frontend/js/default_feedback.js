@@ -1,12 +1,13 @@
 // Default Feedback Functionality
-// Allows setting default feedback that auto-applies to low-scoring submissions
+// Allows setting default feedback that auto-applies to configured submissions
 
 let currentDefaultFeedback = {
     text: null,
     threshold: 100.0,
     applyOnZero: true,
     applyOnBlank: true,
-    applyOnThreshold: false
+    // Default ON at 100% means "apply to all submissions" unless customized.
+    applyOnThreshold: true
 };
 
 // =============================================================================
@@ -33,7 +34,7 @@ async function loadDefaultFeedback(sessionId, problemNumber) {
             const conditions = JSON.parse(savedConditions);
             currentDefaultFeedback.applyOnZero = conditions.applyOnZero !== false;
             currentDefaultFeedback.applyOnBlank = conditions.applyOnBlank !== false;
-            currentDefaultFeedback.applyOnThreshold = conditions.applyOnThreshold || false;
+            currentDefaultFeedback.applyOnThreshold = conditions.applyOnThreshold !== false;
         }
 
         displayDefaultFeedback();
@@ -101,7 +102,7 @@ function clearDefaultFeedback() {
     document.getElementById('default-feedback-text').value = '';
     document.getElementById('apply-on-zero').checked = true;
     document.getElementById('apply-on-blank').checked = true;
-    document.getElementById('apply-on-threshold').checked = false;
+    document.getElementById('apply-on-threshold').checked = true;
     document.getElementById('threshold-percentage').value = 100.0;
 }
 

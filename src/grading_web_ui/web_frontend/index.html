@@ -680,7 +680,7 @@
                                 <button id="edit-default-feedback-btn" class="btn btn-small">Edit</button>
                             </div>
                             <div id="default-feedback-display" class="default-feedback-display">
-                                <span class="default-feedback-placeholder">No default feedback set. Click "Edit" to add feedback for low scores.</span>
+                                <span class="default-feedback-placeholder">No default feedback set. Click "Edit" to add feedback rules.</span>
                             </div>
                         </div>
 
@@ -850,7 +850,7 @@
         <div class="dialog-content" style="background: white; border-radius: 8px; padding: 30px; max-width: 600px; width: 90%;">
             <h2 class="dialog-header" style="margin-top: 0; cursor: move; user-select: none;">Edit Default Feedback</h2>
             <p style="color: var(--gray-700); margin-bottom: 20px;">
-                This feedback will be automatically added to low-scoring submissions.
+                This feedback will be automatically added based on the rules below.
             </p>
 
             <label style="display: block; margin-bottom: 20px;">
@@ -871,7 +871,7 @@
                         <span>Problem is blank (marked with "-")</span>
                     </label>
                     <label style="display: flex; align-items: center; gap: 8px;">
-                        <input type="checkbox" id="apply-on-threshold">
+                        <input type="checkbox" id="apply-on-threshold" checked>
                         <span style="display: flex; align-items: center; gap: 5px;">
                             Score is below
                             <input type="number" id="threshold-percentage" min="0" max="100" value="100" style="width: 60px; padding: 4px; border: 1px solid var(--gray-300); border-radius: 4px;">
