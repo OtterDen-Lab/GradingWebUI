@@ -14,6 +14,32 @@ _GENERATED_KEY: Optional[bytes] = None
 _PATCHED = False
 
 
+def _quiet_quizgenerator_loggers() -> None:
+  """Clamp noisy QuizGenerator loggers to WARNING."""
+  for logger_name in (
+    "QuizGenerator",
+    "QuizGenerator.quiz",
+    "QuizGenerator.regenerate",
+    "QuizGenerator.question",
+  ):
+    logger = logging.getLogger(logger_name)
+    if logger.level == logging.NOTSET or logger.level < logging.WARNING:
+      logger.setLevel(logging.WARNING)
+
+
+def _restore_app_logging_after_quizgenerator_import() -> None:
+  """
+  QuizGenerator runs its own logging setup at import time.
+  Re-apply host app logging so our config remains authoritative.
+  """
+  try:
+    from grading_web_ui import setup_logging as setup_app_logging
+    setup_app_logging()
+  except Exception as exc:
+    log.debug("Failed to restore host logging config after QuizGenerator import: %s", exc)
+  _quiet_quizgenerator_loggers()
+
+
 def set_runtime_encryption_key(key: str) -> None:
   """Set in-memory encryption key for the current process."""
   key_bytes = (key or "").strip().encode()
@@ -67,6 +93,7 @@ def install_quizgenerator_key_provider() -> bool:
 
   try:
     from QuizGenerator.qrcode_generator import QuestionQRCode
+    _restore_app_logging_after_quizgenerator_import()
   except Exception as exc:
     log.warning("QuizGenerator not available for key-provider patch: %s", exc)
     return False

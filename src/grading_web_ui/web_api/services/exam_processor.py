@@ -35,7 +35,7 @@ from ..dtos import SubmissionDTO, ProblemDTO
 log = logging.getLogger(__name__)
 PRESCAN_DPI_STEPS = [150, 300, 600]
 
-NAME_SIMILARITY_THRESHOLD = 97  # Percentage threshold for fuzzy matching (exact match required)
+NAME_SIMILARITY_THRESHOLD = 98  # Percentage threshold for auto-accepting fuzzy name matches
 
 
 class ExamProcessor:
@@ -194,12 +194,26 @@ class ExamProcessor:
         message_callback=report_prescan
       )
       
+      auto_matched_student = None
+      if suggested_match and match_confidence >= NAME_SIMILARITY_THRESHOLD:
+        auto_matched_student = suggested_match
+        unmatched_students = [
+          student for student in unmatched_students
+          if student["user_id"] != suggested_match["user_id"]
+        ]
+        log.info(
+          "  Auto-accepted match: %s (%s%%) - still requires Confirm All Matches to proceed",
+          suggested_match["name"],
+          match_confidence
+        )
+
       # Build submission dict
       submission = self._build_submission_dict(
         document_id,
         approximate_name,
         name_image,
         suggested_match,
+        auto_matched_student,
         page_mappings_by_submission,
         problems,
         pdf_data,
@@ -207,8 +221,7 @@ class ExamProcessor:
         file_metadata
       )
       
-      # If above threshold, add to matched list
-      if match_confidence > NAME_SIMILARITY_THRESHOLD:
+      if submission.canvas_user_id is not None:
         matched_submissions.append(submission)
       else:
         unmatched_submissions.append(submission)
@@ -507,6 +520,7 @@ class ExamProcessor:
       approximate_name: str,
       name_image: str,
       suggested_match: Optional[dict],
+      auto_matched_student: Optional[dict],
       page_mappings_by_submission: Optional[dict],
       problems: List[ProblemDTO],
       pdf_data: Optional[str],
@@ -521,6 +535,7 @@ class ExamProcessor:
         approximate_name: Extracted student name
         name_image: Base64 image of name region
         suggested_match: Suggested student match (if any)
+        auto_matched_student: Persisted auto-match (if confidence is high enough)
         page_mappings_by_submission: Page mappings for shuffled problems
         problems: List of problem DTOs
         pdf_data: Base64 encoded PDF (None for manual page ranges)
@@ -534,8 +549,8 @@ class ExamProcessor:
       document_id=document_id,
       approximate_name=approximate_name,
       name_image_data=name_image,
-      student_name=None,  # No auto-matching - requires manual confirmation
-      canvas_user_id=None,  # No auto-matching - requires manual confirmation
+      student_name=auto_matched_student["name"] if auto_matched_student else None,
+      canvas_user_id=auto_matched_student["user_id"] if auto_matched_student else None,
       suggested_canvas_user_id=suggested_match["user_id"] if suggested_match else None,
       page_mappings=page_mappings_by_submission[document_id]
       if page_mappings_by_submission else [],

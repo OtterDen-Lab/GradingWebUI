@@ -5,6 +5,7 @@ import asyncio
 import csv
 import io
 import os
+import time
 from pathlib import Path
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -398,6 +399,67 @@ def test_regenerate_answer_avoids_signature_mismatch_error(client):
   assert response.status_code in (400, 500)
   detail = response.json().get("detail", "")
   assert "unexpected keyword argument" not in detail
+
+
+def test_prefetch_regeneration_returns_no_qr_data_when_empty(client):
+  """Session-level regeneration prefetch should no-op when no QR-backed problems exist."""
+  session_id = create_test_session(client, "Regeneration Prefetch Empty")
+
+  response = client.post(f"/api/problems/session/{session_id}/prefetch-regeneration")
+  assert response.status_code == 200
+  payload = response.json()
+  assert payload["status"] == "no_qr_data"
+  assert payload["total_qr_problems"] == 0
+
+
+def test_prefetch_regeneration_warms_cache_for_problem(client, monkeypatch):
+  """Session-level regeneration prefetch should warm cache used by regenerate-answer."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  session_id = create_test_session(client, "Regeneration Prefetch Warm")
+  _, problem_id = seed_submission_with_problem(
+    session_id,
+    qr_encrypted_data="fake-encrypted",
+    max_points=5.0,
+  )
+
+  call_count = {"count": 0}
+
+  def fake_regenerate(**kwargs):
+    call_count["count"] += 1
+    return {
+      "question_type": "numeric",
+      "seed": 123,
+      "version": "test",
+      "answer_objects": [{"value": "42"}],
+      "explanation_markdown": "Test explanation"
+    }
+
+  monkeypatch.setattr(
+    problems_routes,
+    "regenerate_from_encrypted_compat",
+    fake_regenerate
+  )
+
+  prefetch_response = client.post(
+    f"/api/problems/session/{session_id}/prefetch-regeneration"
+  )
+  assert prefetch_response.status_code == 200
+  assert prefetch_response.json()["status"] == "started"
+
+  for _ in range(40):
+    if call_count["count"] >= 1:
+      break
+    time.sleep(0.05)
+  assert call_count["count"] >= 1
+
+  call_count_before = call_count["count"]
+  regen_response = client.get(f"/api/problems/{problem_id}/regenerate-answer")
+  assert regen_response.status_code == 200
+  regen_payload = regen_response.json()
+  assert regen_payload["answers"][0]["value"] == "42"
+  assert regen_payload["explanation_markdown"] == "Test explanation"
+  assert call_count["count"] == call_count_before
 
 
 def test_session_stats_blank_rate_counts_manual_blanks_only(client):

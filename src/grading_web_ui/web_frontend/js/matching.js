@@ -4,6 +4,29 @@ let allSubmissions = [];
 let allStudents = [];
 let revealCanvasNames = true;
 let matchingImagePreviewBound = false;
+let matchingActionStatus = { message: '', type: 'info' };
+
+function setMatchingActionStatus(message = '', type = 'info') {
+    matchingActionStatus = { message, type };
+    const statusEl = document.getElementById('matching-action-status');
+    if (!statusEl) return;
+
+    const colorMap = {
+        info: '#1d4ed8',
+        success: '#047857',
+        warning: '#9a3412',
+        error: '#b91c1c'
+    };
+    statusEl.textContent = message;
+    statusEl.style.color = colorMap[type] || colorMap.info;
+    statusEl.style.display = message ? 'block' : 'none';
+}
+
+function setMatchingControlsDisabled(disabled) {
+    document.querySelectorAll('.student-select').forEach((select) => {
+        select.disabled = disabled;
+    });
+}
 
 // Simple fuzzy matching helper (Levenshtein distance)
 function fuzzyMatch(str1, str2) {
@@ -61,7 +84,7 @@ async function loadNameMatching() {
 
                 allStudents.forEach(student => {
                     const score = fuzzyMatch(submission.approximate_name, student.name);
-                    if (score > bestScore && score >= 97) {  // 97% threshold (same as backend)
+                    if (score > bestScore && score >= 98) {  // 98% threshold (same as backend)
                         bestScore = score;
                         bestStudent = student;
                     }
@@ -106,6 +129,7 @@ function renderMatchingList() {
             <button class="btn btn-secondary" onclick="toggleCanvasNameReveal()" style="padding: 10px 20px; margin-left: 10px; font-size: 14px;">
                 ${revealCanvasNames ? 'Hide Real Names' : 'Show Real Names'}
             </button>
+            <div id="matching-action-status" style="margin-top: 10px; font-size: 14px; display: none;"></div>
             <p style="margin-top: 10px; color: var(--gray-600); font-size: 14px;">
                 Select students from the dropdowns below, then click this button to confirm all changes at once.
             </p>
@@ -157,6 +181,7 @@ function renderMatchingList() {
     });
 
     container.innerHTML = html;
+    setMatchingActionStatus(matchingActionStatus.message, matchingActionStatus.type);
     bindMatchingImagePreview();
 }
 
@@ -248,6 +273,7 @@ async function confirmAllMatches() {
         // No pending changes, but check if we should proceed
         if (unmatchedCount === 0) {
             console.log('All submissions already matched. Preparing alignment...');
+            setMatchingActionStatus('All submissions are matched. Preparing alignment...', 'info');
             await prepareAlignment();
             return;
         }
@@ -269,43 +295,67 @@ async function confirmAllMatches() {
     // Disable button during processing
     const btn = document.getElementById('confirm-all-matches-btn');
     btn.disabled = true;
-    btn.textContent = 'Processing...';
+    setMatchingControlsDisabled(true);
+    btn.textContent = `Processing 0/${pendingMatches.length}...`;
+    setMatchingActionStatus(`Saving ${pendingMatches.length} confirmed match(es)...`, 'info');
 
     try {
-        // Process all matches
+        // Process matches with bounded concurrency for faster confirmation.
+        const revealQuery = revealCanvasNames ? '?reveal_names=true' : '';
+        const queue = [...pendingMatches];
+        const total = queue.length;
+        const concurrency = Math.min(8, total);
+        let completed = 0;
         let successCount = 0;
         let failCount = 0;
 
-        for (const match of pendingMatches) {
-            try {
-                const revealQuery = revealCanvasNames ? '?reveal_names=true' : '';
-                const response = await fetch(`${API_BASE}/matching/${currentSession.id}/match${revealQuery}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        submission_id: match.submission_id,
-                        canvas_user_id: match.canvas_user_id
-                    })
-                });
+        const worker = async () => {
+            while (queue.length > 0) {
+                const match = queue.shift();
+                if (!match) return;
 
-                if (response.ok) {
-                    successCount++;
-                } else {
+                try {
+                    const response = await fetch(`${API_BASE}/matching/${currentSession.id}/match${revealQuery}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            submission_id: match.submission_id,
+                            canvas_user_id: match.canvas_user_id
+                        })
+                    });
+
+                    if (response.ok) {
+                        successCount++;
+                    } else {
+                        failCount++;
+                        console.error(`Failed to match submission ${match.submission_id}`);
+                    }
+                } catch (error) {
                     failCount++;
-                    console.error(`Failed to match submission ${match.submission_id}`);
+                    console.error(`Error matching submission ${match.submission_id}:`, error);
+                } finally {
+                    completed++;
+                    btn.textContent = `Processing ${completed}/${total}...`;
+                    setMatchingActionStatus(`Saving matches: ${completed}/${total} complete...`, 'info');
                 }
-            } catch (error) {
-                failCount++;
-                console.error(`Error matching submission ${match.submission_id}:`, error);
             }
-        }
+        };
+
+        await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
         // Show result
         if (failCount > 0) {
             alert(`Completed with ${successCount} successful and ${failCount} failed matches.`);
+            setMatchingActionStatus(
+                `Completed with ${successCount} successful and ${failCount} failed match(es).`,
+                'warning'
+            );
+        } else {
+            setMatchingActionStatus(`Saved ${successCount} match(es).`, 'success');
         }
 
         // Reload data to reflect changes
+        setMatchingActionStatus('Refreshing match status...', 'info');
         await loadNameMatching();
 
         // Check if all submissions are matched, then move to alignment
@@ -313,17 +363,24 @@ async function confirmAllMatches() {
 
         if (unmatchedCount === 0) {
             console.log(`All ${allSubmissions.length} submissions matched. Preparing alignment...`);
+            setMatchingActionStatus('All submissions matched. Preparing alignment...', 'info');
             await prepareAlignment();
         } else {
             // Some submissions still unmatched
             console.log(`${unmatchedCount} submissions still need matching`);
+            setMatchingActionStatus(
+                `${unmatchedCount} submission(s) still need to be matched before alignment.`,
+                'warning'
+            );
             alert(`${unmatchedCount} submission(s) still need to be matched. Please select students for all submissions.`);
         }
 
     } catch (error) {
         console.error('Failed to confirm matches:', error);
+        setMatchingActionStatus(`Failed to confirm matches: ${error.message}`, 'error');
         alert('Failed to confirm matches: ' + error.message);
     } finally {
+        setMatchingControlsDisabled(false);
         btn.disabled = false;
         btn.textContent = 'Confirm All Matches';
     }

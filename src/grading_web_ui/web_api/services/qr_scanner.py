@@ -7,6 +7,7 @@ This service scans QR codes from exam problem images and extracts:
 - Encrypted question metadata (passed to QuizGeneration for decryption)
 """
 import base64
+import concurrent.futures
 import json
 import logging
 import math
@@ -495,7 +496,8 @@ class QRScanner:
 
   def scan_qr_positions_from_pdf(self, pdf_path: Path,
                                  dpi_steps: Optional[List[int]] = None,
-                                 progress_callback: Optional[callable] = None
+                                 progress_callback: Optional[callable] = None,
+                                 max_workers: Optional[int] = None
                                  ) -> Dict[int, List[Dict]]:
     """
         Scan QR codes from each page in a PDF and return their positions.
@@ -529,44 +531,48 @@ class QRScanner:
     if dpi_steps is None:
       dpi_steps = [150, 300, 600]
 
+    pdf_document = None
     try:
       pdf_document = fitz.open(str(pdf_path))
       total_pages = pdf_document.page_count
-      for page_number in range(total_pages):
-        page = pdf_document[page_number]
+
+      if total_pages == 0:
+        pdf_document.close()
+        return results
+
+      if max_workers is None:
+        max_workers = min(4, total_pages, os.cpu_count() or 1)
+      max_workers = max(1, min(max_workers, total_pages))
+
+      completed = {"count": 0}
+      progress_lock = threading.Lock()
+
+      def report_progress(page_number: int) -> None:
+        if not progress_callback:
+          return
+        with progress_lock:
+          completed["count"] += 1
+          done = completed["count"]
+        progress_callback(
+          done,
+          total_pages,
+          f"Scanning QR codes ({done}/{total_pages}) in {pdf_path.name} (page {page_number + 1})"
+        )
+
+      def scan_page_from_doc(page) -> List[Dict]:
         pix = page.get_pixmap(dpi=150)
         img_bytes = pix.tobytes("png")
         image = Image.open(io.BytesIO(img_bytes))
         if image.mode != 'RGB':
           image = image.convert('RGB')
 
-        log.debug(
-          "QR scan start: %s page %s/%s",
-          pdf_path.name,
-          page_number + 1,
-          total_pages
-        )
-        if progress_callback:
-          progress_callback(
-            page_number + 1,
-            total_pages,
-            f"Scanning QR codes ({page_number + 1}/{total_pages}) in {pdf_path.name}"
-          )
-
         scan_result = self._scan_image_step_up(
           image,
           dpi_steps=dpi_steps,
-          debug_label=f"{pdf_path.name} page {page_number}"
+          debug_label=f"{pdf_path.name} page {page.number}"
         )
-
         if not scan_result:
-          log.info(
-            "QR scan: %s page %s/%s no codes found",
-            pdf_path.name,
-            page_number + 1,
-            total_pages
-          )
-          continue
+          return []
 
         scale = scan_result["scale_to_base"]
         page_results: List[Dict] = []
@@ -581,21 +587,45 @@ class QRScanner:
             "height": rect.height * scale,
             "angle": qr_code.get("angle", 0.0)
           })
+        return page_results
 
-        if page_results:
-          log.debug(
-            "QR scan: %s page %s/%s found %s code(s)",
-            pdf_path.name,
-            page_number + 1,
-            total_pages,
-            len(page_results)
-          )
-          results[page_number] = page_results
+      def scan_page_in_thread(page_number: int) -> tuple[int, List[Dict]]:
+        local_doc = fitz.open(str(pdf_path))
+        try:
+          page = local_doc[page_number]
+          return page_number, scan_page_from_doc(page)
+        finally:
+          local_doc.close()
+
+      if max_workers == 1:
+        for page_number in range(total_pages):
+          page = pdf_document[page_number]
+          page_results = scan_page_from_doc(page)
+          if page_results:
+            results[page_number] = page_results
+          report_progress(page_number)
+      else:
+        pdf_document.close()
+        pdf_document = None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+          futures = [
+            executor.submit(scan_page_in_thread, page_number)
+            for page_number in range(total_pages)
+          ]
+          for future in concurrent.futures.as_completed(futures):
+            page_number, page_results = future.result()
+            if page_results:
+              results[page_number] = page_results
+            report_progress(page_number)
+
+      if pdf_document is not None:
+        pdf_document.close()
+
     except Exception as e:
       log.error(f"Error scanning QR positions from PDF: {e}", exc_info=True)
-    finally:
       try:
-        pdf_document.close()
+        if pdf_document is not None:
+          pdf_document.close()
       except Exception:
         pass
 

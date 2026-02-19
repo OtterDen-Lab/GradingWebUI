@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import tempfile
 import zipfile
 import hashlib
+import os
 import logging
 import re
 import shutil
@@ -26,7 +27,9 @@ from ..domain.problem import Problem
 
 import logging
 import asyncio
-from ..services.exam_processor import ExamProcessor, PRESCAN_DPI_STEPS
+import concurrent.futures
+import threading
+from ..services.exam_processor import ExamProcessor, PRESCAN_DPI_STEPS, NAME_SIMILARITY_THRESHOLD
 from ..services.qr_scanner import QRScanner
 from lms_interface.canvas_interface import CanvasInterface
 from ..repositories import SessionRepository, SubmissionRepository, ProblemMetadataRepository, ProblemRepository
@@ -606,22 +609,39 @@ async def prepare_alignment(
       qr_positions = {}
       total_files = len(file_paths)
       total_steps = total_qr_steps + max_pages
-      processed_offset = 0
-      for index, pdf_path in enumerate(file_paths, start=1):
-        page_total = page_counts[index - 1] if index - 1 < len(page_counts) else 0
+      if total_qr_steps > 0:
+        progress_lock = threading.Lock()
+        pages_scanned = {"count": 0}
 
-        def page_progress(page_index: int, page_total: int, message: str) -> None:
-          send_progress(
-            f"Scanning QR codes ({index}/{total_files}) page {page_index}/{page_total}: {pdf_path.name}",
-            processed_offset + page_index,
-            total_steps
+        def scan_file(index: int, pdf_path: Path) -> tuple[Path, Dict[int, List[Dict]]]:
+          per_file_workers = 1 if total_files > 1 else None
+
+          def page_progress(_completed: int, _page_total: int, _message: str) -> None:
+            with progress_lock:
+              pages_scanned["count"] += 1
+              global_completed = pages_scanned["count"]
+            send_progress(
+              f"Scanning QR codes ({index}/{total_files}) in {pdf_path.name} ({global_completed}/{total_qr_steps} pages)",
+              global_completed,
+              total_steps
+            )
+
+          positions = qr_scanner.scan_qr_positions_from_pdf(
+            pdf_path,
+            progress_callback=page_progress,
+            max_workers=per_file_workers
           )
+          return pdf_path, positions
 
-        qr_positions[pdf_path] = qr_scanner.scan_qr_positions_from_pdf(
-          pdf_path,
-          progress_callback=page_progress
-        )
-        processed_offset += page_total
+        max_workers = min(4, total_files, os.cpu_count() or 1)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+          futures = [
+            executor.submit(scan_file, index, pdf_path)
+            for index, pdf_path in enumerate(file_paths, start=1)
+          ]
+          for future in concurrent.futures.as_completed(futures):
+            pdf_path, positions = future.result()
+            qr_positions[pdf_path] = positions
     else:
       max_pages = 1
       total_qr_steps = 0
@@ -783,307 +803,6 @@ async def submit_alignment(
   }
 
 
-async def process_exam_files(
-  session_id: int,
-  file_paths: List[Path],
-  file_metadata: Dict[Path, Dict],
-  stream_id: str,
-  manual_split_points: Dict[int, List[int]] = None,
-  skip_first_region: bool = True,
-  last_page_blank: bool = False,
-  ai_provider: str = "anthropic"
-):
-  """
-    Background task to process uploaded exam files.
-
-    Args:
-        session_id: Session ID to process for
-        file_paths: List of PDF file paths
-        file_metadata: Dict mapping file_path -> {hash, original_filename}
-        stream_id: SSE stream ID for progress updates
-        manual_split_points: Manual split points (optional)
-        skip_first_region: Skip first region when splitting (default True, for header/title)
-        last_page_blank: Skip last page when splitting (default False)
-        ai_provider: AI provider to use for name extraction (anthropic, openai, ollama)
-    """
-
-  log = logging.getLogger(__name__)
-  log.info(f"Processing {len(file_paths)} files for session {session_id}")
-
-  try:
-    # Get session info
-    session_repo = SessionRepository()
-
-    session = session_repo.get_by_id(session_id)
-    if not session:
-      log.error(f"Session {session_id} not found")
-      return
-
-    course_id = session.course_id
-    assignment_id = session.assignment_id
-    use_prod = session.use_prod_canvas
-    mock_roster = bool(session.metadata and session.metadata.get("mock_roster"))
-    ai_name_extraction = True
-    if session.metadata and "ai_name_extraction" in session.metadata:
-      ai_name_extraction = bool(session.metadata.get("ai_name_extraction"))
-
-    submission_repo = SubmissionRepository()
-    existing_user_ids = submission_repo.get_existing_canvas_users(session_id)
-
-    if mock_roster:
-      start_index = len(existing_user_ids) + 1
-      canvas_students = [{
-        "name": f"Mock Student {start_index + i}",
-        "user_id": -(start_index + i)
-      } for i in range(len(file_paths))]
-      log.info(
-        f"Mock roster enabled: generated {len(canvas_students)} students"
-      )
-    else:
-      # Get Canvas students
-      canvas_interface = CanvasInterface(prod=use_prod, privacy_mode="none")
-      course = canvas_interface.get_course(course_id)
-      assignment = course.get_assignment(assignment_id)
-      students = assignment.get_students(include_names=True)
-
-      # Convert to simple dicts for processor, excluding students who already have submissions
-      canvas_students = [{
-        "name": s.name,
-        "user_id": s.user_id
-      } for s in students if s.user_id not in existing_user_ids]
-
-      log.info(
-        f"Found {len(students)} total students, {len(existing_user_ids)} already have submissions, {len(canvas_students)} available for matching"
-      )
-
-    # Check for duplicate files (same hash already processed)
-    submission_repo = SubmissionRepository()
-    existing_hashes = submission_repo.get_existing_hashes(session_id)
-
-    # Filter out duplicate files
-    new_file_paths = []
-    duplicate_files = []
-    for file_path in file_paths:
-      file_hash = file_metadata[file_path]["hash"]
-      if file_hash in existing_hashes:
-        log.info(
-          f"Skipping duplicate file: {file_path.name} (hash={file_hash[:8]}..., already processed as {existing_hashes[file_hash]})"
-        )
-        duplicate_files.append(file_path.name)
-      else:
-        new_file_paths.append(file_path)
-
-    if duplicate_files:
-      log.info(
-        f"Skipped {len(duplicate_files)} duplicate file(s): {', '.join(duplicate_files)}"
-      )
-
-    if not new_file_paths:
-      log.info("No new files to process (all were duplicates)")
-      session_repo = SessionRepository()
-      session_repo.update_status(
-        session_id,
-        SessionStatus.READY,
-        'All uploaded files were duplicates - no new exams added'
-      )
-      return
-
-    file_paths = new_file_paths
-    log.info(f"Processing {len(file_paths)} new file(s) after duplicate detection")
-
-    # Get the highest existing document_id to avoid conflicts
-    start_document_id = submission_repo.get_max_document_id(session_id) + 1
-    log.info(f"Starting document_id offset: {start_document_id}")
-
-    # Get current totals for progress tracking
-    session_repo = SessionRepository()
-    session = session_repo.get_by_id(session_id)
-    base_total = session.total_exams
-    base_processed = session.processed_exams
-    base_matched = session.matched_exams
-
-    # Get event loop reference for sending SSE events from thread
-    main_loop = asyncio.get_event_loop()
-
-    # Step-based progress tracking (each exam has ~5 steps: extract, match, split, etc.)
-    # Estimate total steps based on number of files
-    estimated_steps_per_exam = 5
-    total_steps = len(file_paths) * estimated_steps_per_exam
-    current_step = {'count': 0}  # Use dict so it's mutable in closure
-
-    # Progress callback to update database and send SSE events (with offset)
-    def update_progress(processed, matched, message):
-      total = base_total + len(file_paths)
-      processed_count = base_processed + processed
-      matched_count = base_matched + matched
-
-      # Increment step counter
-      current_step['count'] += 1
-
-      # Update database using repository
-      progress_repo = SessionRepository()
-      progress_session = progress_repo.get_by_id(session_id)
-      progress_session.total_exams = total
-      progress_session.processed_exams = processed_count
-      progress_session.matched_exams = matched_count
-      progress_session.processing_message = message
-      progress_repo.update(progress_session)
-
-      # Calculate progress based on steps completed
-      progress_percent = min(100,
-                             int((current_step['count'] / total_steps) * 100))
-
-      # Send SSE progress event from thread to event loop
-      try:
-        asyncio.run_coroutine_threadsafe(
-          sse.send_event(
-            stream_id, "progress", {
-              "total": total,
-              "processed": processed_count,
-              "matched": matched_count,
-              "progress": progress_percent,
-              "current_step": current_step['count'],
-              "total_steps": total_steps,
-              "message": message
-            }), main_loop)
-      except Exception as e:
-        log.error(f"Failed to send SSE event: {e}")
-
-    # Load existing max_points metadata to avoid re-extracting
-    metadata_repo = ProblemMetadataRepository()
-    problem_max_points = metadata_repo.get_all_max_points(session_id)
-
-    log.info(
-      f"Loaded {len(problem_max_points)} existing max_points values from metadata"
-    )
-
-    # Process exams in thread executor so event loop can send SSE events
-    processor = ExamProcessor(ai_provider=ai_provider)
-    loop = asyncio.get_event_loop()
-    matched, unmatched = await loop.run_in_executor(
-      None,  # Use default thread pool
-      lambda: processor.process_exams(
-        input_files=file_paths,
-        canvas_students=canvas_students,
-        progress_callback=update_progress,
-        document_id_offset=start_document_id,
-        file_metadata=file_metadata,
-        manual_split_points=manual_split_points,  # Use manual alignment (now percentage-based)
-        skip_first_region=skip_first_region,  # Skip first region (header/title)
-        last_page_blank=last_page_blank,  # Skip last page if blank
-        skip_name_extraction=not ai_name_extraction,
-        mock_roster=mock_roster
-      ))
-
-    with with_transaction() as repos:
-      all_submissions_data = matched + unmatched
-
-      # Step 1: Convert submission DTOs to domain objects
-      submissions_to_create = []
-      for sub_dto in all_submissions_data:
-        submission = Submission(
-          id=0,  # Will be populated on create
-          session_id=session_id,
-          document_id=sub_dto.document_id,
-          approximate_name=sub_dto.approximate_name,
-          name_image_data=sub_dto.name_image_data,
-          student_name=sub_dto.student_name,
-          display_name=None,  # Not set during upload
-          canvas_user_id=sub_dto.canvas_user_id,
-          page_mappings=sub_dto.page_mappings,
-          file_hash=sub_dto.file_hash,
-          original_filename=sub_dto.original_filename,
-          exam_pdf_data=sub_dto.pdf_data
-        )
-        # Store problem DTOs temporarily for later processing
-        submission.problems = sub_dto.problems
-        submissions_to_create.append(submission)
-
-      # Step 2: Bulk create submissions (single transaction)
-      created_submissions = repos.submissions.bulk_create(submissions_to_create)
-
-      # Step 3: Build problems list with correct submission_ids and handle metadata
-      all_problems = []
-      max_points_to_upsert = {}  # {problem_number: max_points}
-
-      for i, created_sub in enumerate(created_submissions):
-        for prob_dto in submissions_to_create[i].problems:
-          problem_number = prob_dto.problem_number
-
-          # Check if we have max_points from metadata
-          existing_max = repos.metadata.get_max_points(session_id, problem_number)
-          if existing_max is not None:
-            max_points = existing_max
-          else:
-            # Use extracted max_points and queue for upsert
-            max_points = prob_dto.max_points
-            if max_points is not None:
-              max_points_to_upsert[problem_number] = max_points
-
-          # Region coords are already a dict in the DTO
-          region_coords = prob_dto.region_coords
-
-          # Create problem domain object
-          problem = Problem(
-            id=0,
-            session_id=session_id,
-            submission_id=created_sub.id,  # Now has real ID from bulk_create
-            problem_number=problem_number,
-            graded=False,
-            is_blank=prob_dto.is_blank,
-            blank_confidence=prob_dto.blank_confidence,
-            blank_method=prob_dto.blank_method,
-            blank_reasoning=prob_dto.blank_reasoning,
-            max_points=max_points,
-            region_coords=region_coords,
-            qr_encrypted_data=prob_dto.qr_encrypted_data  # Include QR data from DTO
-          )
-          all_problems.append(problem)
-
-      # Step 4: Bulk create all problems
-      repos.problems.bulk_create(all_problems)
-
-      # Step 5: Upsert metadata for new max_points
-      for problem_num, max_pts in max_points_to_upsert.items():
-        repos.metadata.upsert_max_points(session_id, problem_num, max_pts)
-
-      # Step 6: Update session status
-      next_status = SessionStatus.NAME_MATCHING_NEEDED
-      if mock_roster:
-        next_status = SessionStatus.READY
-      repos.sessions.update_status(session_id, next_status)
-
-    log.info(
-      f"Completed processing for session {session_id}: {len(matched)} matched, {len(unmatched)} unmatched"
-    )
-
-    # Send completion event
-    await sse.send_event(
-      stream_id, "complete", {
-        "total":
-        len(matched) + len(unmatched),
-        "matched":
-        len(matched),
-        "unmatched":
-        len(unmatched),
-        "message":
-        f"Processing complete: {len(matched)} matched, {len(unmatched)} unmatched"
-      })
-
-  except Exception as e:
-    log.error(f"Error processing exams: {e}", exc_info=True)
-
-    # Send error event
-    await sse.send_event(stream_id, "error", {
-      "error": str(e),
-      "message": f"Processing failed: {str(e)}"
-    })
-
-    # Update session to error state
-    error_repo = SessionRepository()
-    error_repo.update_status(session_id, SessionStatus.ERROR, f"Processing failed: {str(e)}")
-
-
 async def process_exam_names(
   session_id: int,
   file_paths: List[Path],
@@ -1191,6 +910,7 @@ async def process_exam_names(
     processor = ExamProcessor(ai_provider=ai_provider)
     submissions_to_create = []
     matched_count = 0
+    unmatched_students = canvas_students.copy()
 
     for index, pdf_path in enumerate(file_paths):
       document_id = index + start_document_id
@@ -1211,13 +931,36 @@ async def process_exam_names(
         if ai_name_extraction:
           approximate_name, name_image = processor.extract_name(
             pdf_path,
-            student_names=[s["name"] for s in canvas_students]
+            student_names=[s["name"] for s in unmatched_students]
           )
         else:
           name_image = processor.extract_name_image(pdf_path)
           approximate_name = ""
-        student_name = None
-        canvas_user_id = None
+        suggested_match = None
+        match_confidence = 0
+        if approximate_name:
+          suggested_match, match_confidence = processor._find_suggested_match(
+            approximate_name,
+            unmatched_students
+          )
+
+        if suggested_match and match_confidence >= NAME_SIMILARITY_THRESHOLD:
+          student_name = suggested_match["name"]
+          canvas_user_id = suggested_match["user_id"]
+          unmatched_students = [
+            student for student in unmatched_students
+            if student["user_id"] != suggested_match["user_id"]
+          ]
+          matched_count += 1
+          log.info(
+            "Auto-accepted name match for %s: %s (%s%%)",
+            pdf_path.name,
+            student_name,
+            match_confidence
+          )
+        else:
+          student_name = None
+          canvas_user_id = None
 
       submission = Submission(
         id=0,

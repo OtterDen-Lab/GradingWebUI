@@ -7,11 +7,101 @@ let lastGradedProblemNumber = null; // Track if we just graded something
 let problemMaxPoints = {}; // Cache max points per problem number
 let problemHistory = []; // Track navigation history for back button
 let historyIndex = -1; // Current position in history
+const regeneratedAnswerCache = new Map();
+const regeneratedAnswerRequests = new Map();
+const MAX_REGENERATED_ANSWER_CACHE = 200;
+const regenerationSessionPrefetchStarted = new Set();
+
+function cacheRegeneratedAnswer(problemId, data) {
+    regeneratedAnswerCache.set(problemId, data);
+    if (regeneratedAnswerCache.size > MAX_REGENERATED_ANSWER_CACHE) {
+        const oldestKey = regeneratedAnswerCache.keys().next().value;
+        regeneratedAnswerCache.delete(oldestKey);
+    }
+}
+
+async function getRegeneratedAnswer(problemId) {
+    if (!problemId) {
+        throw new Error('No problem loaded');
+    }
+
+    if (regeneratedAnswerCache.has(problemId)) {
+        return regeneratedAnswerCache.get(problemId);
+    }
+
+    if (regeneratedAnswerRequests.has(problemId)) {
+        return regeneratedAnswerRequests.get(problemId);
+    }
+
+    const request = (async () => {
+        const response = await fetch(`${API_BASE}/problems/${problemId}/regenerate-answer`);
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (error) {
+            payload = null;
+        }
+
+        if (!response.ok) {
+            throw new Error(payload?.detail || 'Failed to load answer');
+        }
+
+        cacheRegeneratedAnswer(problemId, payload);
+        return payload;
+    })();
+
+    regeneratedAnswerRequests.set(problemId, request);
+    try {
+        return await request;
+    } finally {
+        regeneratedAnswerRequests.delete(problemId);
+    }
+}
+
+function prefetchRegeneratedAnswer(problemId) {
+    if (!problemId || regeneratedAnswerCache.has(problemId) || regeneratedAnswerRequests.has(problemId)) {
+        return;
+    }
+
+    getRegeneratedAnswer(problemId).catch((error) => {
+        console.debug(`Background answer regeneration failed for problem ${problemId}:`, error);
+    });
+}
+
+function startSessionRegenerationPrefetch() {
+    if (!currentSession || !currentSession.id) {
+        return;
+    }
+
+    if (regenerationSessionPrefetchStarted.has(currentSession.id)) {
+        return;
+    }
+    regenerationSessionPrefetchStarted.add(currentSession.id);
+
+    fetch(`${API_BASE}/problems/session/${currentSession.id}/prefetch-regeneration`, {
+        method: 'POST'
+    })
+        .then((response) => response.json().catch(() => null))
+        .then((payload) => {
+            if (!payload) return;
+            if (payload.status === 'started') {
+                console.log(`Started regeneration prefetch for session ${currentSession.id} (${payload.total_qr_problems} QR-backed problems)`);
+            } else if (payload.status === 'already_running') {
+                console.log(`Regeneration prefetch already running for session ${currentSession.id}`);
+            } else if (payload.status === 'no_qr_data') {
+                console.log(`No QR-backed problems to prefetch for session ${currentSession.id}`);
+            }
+        })
+        .catch((error) => {
+            console.debug('Failed to start session regeneration prefetch:', error);
+        });
+}
 
 // Initialize grading interface when section becomes active
 function initializeGrading() {
     if (!currentSession) return;
 
+    startSessionRegenerationPrefetch();
     loadProblemMaxPoints();
     loadProblemNumbers();
     setupGradingControls();
@@ -145,65 +235,91 @@ async function updateOverallProgress() {
         }
 
         const stats = await response.json();
+        const clampPercent = (value) => Math.max(0, Math.min(100, value));
 
-        const percentage = stats.progress_percentage || 0;
-        document.getElementById('overall-progress-fill').style.width = `${percentage}%`;
+        const percentage = clampPercent(stats.progress_percentage || 0);
         document.getElementById('overall-progress-label').textContent =
             `Overall: ${stats.problems_graded} / ${stats.total_problems} (${percentage.toFixed(1)}%)`;
 
-        // Update current problem progress background (red bar showing remaining work)
-        const currentProblemStats = stats.problem_stats.find(p => p.problem_number === currentProblemNumber);
-        if (currentProblemStats && stats.total_problems > 0) {
-            // Calculate how much of this problem's work is graded and remaining
-            const problemGraded = currentProblemStats.num_graded / stats.total_problems * 100;
-            const problemRemaining = (currentProblemStats.num_total - currentProblemStats.num_graded) / stats.total_problems * 100;
+        const sortedProblemStats = [...stats.problem_stats]
+            .sort((a, b) => a.problem_number - b.problem_number);
+        const segmentContainer = document.getElementById('overall-problem-segments');
+        const currentProblemWindow = document.getElementById('current-problem-window');
+        const currentProblemWindowGraded = document.getElementById('current-problem-window-graded');
+        const currentProblemWindowUngraded = document.getElementById('current-problem-window-ungraded');
+        const currentProblemWindowBlank = document.getElementById('current-problem-window-blank');
+        segmentContainer.innerHTML = '';
 
-            // Calculate where the current problem starts in the overall progress
-            // This is the sum of all completed work before the current problem
-            let workBeforeCurrent = 0;
-            for (const ps of stats.problem_stats) {
-                if (ps.problem_number < currentProblemNumber) {
-                    workBeforeCurrent += ps.num_graded;
-                } else if (ps.problem_number === currentProblemNumber) {
-                    break;
+        if (stats.total_problems > 0) {
+            let cumulativeTotal = 0;
+            sortedProblemStats.forEach((ps) => {
+                if (!ps || ps.num_total <= 0) {
+                    return;
                 }
-            }
-            const currentProblemStartPercent = workBeforeCurrent / stats.total_problems * 100;
 
-            // Dark gray outline: shows the entire current problem (both graded and remaining)
-            const grayOutline = document.getElementById('current-problem-graded-outline');
-            grayOutline.style.left = `${currentProblemStartPercent}%`;
-            grayOutline.style.width = `${problemGraded + problemRemaining}%`;
+                const segmentLeftPercent = clampPercent((cumulativeTotal / stats.total_problems) * 100);
+                const segmentWidthPercent = clampPercent((ps.num_total / stats.total_problems) * 100);
+                const gradedCount = Math.min(Math.max(ps.num_graded || 0, 0), ps.num_total);
+                const gradedPercentWithin = clampPercent((gradedCount / ps.num_total) * 100);
 
-            // Red bar: shows remaining work in current problem
-            const redBarStart = currentProblemStartPercent + problemGraded;
-            const redBar = document.getElementById('current-problem-progress-bg');
-            redBar.style.left = `${redBarStart}%`;
-            redBar.style.width = `${problemRemaining}%`;
+                const segment = document.createElement('div');
+                segment.className = 'problem-progress-segment';
+                segment.style.left = `${segmentLeftPercent}%`;
+                segment.style.width = `${segmentWidthPercent}%`;
 
-            // Yellow bar: shows blank-detected problems in UNGRADED portion of current problem
-            // Sized and positioned relative to the current problem's total count
-            const numBlankUngraded = currentProblemStats.num_blank_ungraded || 0;
-            const numTotalInProblem = currentProblemStats.num_total;
+                const segmentFill = document.createElement('div');
+                segmentFill.className = 'problem-progress-segment-fill';
+                segmentFill.style.width = `${gradedPercentWithin}%`;
 
-            // Calculate width as proportion of total problems (to match gray box scale)
-            const blankWidth = (numBlankUngraded / stats.total_problems) * 100;
+                segment.appendChild(segmentFill);
+                segmentContainer.appendChild(segment);
 
-            // Position at right end of the gray box (gray box ends at currentProblemStartPercent + problemGraded + problemRemaining)
-            const grayBoxEnd = currentProblemStartPercent + problemGraded + problemRemaining;
-            const yellowBarStart = grayBoxEnd - blankWidth;
-
-            const yellowBar = document.getElementById('blank-problems-bar');
-            yellowBar.style.left = `${yellowBarStart}%`;
-            yellowBar.style.width = `${blankWidth}%`;
-
-            console.log(`[DEBUG] Blank bar in current problem ${currentProblemNumber}: ${numBlankUngraded} blank (ungraded) out of ${numTotalInProblem} total, width=${blankWidth.toFixed(1)}%, left=${yellowBarStart.toFixed(1)}%`);
-        } else {
-            // No current problem or no data - hide all bars
-            document.getElementById('current-problem-progress-bg').style.width = '0%';
-            document.getElementById('current-problem-graded-outline').style.width = '0%';
-            document.getElementById('blank-problems-bar').style.width = '0%';
+                cumulativeTotal += ps.num_total;
+            });
         }
+
+        const clearCurrentProblemWindow = () => {
+            currentProblemWindow.style.width = '0%';
+            currentProblemWindow.style.left = '0%';
+            currentProblemWindowGraded.style.width = '0%';
+            currentProblemWindowUngraded.style.width = '0%';
+            currentProblemWindowBlank.style.width = '0%';
+        };
+
+        const currentProblemStats = sortedProblemStats.find(
+            (p) => p.problem_number === Number(currentProblemNumber)
+        );
+        if (!currentProblemStats || stats.total_problems <= 0 || currentProblemStats.num_total <= 0) {
+            clearCurrentProblemWindow();
+            return;
+        }
+
+        // Current-problem window position uses total work distribution, not graded work.
+        const totalBeforeCurrent = sortedProblemStats
+            .filter((ps) => ps.problem_number < Number(currentProblemNumber))
+            .reduce((sum, ps) => sum + ps.num_total, 0);
+        const currentProblemStartPercent = clampPercent((totalBeforeCurrent / stats.total_problems) * 100);
+        const currentProblemWidthPercent = clampPercent((currentProblemStats.num_total / stats.total_problems) * 100);
+
+        const gradedCount = Math.min(
+            Math.max(currentProblemStats.num_graded || 0, 0),
+            currentProblemStats.num_total
+        );
+        const ungradedCount = Math.max(currentProblemStats.num_total - gradedCount, 0);
+        const blankUngradedCount = Math.min(
+            Math.max(currentProblemStats.num_blank_ungraded || 0, 0),
+            ungradedCount
+        );
+
+        const gradedWithinCurrentPercent = clampPercent((gradedCount / currentProblemStats.num_total) * 100);
+        const ungradedWithinCurrentPercent = clampPercent((ungradedCount / currentProblemStats.num_total) * 100);
+        const blankWithinCurrentPercent = clampPercent((blankUngradedCount / currentProblemStats.num_total) * 100);
+
+        currentProblemWindow.style.left = `${currentProblemStartPercent}%`;
+        currentProblemWindow.style.width = `${currentProblemWidthPercent}%`;
+        currentProblemWindowGraded.style.width = `${gradedWithinCurrentPercent}%`;
+        currentProblemWindowUngraded.style.width = `${ungradedWithinCurrentPercent}%`;
+        currentProblemWindowBlank.style.width = `${blankWithinCurrentPercent}%`;
     } catch (error) {
         console.error('Failed to update overall progress:', error);
     }
@@ -383,6 +499,7 @@ function displayCurrentProblem() {
     const showAnswerBtn = document.getElementById('show-answer-btn');
     if (currentProblem.has_qr_data) {
         showAnswerBtn.style.display = 'inline-block';
+        prefetchRegeneratedAnswer(currentProblem.id);
     } else {
         showAnswerBtn.style.display = 'none';
     }
@@ -1687,25 +1804,7 @@ document.addEventListener('mouseup', () => {
     isAnswerDragging = false;
 });
 
-// Function to update answer dialog with current problem
-async function updateAnswerDialog() {
-    if (!currentProblem) {
-        answerDialog.style.display = 'none';
-        return;
-    }
-
-    // Check if current problem has QR data
-    if (!currentProblem.has_qr_data) {
-        // No QR data - show message
-        const answerContent = document.getElementById('answer-content');
-        const answerError = document.getElementById('answer-error');
-        answerContent.style.display = 'none';
-        answerError.style.display = 'block';
-        answerError.textContent = 'Answer not available for this problem (no QR code data)';
-        return;
-    }
-
-    // Has QR data - load the answer
+function setAnswerDialogLoadingState() {
     const answerContent = document.getElementById('answer-content');
     const answerList = document.getElementById('answer-list');
     const answerError = document.getElementById('answer-error');
@@ -1715,69 +1814,80 @@ async function updateAnswerDialog() {
     answerError.style.display = 'none';
     answerList.innerHTML = '<div style="text-align: center; padding: 20px;">Loading answer...</div>';
     answerMetadata.style.display = 'none';
+}
+
+function showAnswerDialogError(message) {
+    const answerContent = document.getElementById('answer-content');
+    const answerError = document.getElementById('answer-error');
+    answerContent.style.display = 'none';
+    answerError.style.display = 'block';
+    answerError.textContent = message;
+}
+
+function renderAnswerDialogData(data) {
+    const answerList = document.getElementById('answer-list');
+    const answerMetadata = document.getElementById('answer-metadata');
+
+    document.getElementById('answer-question-type').textContent = data.question_type;
+    document.getElementById('answer-seed').textContent = data.seed;
+    document.getElementById('answer-version').textContent = data.version;
+    document.getElementById('answer-max-points').textContent = data.max_points;
+
+    const configWrapper = document.getElementById('answer-config-wrapper');
+    const configSpan = document.getElementById('answer-config');
+    configSpan.textContent = data.config ? JSON.stringify(data.config) : 'None';
+    configWrapper.style.display = 'block';
+
+    answerMetadata.style.display = 'block';
+
+    if (data.answer_key_html) {
+        answerList.innerHTML = `<div style="padding: 15px; background: white; border-radius: 4px;">${data.answer_key_html}</div>`;
+    } else if (data.answers && data.answers.length > 0) {
+        answerList.innerHTML = data.answers.map(answer => {
+            let html = `<div style="margin-bottom: 15px; padding: 10px; background: white; border-radius: 4px;">`;
+            html += `<div style="font-weight: 600; color: #1e40af; margin-bottom: 5px;">${answer.key}:</div>`;
+            if (answer.html) {
+                html += `<div style="font-size: 18px; font-family: 'Courier New', monospace;">${answer.html}</div>`;
+            } else {
+                html += `<div style="font-size: 18px; font-family: 'Courier New', monospace;">${answer.value}</div>`;
+            }
+            if (answer.tolerance !== undefined && answer.tolerance !== null) {
+                html += `<div style="font-size: 12px; color: #6b7280; margin-top: 5px;">Tolerance: ±${answer.tolerance}</div>`;
+            }
+            html += `</div>`;
+            return html;
+        }).join('');
+    } else {
+        answerList.innerHTML = '<div style="color: #6b7280;">No answers available</div>';
+    }
+
+    if (typeof MathJax !== 'undefined') {
+        MathJax.typesetPromise([answerList]).catch((err) => console.error('MathJax typesetting failed:', err));
+    }
+}
+
+// Function to update answer dialog with current problem
+async function updateAnswerDialog() {
+    if (!currentProblem) {
+        answerDialog.style.display = 'none';
+        return;
+    }
+
+    // Check if current problem has QR data
+    if (!currentProblem.has_qr_data) {
+        showAnswerDialogError('Answer not available for this problem (no QR code data)');
+        return;
+    }
+
+    setAnswerDialogLoadingState();
 
     try {
-        const response = await fetch(`${API_BASE}/problems/${currentProblem.id}/regenerate-answer`);
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Failed to load answer');
-        }
-
-        const data = await response.json();
-
-        // Display metadata
-        document.getElementById('answer-question-type').textContent = data.question_type;
-        document.getElementById('answer-seed').textContent = data.seed;
-        document.getElementById('answer-version').textContent = data.version;
-        document.getElementById('answer-max-points').textContent = data.max_points;
-
-        // Display config if available
-        const configWrapper = document.getElementById('answer-config-wrapper');
-        const configSpan = document.getElementById('answer-config');
-        if (data.config) {
-            configSpan.textContent = JSON.stringify(data.config);
-        } else {
-            configSpan.textContent = 'None';
-        }
-        configWrapper.style.display = 'block';
-
-        answerMetadata.style.display = 'block';
-
-        // Display HTML answer key if available, otherwise show individual answers
-        if (data.answer_key_html) {
-            answerList.innerHTML = `<div style="padding: 15px; background: white; border-radius: 4px;">${data.answer_key_html}</div>`;
-        } else if (data.answers && data.answers.length > 0) {
-            answerList.innerHTML = data.answers.map(answer => {
-                let html = `<div style="margin-bottom: 15px; padding: 10px; background: white; border-radius: 4px;">`;
-                html += `<div style="font-weight: 600; color: #1e40af; margin-bottom: 5px;">${answer.key}:</div>`;
-
-                if (answer.html) {
-                    html += `<div style="font-size: 18px; font-family: 'Courier New', monospace;">${answer.html}</div>`;
-                } else {
-                    html += `<div style="font-size: 18px; font-family: 'Courier New', monospace;">${answer.value}</div>`;
-                }
-
-                if (answer.tolerance !== undefined && answer.tolerance !== null) {
-                    html += `<div style="font-size: 12px; color: #6b7280; margin-top: 5px;">Tolerance: ±${answer.tolerance}</div>`;
-                }
-                html += `</div>`;
-                return html;
-            }).join('');
-        } else {
-            answerList.innerHTML = '<div style="color: #6b7280;">No answers available</div>';
-        }
-
-        // Trigger MathJax typesetting for the answer content
-        if (typeof MathJax !== 'undefined') {
-            MathJax.typesetPromise([answerList]).catch((err) => console.error('MathJax typesetting failed:', err));
-        }
+        const data = await getRegeneratedAnswer(currentProblem.id);
+        renderAnswerDialogData(data);
 
     } catch (error) {
         console.error('Failed to load answer:', error);
-        answerContent.style.display = 'none';
-        answerError.style.display = 'block';
-        answerError.textContent = error.message;
+        showAnswerDialogError(error.message);
     }
 }
 
@@ -1788,84 +1898,8 @@ showAnswerBtn.addEventListener('click', async () => {
         return;
     }
 
-    // Show dialog with loading state
-    const answerContent = document.getElementById('answer-content');
-    const answerList = document.getElementById('answer-list');
-    const answerError = document.getElementById('answer-error');
-    const answerMetadata = document.getElementById('answer-metadata');
-
     answerDialog.style.display = 'flex';
-    answerContent.style.display = 'block';
-    answerError.style.display = 'none';
-    answerList.innerHTML = '<div style="text-align: center; padding: 20px;">Loading answer...</div>';
-    answerMetadata.style.display = 'none';
-
-    try {
-        const response = await fetch(`${API_BASE}/problems/${currentProblem.id}/regenerate-answer`);
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Failed to load answer');
-        }
-
-        const data = await response.json();
-
-        // Display metadata
-        document.getElementById('answer-question-type').textContent = data.question_type;
-        document.getElementById('answer-seed').textContent = data.seed;
-        document.getElementById('answer-version').textContent = data.version;
-        document.getElementById('answer-max-points').textContent = data.max_points;
-
-        // Display config if available (always show, with "None" if not present)
-        const configWrapper = document.getElementById('answer-config-wrapper');
-        const configSpan = document.getElementById('answer-config');
-        if (data.config) {
-            configSpan.textContent = JSON.stringify(data.config);
-        } else {
-            configSpan.textContent = 'None';
-        }
-        configWrapper.style.display = 'block';
-
-        answerMetadata.style.display = 'block';
-
-        // Display HTML answer key if available, otherwise show individual answers
-        if (data.answer_key_html) {
-            // Display the full HTML answer key
-            answerList.innerHTML = `<div style="padding: 15px; background: white; border-radius: 4px;">${data.answer_key_html}</div>`;
-        } else if (data.answers && data.answers.length > 0) {
-            // Fallback to individual answers
-            answerList.innerHTML = data.answers.map(answer => {
-                let html = `<div style="margin-bottom: 15px; padding: 10px; background: white; border-radius: 4px;">`;
-                html += `<div style="font-weight: 600; color: #1e40af; margin-bottom: 5px;">${answer.key}:</div>`;
-
-                // Use HTML rendering if available, otherwise fall back to plain text
-                if (answer.html) {
-                    html += `<div style="font-size: 18px; font-family: 'Courier New', monospace;">${answer.html}</div>`;
-                } else {
-                    html += `<div style="font-size: 18px; font-family: 'Courier New', monospace;">${answer.value}</div>`;
-                }
-
-                if (answer.tolerance !== undefined && answer.tolerance !== null) {
-                    html += `<div style="font-size: 12px; color: #6b7280; margin-top: 5px;">Tolerance: ±${answer.tolerance}</div>`;
-                }
-                html += `</div>`;
-                return html;
-            }).join('');
-        } else {
-            answerList.innerHTML = '<div style="color: #6b7280;">No answers available</div>';
-        }
-
-        // Trigger MathJax typesetting for the answer content
-        if (typeof MathJax !== 'undefined') {
-            MathJax.typesetPromise([answerList]).catch((err) => console.error('MathJax typesetting failed:', err));
-        }
-
-    } catch (error) {
-        console.error('Failed to load answer:', error);
-        answerContent.style.display = 'none';
-        answerError.style.display = 'block';
-        answerError.textContent = error.message;
-    }
+    await updateAnswerDialog();
 });
 
 // Close answer dialog
@@ -2460,14 +2494,7 @@ async function loadExplanation() {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/problems/${currentProblem.id}/regenerate-answer`);
-
-        if (!response.ok) {
-            if (controls) controls.style.display = 'none';
-            return;
-        }
-
-        const data = await response.json();
+        const data = await getRegeneratedAnswer(currentProblem.id);
 
         if (data.explanation_html || data.explanation_markdown) {
             explanationCache[currentProblem.id] = {

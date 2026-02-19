@@ -24,6 +24,7 @@ help:
 	@echo "    Build Docker image locally."
 	@echo "  make deploy [DOCKER_ENV_FILE=/etc/grading-web/web.env] [DOCKER_IMAGE=autograder-web-grading:local]"
 	@echo "    Validate env, build image, and deploy via production compose file."
+	@echo "    Optional one-time bootstrap: GRADING_BOOTSTRAP_ADMIN_PASSWORD=... make deploy ..."
 
 dev:
 	@mkdir -p $(DB_DIR)

@@ -99,6 +99,7 @@ Use the production compose file with a server-only env file.
 Equivalent Make targets from repo root:
 - `make image DOCKER_IMAGE=autograder-web-grading:local`
 - `make deploy DOCKER_ENV_FILE=/etc/grading-web/web.env DOCKER_IMAGE=autograder-web-grading:local`
+- `GRADING_BOOTSTRAP_ADMIN_PASSWORD='strong-temp-secret' make deploy DOCKER_ENV_FILE=/etc/grading-web/web.env`
 
 `make deploy` validates env config, builds the image if needed, and starts
 `docker-compose.prod.yml` with persistent volumes preserved.

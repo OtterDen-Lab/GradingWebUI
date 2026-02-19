@@ -565,14 +565,19 @@
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
                     <div style="flex: 1;">
                         <div class="overall-progress-bar" style="margin-bottom: 5px; position: relative;">
-                            <!-- Yellow background layer: shows detected blank problems -->
-                            <div id="blank-problems-bar" class="blank-problems-bar" style="width: 0%"></div>
-                            <!-- Red background layer: shows remaining work in current problem -->
-                            <div id="current-problem-progress-bg" class="current-problem-progress-bg" style="width: 0%"></div>
-                            <!-- Green outline layer: shows already-graded portions of current problem -->
-                            <div id="current-problem-graded-outline" class="current-problem-graded-outline" style="width: 0%"></div>
-                            <!-- Blue foreground layer: shows overall progress -->
-                            <div id="overall-progress-fill" class="overall-progress-fill" style="width: 0%"></div>
+                            <!-- Base layer: per-problem grading progress (handles out-of-order grading) -->
+                            <div id="overall-problem-segments" class="overall-problem-segments"></div>
+                            <!-- Overlay window: current problem range + internal status segments -->
+                            <div id="current-problem-window" class="current-problem-window" style="left: 0%; width: 0%;">
+                                <div id="current-problem-window-ungraded" class="current-problem-window-ungraded" style="width: 0%"></div>
+                                <div id="current-problem-window-blank" class="current-problem-window-blank" style="width: 0%"></div>
+                                <div id="current-problem-window-graded" class="current-problem-window-graded" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="overall-progress-legend">
+                            <span><span class="legend-chip legend-chip-blue"></span>graded (all problems)</span>
+                            <span><span class="legend-chip legend-chip-red"></span>current problem remaining</span>
+                            <span><span class="legend-chip legend-chip-yellow"></span>predicted blank</span>
                         </div>
                         <span id="overall-progress-label" style="font-size: 13px; color: var(--gray-700);">Overall: 0 / 0 (0%)</span>
                     </div>

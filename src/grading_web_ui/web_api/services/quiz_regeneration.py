@@ -2,10 +2,38 @@
 Compatibility helpers for QuizGenerator answer regeneration APIs.
 """
 import inspect
+import logging
 import os
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+
+def _quiet_quizgenerator_loggers() -> None:
+  """Suppress noisy QuizGenerator info logs during regeneration."""
+  for logger_name in (
+    "QuizGenerator",
+    "QuizGenerator.quiz",
+    "QuizGenerator.regenerate",
+    "QuizGenerator.question",
+  ):
+    logger = logging.getLogger(logger_name)
+    if logger.level == logging.NOTSET or logger.level < logging.WARNING:
+      logger.setLevel(logging.WARNING)
+
+
+def _restore_app_logging_after_quizgenerator_import() -> None:
+  """
+  QuizGenerator applies its own logging config at import time.
+  Re-apply host logging so QuizGenerator INFO chatter stays suppressed.
+  """
+  try:
+    from grading_web_ui import setup_logging as setup_app_logging
+    setup_app_logging()
+  except Exception:
+    # If host logging cannot be restored, still clamp QuizGenerator levels.
+    pass
+  _quiet_quizgenerator_loggers()
 
 
 def _configure_matplotlib_for_worker_context() -> None:
@@ -48,6 +76,7 @@ def regenerate_from_encrypted_compat(encrypted_data: str,
   """
   _configure_matplotlib_for_worker_context()
   from QuizGenerator.regenerate import regenerate_from_encrypted
+  _restore_app_logging_after_quizgenerator_import()
 
   kwargs: Dict[str, Any] = {
     "encrypted_data": encrypted_data,

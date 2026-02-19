@@ -108,6 +108,16 @@ This validates env configuration, builds the image if needed, and starts
 
 Named volumes (including `grading-data`) are preserved.
 
+One-time bootstrap admin without editing env file:
+
+```bash
+GRADING_BOOTSTRAP_ADMIN_PASSWORD='use-a-strong-temp-secret' \
+make deploy DOCKER_ENV_FILE=/etc/grading-web/web.env
+```
+
+After first successful login, remove that variable from your shell/session
+before later deploys.
+
 If you deploy from a remote registry image instead of a local build, use
 direct Compose commands:
 

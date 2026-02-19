@@ -71,6 +71,16 @@ loggers:
     handlers: [console]
     propagate: false
 
+  QuizGenerator:
+    level: WARNING
+    handlers: [console, file]
+    propagate: false
+
+  QuizGenerator.quiz:
+    level: WARNING
+    handlers: [console, file]
+    propagate: false
+
 root:
   level: INFO
   handlers: [console, file, error_file]

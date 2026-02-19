@@ -276,6 +276,164 @@ def test_process_exam_names_mock_roster_sets_awaiting_alignment(
   assert session.status.value == "awaiting_alignment"
 
 
+def test_process_exam_names_auto_matches_high_confidence_names(
+    client, tmp_path, monkeypatch):
+  """Name extraction worker should persist high-confidence auto-matches."""
+  from grading_web_ui.web_api.routes import uploads as uploads_routes
+
+  session_id = create_test_session(client, "Name Extraction Auto Match")
+  session_repo = SessionRepository()
+
+  pdf_path = tmp_path / "auto-match.pdf"
+  pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+  file_metadata = {
+    pdf_path: {
+      "hash": "name-auto-hash-1",
+      "original_filename": "auto-match.pdf"
+    }
+  }
+
+  class FakeProcessor:
+
+    def __init__(self, ai_provider):
+      pass
+
+    def extract_name(self, pdf_path, student_names=None):
+      return "Ethan Peregoy", "name-image-base64"
+
+    def _find_suggested_match(self, approximate_name, unmatched_students):
+      if unmatched_students:
+        return unmatched_students[0], 99
+      return None, 0
+
+  class FakeStudent:
+
+    def __init__(self, user_id, name):
+      self.user_id = user_id
+      self.name = name
+
+  class FakeAssignment:
+
+    def get_students(self, include_names=True):
+      return [FakeStudent(101, "Ethan Peregoy")]
+
+  class FakeCourse:
+
+    def get_assignment(self, assignment_id):
+      return FakeAssignment()
+
+  class FakeCanvasInterface:
+
+    def __init__(self, prod=False, privacy_mode="none"):
+      pass
+
+    def get_course(self, course_id):
+      return FakeCourse()
+
+  async def noop_event(stream_id: str, event_type: str, data: dict):
+    return None
+
+  monkeypatch.setattr(uploads_routes, "ExamProcessor", FakeProcessor)
+  monkeypatch.setattr(uploads_routes, "CanvasInterface", FakeCanvasInterface)
+  monkeypatch.setattr(uploads_routes.sse, "send_event", noop_event)
+
+  asyncio.run(
+    uploads_routes.process_exam_names(session_id, [pdf_path], file_metadata,
+                                      "name_stream"))
+
+  submissions = SubmissionRepository().get_by_session(session_id)
+  assert len(submissions) == 1
+  assert submissions[0].canvas_user_id == 101
+  assert submissions[0].student_name == "Ethan Peregoy"
+
+  session = session_repo.get_by_id(session_id)
+  assert session is not None
+  assert session.status.value == "name_matching_needed"
+
+
+def test_process_exam_names_auto_match_does_not_reuse_student(
+    client, tmp_path, monkeypatch):
+  """Auto-matching should not assign one student to multiple new exams."""
+  from grading_web_ui.web_api.routes import uploads as uploads_routes
+
+  session_id = create_test_session(client, "Name Extraction Unique Auto Match")
+
+  pdf_path_1 = tmp_path / "auto-1.pdf"
+  pdf_path_1.write_bytes(b"%PDF-1.4\n%%EOF\n")
+  pdf_path_2 = tmp_path / "auto-2.pdf"
+  pdf_path_2.write_bytes(b"%PDF-1.4\n%%EOF\n")
+  file_metadata = {
+    pdf_path_1: {
+      "hash": "name-auto-hash-2",
+      "original_filename": "auto-1.pdf"
+    },
+    pdf_path_2: {
+      "hash": "name-auto-hash-3",
+      "original_filename": "auto-2.pdf"
+    }
+  }
+
+  class FakeProcessor:
+
+    def __init__(self, ai_provider):
+      pass
+
+    def extract_name(self, pdf_path, student_names=None):
+      return "Ethan Peregoy", "name-image-base64"
+
+    def _find_suggested_match(self, approximate_name, unmatched_students):
+      if unmatched_students:
+        return unmatched_students[0], 99
+      return None, 0
+
+  class FakeStudent:
+
+    def __init__(self, user_id, name):
+      self.user_id = user_id
+      self.name = name
+
+  class FakeAssignment:
+
+    def get_students(self, include_names=True):
+      return [FakeStudent(101, "Ethan Peregoy")]
+
+  class FakeCourse:
+
+    def get_assignment(self, assignment_id):
+      return FakeAssignment()
+
+  class FakeCanvasInterface:
+
+    def __init__(self, prod=False, privacy_mode="none"):
+      pass
+
+    def get_course(self, course_id):
+      return FakeCourse()
+
+  async def noop_event(stream_id: str, event_type: str, data: dict):
+    return None
+
+  monkeypatch.setattr(uploads_routes, "ExamProcessor", FakeProcessor)
+  monkeypatch.setattr(uploads_routes, "CanvasInterface", FakeCanvasInterface)
+  monkeypatch.setattr(uploads_routes.sse, "send_event", noop_event)
+
+  asyncio.run(
+    uploads_routes.process_exam_names(
+      session_id,
+      [pdf_path_1, pdf_path_2],
+      file_metadata,
+      "name_stream"
+    ))
+
+  submissions = SubmissionRepository().get_by_session(session_id)
+  assert len(submissions) == 2
+  matched = [s for s in submissions if s.canvas_user_id is not None]
+  unmatched = [s for s in submissions if s.canvas_user_id is None]
+  assert len(matched) == 1
+  assert len(unmatched) == 1
+  assert matched[0].canvas_user_id == 101
+
+
 def test_process_exam_splits_creates_problems_and_marks_session_ready(
     client, tmp_path, monkeypatch):
   """Split worker should attach problems to existing submissions and mark session ready."""

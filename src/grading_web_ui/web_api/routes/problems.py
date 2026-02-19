@@ -3,6 +3,9 @@ Problem grading endpoints.
 """
 import textwrap
 import os
+import asyncio
+import threading
+import hashlib
 
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
@@ -31,6 +34,202 @@ router = APIRouter()
 
 # Create singleton problem service
 _problem_service = ProblemService()
+_regeneration_cache = {}
+_regeneration_cache_lock = threading.Lock()
+_regeneration_cache_max_entries = 2000
+_session_prefetch_tasks = {}
+_session_prefetch_tasks_lock = threading.Lock()
+
+
+def _cache_key_for_regeneration(problem, quiz_yaml_text: Optional[str]) -> tuple:
+  yaml_fingerprint = ""
+  if quiz_yaml_text:
+    yaml_fingerprint = hashlib.sha1(
+      quiz_yaml_text.encode("utf-8")
+    ).hexdigest()
+  return (
+    problem.qr_encrypted_data,
+    float(problem.max_points or 0.0),
+    yaml_fingerprint
+  )
+
+
+def _get_cached_regeneration(problem_id: int, cache_key: tuple) -> Optional[dict]:
+  with _regeneration_cache_lock:
+    entry = _regeneration_cache.get(problem_id)
+    if not entry:
+      return None
+    if entry.get("cache_key") != cache_key:
+      return None
+    return entry.get("response")
+
+
+def _set_cached_regeneration(problem_id: int, cache_key: tuple,
+                             response: dict) -> None:
+  with _regeneration_cache_lock:
+    _regeneration_cache[problem_id] = {
+      "cache_key": cache_key,
+      "response": response
+    }
+    if len(_regeneration_cache) > _regeneration_cache_max_entries:
+      oldest_key = next(iter(_regeneration_cache))
+      _regeneration_cache.pop(oldest_key, None)
+
+
+def _build_regeneration_response(problem_id: int, problem,
+                                 result: dict) -> dict:
+  question_type = result.get('question_type')
+  seed = result.get('seed')
+  version = result.get('version')
+  config = result.get('config') or result.get('kwargs')
+
+  # Format answers for display.
+  # QuizGenerator may return answer_objects as dict, list, or custom objects.
+  answers = []
+  answer_objects = result.get('answer_objects')
+
+  iterable_answers = []
+  if isinstance(answer_objects, dict):
+    iterable_answers = list(answer_objects.items())
+  elif isinstance(answer_objects, list):
+    iterable_answers = [(f"answer_{idx + 1}", obj)
+                        for idx, obj in enumerate(answer_objects)]
+  elif answer_objects is not None:
+    iterable_answers = [("answer", answer_objects)]
+
+  for key, answer_obj in iterable_answers:
+    if isinstance(answer_obj, dict):
+      value = answer_obj.get('value')
+      if value is None:
+        value = answer_obj.get('answer_text')
+      if value is None:
+        value = answer_obj
+      tolerance = answer_obj.get('tolerance')
+      html = answer_obj.get('html')
+    else:
+      value = getattr(answer_obj, 'value', answer_obj)
+      tolerance = getattr(answer_obj, 'tolerance', None)
+      html = getattr(answer_obj, 'html', None)
+
+    answer_dict = {"key": str(key), "value": str(value)}
+    if tolerance is not None:
+      answer_dict['tolerance'] = tolerance
+    if html is not None:
+      answer_dict['html'] = str(html)
+
+    answers.append(answer_dict)
+
+  # Fallback to canvas-formatted answers if answer_objects was absent/empty.
+  if not answers:
+    answers_payload = result.get('answers')
+    if isinstance(answers_payload, dict):
+      raw_answers = answers_payload.get('data', [])
+    elif isinstance(answers_payload, list):
+      raw_answers = answers_payload
+    else:
+      raw_answers = []
+
+    for idx, raw_answer in enumerate(raw_answers):
+      if isinstance(raw_answer, dict):
+        key = (raw_answer.get('blank_id') or raw_answer.get('id') or
+               raw_answer.get('name') or f"answer_{idx + 1}")
+        value = raw_answer.get('answer_text')
+        if value is None:
+          value = raw_answer.get('value')
+        if value is None:
+          value = raw_answer
+        answer_dict = {"key": str(key), "value": str(value)}
+        if raw_answer.get('tolerance') is not None:
+          answer_dict['tolerance'] = raw_answer.get('tolerance')
+      else:
+        answer_dict = {"key": f"answer_{idx + 1}", "value": str(raw_answer)}
+      answers.append(answer_dict)
+
+  response = {
+    "problem_id": problem_id,
+    "problem_number": problem.problem_number,
+    "question_type": question_type,
+    "seed": seed,
+    "version": version,
+    "max_points": problem.max_points if problem.max_points is not None else result.get('points'),
+    "answers": answers
+  }
+
+  if config:
+    response['config'] = config
+  if 'answer_key_html' in result:
+    response['answer_key_html'] = result['answer_key_html']
+  if 'explanation_html' in result:
+    response['explanation_html'] = result['explanation_html']
+  if 'explanation_markdown' in result:
+    response['explanation_markdown'] = result['explanation_markdown']
+
+  return response
+
+
+async def _regenerate_answer_payload(problem) -> dict:
+  if not problem.qr_encrypted_data:
+    raise ValueError("QR code data not available for this problem")
+
+  session_metadata = SessionRepository().get_metadata(problem.session_id) or {}
+  quiz_yaml_text = session_metadata.get("quiz_yaml_text")
+  if not isinstance(quiz_yaml_text, str) or not quiz_yaml_text.strip():
+    quiz_yaml_text = None
+
+  cache_key = _cache_key_for_regeneration(problem, quiz_yaml_text)
+  cached = _get_cached_regeneration(problem.id, cache_key)
+  if cached:
+    return cached
+
+  result = await asyncio.to_thread(
+    regenerate_from_encrypted_compat,
+    encrypted_data=problem.qr_encrypted_data,
+    points=problem.max_points or 0.0,
+    yaml_text=quiz_yaml_text
+  )
+  response = _build_regeneration_response(problem.id, problem, result)
+  _set_cached_regeneration(problem.id, cache_key, response)
+  return response
+
+
+async def _prefetch_session_regeneration(session_id: int) -> None:
+  problem_repo = ProblemRepository()
+  problems = [
+    problem for problem in problem_repo.get_by_session_batch(session_id)
+    if problem.qr_encrypted_data
+  ]
+
+  if not problems:
+    log.info("Regeneration prefetch skipped for session %s: no QR problems", session_id)
+    return
+
+  max_workers = min(4, len(problems), os.cpu_count() or 1)
+  semaphore = asyncio.Semaphore(max(1, max_workers))
+  warmed_count = 0
+  failed_count = 0
+
+  async def warm_problem(problem) -> None:
+    nonlocal warmed_count, failed_count
+    async with semaphore:
+      try:
+        await _regenerate_answer_payload(problem)
+        warmed_count += 1
+      except Exception as exc:
+        failed_count += 1
+        log.debug(
+          "Regeneration prefetch failed for problem %s in session %s: %s",
+          problem.id,
+          session_id,
+          exc
+        )
+
+  await asyncio.gather(*(warm_problem(problem) for problem in problems))
+  log.info(
+    "Regeneration prefetch complete for session %s: warmed=%s failed=%s",
+    session_id,
+    warmed_count,
+    failed_count
+  )
 
 
 def extract_problem_image(pdf_data: str,
@@ -553,6 +752,56 @@ async def get_graded_problems(
   }
 
 
+@router.post("/session/{session_id}/prefetch-regeneration")
+async def prefetch_session_regeneration(
+  session_id: int,
+  current_user: dict = Depends(require_session_access())
+):
+  """
+    Start background regeneration prefetch for all QR-backed problems in a session.
+
+    This warms server-side cache so Show Answer/Explanation opens faster later.
+  """
+  problem_repo = ProblemRepository()
+  total_qr_problems = sum(
+    1 for problem in problem_repo.get_by_session_batch(session_id)
+    if problem.qr_encrypted_data
+  )
+
+  if total_qr_problems == 0:
+    return {
+      "status": "no_qr_data",
+      "session_id": session_id,
+      "total_qr_problems": 0
+    }
+
+  with _session_prefetch_tasks_lock:
+    existing_task = _session_prefetch_tasks.get(session_id)
+    if existing_task and not existing_task.done():
+      return {
+        "status": "already_running",
+        "session_id": session_id,
+        "total_qr_problems": total_qr_problems
+      }
+
+    task = asyncio.create_task(_prefetch_session_regeneration(session_id))
+    _session_prefetch_tasks[session_id] = task
+
+  def _cleanup_prefetch_task(done_task: asyncio.Task) -> None:
+    with _session_prefetch_tasks_lock:
+      current = _session_prefetch_tasks.get(session_id)
+      if current is done_task:
+        _session_prefetch_tasks.pop(session_id, None)
+
+  task.add_done_callback(_cleanup_prefetch_task)
+
+  return {
+    "status": "started",
+    "session_id": session_id,
+    "total_qr_problems": total_qr_problems
+  }
+
+
 @router.get("/{problem_id}/regenerate-answer")
 async def regenerate_answer(
   problem_id: int,
@@ -589,113 +838,7 @@ async def regenerate_answer(
                         detail="QR code data not available for this problem")
 
   try:
-    session_metadata = SessionRepository().get_metadata(problem.session_id) or {}
-    quiz_yaml_text = session_metadata.get("quiz_yaml_text")
-    if not isinstance(quiz_yaml_text, str) or not quiz_yaml_text.strip():
-      quiz_yaml_text = None
-
-    # Regenerate the answer using encrypted QR data
-    result = regenerate_from_encrypted_compat(
-      encrypted_data=problem.qr_encrypted_data,
-      points=problem.max_points or 0.0,
-      yaml_text=quiz_yaml_text)
-
-    # Extract metadata from result (returned by regenerate)
-    question_type = result.get('question_type')
-    seed = result.get('seed')
-    version = result.get('version')
-    config = result.get('config') or result.get('kwargs')
-
-    # Format answers for display.
-    # QuizGenerator may return answer_objects as dict, list, or custom objects.
-    answers = []
-    answer_objects = result.get('answer_objects')
-
-    iterable_answers = []
-    if isinstance(answer_objects, dict):
-      iterable_answers = list(answer_objects.items())
-    elif isinstance(answer_objects, list):
-      iterable_answers = [(f"answer_{idx + 1}", obj)
-                          for idx, obj in enumerate(answer_objects)]
-    elif answer_objects is not None:
-      iterable_answers = [("answer", answer_objects)]
-
-    for key, answer_obj in iterable_answers:
-      if isinstance(answer_obj, dict):
-        value = answer_obj.get('value')
-        if value is None:
-          value = answer_obj.get('answer_text')
-        if value is None:
-          value = answer_obj
-        tolerance = answer_obj.get('tolerance')
-        html = answer_obj.get('html')
-      else:
-        value = getattr(answer_obj, 'value', answer_obj)
-        tolerance = getattr(answer_obj, 'tolerance', None)
-        html = getattr(answer_obj, 'html', None)
-
-      answer_dict = {"key": str(key), "value": str(value)}
-      if tolerance is not None:
-        answer_dict['tolerance'] = tolerance
-      if html is not None:
-        answer_dict['html'] = str(html)
-
-      answers.append(answer_dict)
-
-    # Fallback to canvas-formatted answers if answer_objects was absent/empty.
-    if not answers:
-      answers_payload = result.get('answers')
-      if isinstance(answers_payload, dict):
-        raw_answers = answers_payload.get('data', [])
-      elif isinstance(answers_payload, list):
-        raw_answers = answers_payload
-      else:
-        raw_answers = []
-
-      for idx, raw_answer in enumerate(raw_answers):
-        if isinstance(raw_answer, dict):
-          key = (raw_answer.get('blank_id') or raw_answer.get('id') or
-                 raw_answer.get('name') or f"answer_{idx + 1}")
-          value = raw_answer.get('answer_text')
-          if value is None:
-            value = raw_answer.get('value')
-          if value is None:
-            value = raw_answer
-          answer_dict = {"key": str(key), "value": str(value)}
-          if raw_answer.get('tolerance') is not None:
-            answer_dict['tolerance'] = raw_answer.get('tolerance')
-        else:
-          answer_dict = {"key": f"answer_{idx + 1}", "value": str(raw_answer)}
-        answers.append(answer_dict)
-
-    # Prepare response
-    response = {
-      "problem_id": problem_id,
-      "problem_number": problem.problem_number,
-      "question_type": question_type,
-      "seed": seed,
-      "version": version,
-      "max_points": problem.max_points if problem.max_points is not None else result.get('points'),
-      "answers": answers
-    }
-
-    # Include config if available
-    if config:
-      response['config'] = config
-
-    # Include HTML answer key if available
-    if 'answer_key_html' in result:
-      response['answer_key_html'] = result['answer_key_html']
-
-    # Include explanation HTML if available
-    if 'explanation_html' in result:
-      response['explanation_html'] = result['explanation_html']
-
-    # Include explanation markdown if available
-    if 'explanation_markdown' in result:
-      response['explanation_markdown'] = result['explanation_markdown']
-
-    return response
+    return await _regenerate_answer_payload(problem)
 
   except ImportError:
     raise HTTPException(
