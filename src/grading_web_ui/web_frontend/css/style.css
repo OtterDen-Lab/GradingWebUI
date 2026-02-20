@@ -345,6 +345,17 @@ header h1 {
     z-index: 2;
 }
 
+.current-problem-window-triaged {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: linear-gradient(90deg, #22c55e, #16a34a);
+    opacity: 0.82;
+    transition: width 0.35s ease, left 0.35s ease;
+    z-index: 3;
+}
+
 .current-problem-window-graded {
     position: absolute;
     top: 0;
@@ -353,7 +364,7 @@ header h1 {
     background: linear-gradient(90deg, #1d4ed8, #2563eb);
     opacity: 0.78;
     transition: width 0.35s ease;
-    z-index: 3;
+    z-index: 4;
 }
 
 .overall-progress-legend {
@@ -384,6 +395,10 @@ header h1 {
 
 .legend-chip-yellow {
     background: #f59e0b;
+}
+
+.legend-chip-green {
+    background: #16a34a;
 }
 
 .overall-progress-text {

@@ -15,6 +15,7 @@ import fitz
 from ..services.qr_scanner import QRScanner
 from ..services.exam_processor import ExamProcessor
 from ..services.quiz_encryption import set_runtime_encryption_key
+from ..services.feedback_text import merge_general_feedback
 
 from ..models import (
   SessionCreate,
@@ -870,6 +871,10 @@ async def finalize_subjective_scores(
     )
 
   counts = problem_repo.get_counts_for_problem_number(session_id, request.problem_number)
+  default_feedback_row = metadata_repo.get_default_feedback(
+    session_id, request.problem_number
+  )
+  default_feedback = default_feedback_row[0] if default_feedback_row else None
   triaged_count = triage_repo.count_ungraded_for_problem_number(
     session_id, request.problem_number
   )
@@ -918,16 +923,20 @@ async def finalize_subjective_scores(
       if not problem_ids:
         continue
       bucket_score = provided_scores[bucket_id]
+      merged_feedback = merge_general_feedback(
+        default_feedback,
+        bucket_score.feedback
+      )
       updated_rows = repos.problems.bulk_grade(
         problem_ids,
         bucket_score.score,
-        bucket_score.feedback
+        merged_feedback
       )
       total_graded_now += updated_rows
       graded_updates.append({
         "bucket_id": bucket_id,
         "score": bucket_score.score,
-        "feedback": bucket_score.feedback,
+        "feedback": merged_feedback,
         "count": updated_rows
       })
 

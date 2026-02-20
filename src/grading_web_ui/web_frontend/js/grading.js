@@ -20,6 +20,7 @@ const PREFETCH_QUEUE_TARGET = 2;
 const prefetchedNextProblems = [];
 let prefetchQueueInFlight = false;
 let prefetchQueueProblemNumber = null;
+let lastSessionStats = null;
 
 const DEFAULT_SUBJECTIVE_BUCKETS = [
     { id: 'perfect', label: 'Perfect', color: '#16a34a' },
@@ -260,6 +261,7 @@ function startSessionRegenerationPrefetch() {
 function initializeGrading() {
     if (!currentSession) return;
 
+    lastSessionStats = null;
     startSessionRegenerationPrefetch();
     loadProblemMaxPoints();
     loadProblemNumbers();
@@ -489,6 +491,7 @@ function applyLocalSubjectiveStateUpdate({
     renderSubjectiveBucketFilter();
     renderSubjectiveBucketHistogram();
     updateSubjectiveFinalizeButton();
+    refreshOverallProgressFromCachedStats();
 }
 
 function renderSubjectiveBucketButtons() {
@@ -917,6 +920,120 @@ async function loadProblemNumbers() {
     }
 }
 
+function renderOverallProgressFromStats(stats) {
+    if (!stats) return;
+
+    updateProblemSelectUngradedCounts(stats.problem_stats);
+    const clampPercent = (value) => Math.max(0, Math.min(100, value));
+
+    const percentage = clampPercent(stats.progress_percentage || 0);
+    document.getElementById('overall-progress-label').textContent =
+        `Overall: ${stats.problems_graded} / ${stats.total_problems} (${percentage.toFixed(1)}%)`;
+
+    const sortedProblemStats = [...stats.problem_stats]
+        .sort((a, b) => a.problem_number - b.problem_number);
+    const segmentContainer = document.getElementById('overall-problem-segments');
+    const currentProblemWindow = document.getElementById('current-problem-window');
+    const currentProblemWindowGraded = document.getElementById('current-problem-window-graded');
+    const currentProblemWindowTriaged = document.getElementById('current-problem-window-triaged');
+    const currentProblemWindowUngraded = document.getElementById('current-problem-window-ungraded');
+    const currentProblemWindowBlank = document.getElementById('current-problem-window-blank');
+    segmentContainer.innerHTML = '';
+
+    if (stats.total_problems > 0) {
+        let cumulativeTotal = 0;
+        sortedProblemStats.forEach((ps) => {
+            if (!ps || ps.num_total <= 0) {
+                return;
+            }
+
+            const segmentLeftPercent = clampPercent((cumulativeTotal / stats.total_problems) * 100);
+            const segmentWidthPercent = clampPercent((ps.num_total / stats.total_problems) * 100);
+            const gradedCount = Math.min(Math.max(ps.num_graded || 0, 0), ps.num_total);
+            const gradedPercentWithin = clampPercent((gradedCount / ps.num_total) * 100);
+
+            const segment = document.createElement('div');
+            segment.className = 'problem-progress-segment';
+            segment.style.left = `${segmentLeftPercent}%`;
+            segment.style.width = `${segmentWidthPercent}%`;
+
+            const segmentFill = document.createElement('div');
+            segmentFill.className = 'problem-progress-segment-fill';
+            segmentFill.style.width = `${gradedPercentWithin}%`;
+
+            segment.appendChild(segmentFill);
+            segmentContainer.appendChild(segment);
+
+            cumulativeTotal += ps.num_total;
+        });
+    }
+
+    const clearCurrentProblemWindow = () => {
+        currentProblemWindow.style.width = '0%';
+        currentProblemWindow.style.left = '0%';
+        currentProblemWindowGraded.style.width = '0%';
+        if (currentProblemWindowTriaged) {
+            currentProblemWindowTriaged.style.left = '0%';
+            currentProblemWindowTriaged.style.width = '0%';
+        }
+        currentProblemWindowUngraded.style.width = '0%';
+        currentProblemWindowBlank.style.width = '0%';
+    };
+
+    const currentProblemStats = sortedProblemStats.find(
+        (p) => p.problem_number === Number(currentProblemNumber)
+    );
+    if (!currentProblemStats || stats.total_problems <= 0 || currentProblemStats.num_total <= 0) {
+        clearCurrentProblemWindow();
+        return;
+    }
+
+    // Current-problem window position uses total work distribution, not graded work.
+    const totalBeforeCurrent = sortedProblemStats
+        .filter((ps) => ps.problem_number < Number(currentProblemNumber))
+        .reduce((sum, ps) => sum + ps.num_total, 0);
+    const currentProblemStartPercent = clampPercent((totalBeforeCurrent / stats.total_problems) * 100);
+    const currentProblemWidthPercent = clampPercent((currentProblemStats.num_total / stats.total_problems) * 100);
+
+    const gradedCount = Math.min(
+        Math.max(currentProblemStats.num_graded || 0, 0),
+        currentProblemStats.num_total
+    );
+    const settings = subjectiveSettingsByProblem.get(Number(currentProblemNumber));
+    const isSubjective = settings?.grading_mode === 'subjective';
+    const triagedCount = isSubjective
+        ? Math.min(
+            toNonNegativeNumber(settings?.triaged_count, 0),
+            Math.max(currentProblemStats.num_total - gradedCount, 0)
+        )
+        : 0;
+    const untriagedCount = Math.max(currentProblemStats.num_total - gradedCount - triagedCount, 0);
+    const blankUngradedCount = Math.min(
+        Math.max(currentProblemStats.num_blank_ungraded || 0, 0),
+        untriagedCount
+    );
+
+    const gradedWithinCurrentPercent = clampPercent((gradedCount / currentProblemStats.num_total) * 100);
+    const triagedWithinCurrentPercent = clampPercent((triagedCount / currentProblemStats.num_total) * 100);
+    const ungradedWithinCurrentPercent = clampPercent((untriagedCount / currentProblemStats.num_total) * 100);
+    const blankWithinCurrentPercent = clampPercent((blankUngradedCount / currentProblemStats.num_total) * 100);
+
+    currentProblemWindow.style.left = `${currentProblemStartPercent}%`;
+    currentProblemWindow.style.width = `${currentProblemWidthPercent}%`;
+    currentProblemWindowGraded.style.width = `${gradedWithinCurrentPercent}%`;
+    if (currentProblemWindowTriaged) {
+        currentProblemWindowTriaged.style.left = `${gradedWithinCurrentPercent}%`;
+        currentProblemWindowTriaged.style.width = `${triagedWithinCurrentPercent}%`;
+    }
+    currentProblemWindowUngraded.style.width = `${ungradedWithinCurrentPercent}%`;
+    currentProblemWindowBlank.style.width = `${blankWithinCurrentPercent}%`;
+}
+
+function refreshOverallProgressFromCachedStats() {
+    if (!lastSessionStats) return;
+    renderOverallProgressFromStats(lastSessionStats);
+}
+
 // Update overall progress display
 async function updateOverallProgress() {
     try {
@@ -928,92 +1045,8 @@ async function updateOverallProgress() {
         }
 
         const stats = await response.json();
-        updateProblemSelectUngradedCounts(stats.problem_stats);
-        const clampPercent = (value) => Math.max(0, Math.min(100, value));
-
-        const percentage = clampPercent(stats.progress_percentage || 0);
-        document.getElementById('overall-progress-label').textContent =
-            `Overall: ${stats.problems_graded} / ${stats.total_problems} (${percentage.toFixed(1)}%)`;
-
-        const sortedProblemStats = [...stats.problem_stats]
-            .sort((a, b) => a.problem_number - b.problem_number);
-        const segmentContainer = document.getElementById('overall-problem-segments');
-        const currentProblemWindow = document.getElementById('current-problem-window');
-        const currentProblemWindowGraded = document.getElementById('current-problem-window-graded');
-        const currentProblemWindowUngraded = document.getElementById('current-problem-window-ungraded');
-        const currentProblemWindowBlank = document.getElementById('current-problem-window-blank');
-        segmentContainer.innerHTML = '';
-
-        if (stats.total_problems > 0) {
-            let cumulativeTotal = 0;
-            sortedProblemStats.forEach((ps) => {
-                if (!ps || ps.num_total <= 0) {
-                    return;
-                }
-
-                const segmentLeftPercent = clampPercent((cumulativeTotal / stats.total_problems) * 100);
-                const segmentWidthPercent = clampPercent((ps.num_total / stats.total_problems) * 100);
-                const gradedCount = Math.min(Math.max(ps.num_graded || 0, 0), ps.num_total);
-                const gradedPercentWithin = clampPercent((gradedCount / ps.num_total) * 100);
-
-                const segment = document.createElement('div');
-                segment.className = 'problem-progress-segment';
-                segment.style.left = `${segmentLeftPercent}%`;
-                segment.style.width = `${segmentWidthPercent}%`;
-
-                const segmentFill = document.createElement('div');
-                segmentFill.className = 'problem-progress-segment-fill';
-                segmentFill.style.width = `${gradedPercentWithin}%`;
-
-                segment.appendChild(segmentFill);
-                segmentContainer.appendChild(segment);
-
-                cumulativeTotal += ps.num_total;
-            });
-        }
-
-        const clearCurrentProblemWindow = () => {
-            currentProblemWindow.style.width = '0%';
-            currentProblemWindow.style.left = '0%';
-            currentProblemWindowGraded.style.width = '0%';
-            currentProblemWindowUngraded.style.width = '0%';
-            currentProblemWindowBlank.style.width = '0%';
-        };
-
-        const currentProblemStats = sortedProblemStats.find(
-            (p) => p.problem_number === Number(currentProblemNumber)
-        );
-        if (!currentProblemStats || stats.total_problems <= 0 || currentProblemStats.num_total <= 0) {
-            clearCurrentProblemWindow();
-            return;
-        }
-
-        // Current-problem window position uses total work distribution, not graded work.
-        const totalBeforeCurrent = sortedProblemStats
-            .filter((ps) => ps.problem_number < Number(currentProblemNumber))
-            .reduce((sum, ps) => sum + ps.num_total, 0);
-        const currentProblemStartPercent = clampPercent((totalBeforeCurrent / stats.total_problems) * 100);
-        const currentProblemWidthPercent = clampPercent((currentProblemStats.num_total / stats.total_problems) * 100);
-
-        const gradedCount = Math.min(
-            Math.max(currentProblemStats.num_graded || 0, 0),
-            currentProblemStats.num_total
-        );
-        const ungradedCount = Math.max(currentProblemStats.num_total - gradedCount, 0);
-        const blankUngradedCount = Math.min(
-            Math.max(currentProblemStats.num_blank_ungraded || 0, 0),
-            ungradedCount
-        );
-
-        const gradedWithinCurrentPercent = clampPercent((gradedCount / currentProblemStats.num_total) * 100);
-        const ungradedWithinCurrentPercent = clampPercent((ungradedCount / currentProblemStats.num_total) * 100);
-        const blankWithinCurrentPercent = clampPercent((blankUngradedCount / currentProblemStats.num_total) * 100);
-
-        currentProblemWindow.style.left = `${currentProblemStartPercent}%`;
-        currentProblemWindow.style.width = `${currentProblemWidthPercent}%`;
-        currentProblemWindowGraded.style.width = `${gradedWithinCurrentPercent}%`;
-        currentProblemWindowUngraded.style.width = `${ungradedWithinCurrentPercent}%`;
-        currentProblemWindowBlank.style.width = `${blankWithinCurrentPercent}%`;
+        lastSessionStats = stats;
+        renderOverallProgressFromStats(stats);
     } catch (error) {
         console.error('Failed to update overall progress:', error);
     }
@@ -1310,6 +1343,7 @@ function displayCurrentProblem() {
 
     document.getElementById('grading-progress').textContent = progressText;
     applyGradingModeUI();
+    refreshOverallProgressFromCachedStats();
 
     // Update max points from cache
     updateMaxPointsDropdown();

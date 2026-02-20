@@ -20,6 +20,7 @@ from ..repositories import (ProblemRepository, SubmissionRepository,
                             SessionRepository, ProblemMetadataRepository,
                             SubjectiveTriageRepository)
 from ..services.problem_service import ProblemService
+from ..services.feedback_text import merge_general_feedback
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from ..auth import require_session_access, get_current_user
 
@@ -908,6 +909,7 @@ async def grade_problem(
     Feedback can still be provided normally for context.
     """
   problem_repo = ProblemRepository()
+  metadata_repo = ProblemMetadataRepository()
 
   # Get problem to check session access
   problem = problem_repo.get_by_id(problem_id)
@@ -923,10 +925,15 @@ async def grade_problem(
 
   # Check if score indicates manual blank marking (dash)
   is_manual_blank = isinstance(grade.score, str) and grade.score.strip() == "-"
+  default_feedback_row = metadata_repo.get_default_feedback(
+    problem.session_id, problem.problem_number
+  )
+  default_feedback = default_feedback_row[0] if default_feedback_row else None
+  merged_feedback = merge_general_feedback(default_feedback, grade.feedback)
 
   if is_manual_blank:
     # Mark as blank with score 0
-    problem_repo.mark_as_blank(problem_id, grade.feedback)
+    problem_repo.mark_as_blank(problem_id, merged_feedback)
   else:
     # Normal grading - convert score to float and save
     try:
@@ -937,7 +944,7 @@ async def grade_problem(
         detail=f"Invalid score value: {grade.score}. Must be a number or '-' for blank."
       )
 
-    problem_repo.update_grade(problem_id, score_value, grade.feedback)
+    problem_repo.update_grade(problem_id, score_value, merged_feedback)
 
   # If this response had a subjective triage assignment, clear it now that
   # the response is explicitly graded.

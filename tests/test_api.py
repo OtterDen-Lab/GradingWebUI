@@ -887,6 +887,114 @@ def test_subjective_finalize_applies_bucket_scores(client):
     assert cursor.fetchone()["count"] == 3
 
 
+def test_grade_problem_includes_general_feedback_section(client):
+  """Manual grading should persist default feedback as a general section."""
+  session_id = create_test_session(client, "General Feedback Grade")
+  _, problem_id = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=12, max_points=8.0
+  )
+
+  default_feedback_response = client.put(
+    f"/api/sessions/{session_id}/default-feedback",
+    params={
+      "problem_number": 12,
+      "default_feedback": "Show all intermediate steps and include units.",
+      "threshold": 100.0,
+    }
+  )
+  assert default_feedback_response.status_code == 200
+
+  grade_response = client.post(
+    f"/api/problems/{problem_id}/grade",
+    json={
+      "score": 6.0,
+      "feedback": "Sign error in the second line.",
+    }
+  )
+  assert grade_response.status_code == 200
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute("SELECT feedback FROM problems WHERE id = ?", (problem_id,))
+    row = cursor.fetchone()
+    assert row is not None
+    assert row["feedback"] == (
+      "General feedback:\n"
+      "Show all intermediate steps and include units.\n\n"
+      "Response-specific feedback:\n"
+      "Sign error in the second line."
+    )
+
+
+def test_subjective_finalize_includes_general_feedback_section(client):
+  """Subjective finalize should append default feedback to bucket feedback."""
+  session_id = create_test_session(client, "General Feedback Subjective")
+  _, problem_id_a = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=13, max_points=8.0
+  )
+  _, problem_id_b = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=13, max_points=8.0
+  )
+
+  mode_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 13,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "good", "label": "Good"},
+      ]
+    }
+  )
+  assert mode_response.status_code == 200
+
+  default_feedback_response = client.put(
+    f"/api/sessions/{session_id}/default-feedback",
+    params={
+      "problem_number": 13,
+      "default_feedback": "State assumptions clearly.",
+      "threshold": 100.0,
+    }
+  )
+  assert default_feedback_response.status_code == 200
+
+  for problem_id in (problem_id_a, problem_id_b):
+    triage_response = client.post(
+      f"/api/problems/{problem_id}/subjective-triage",
+      json={"bucket_id": "good"}
+    )
+    assert triage_response.status_code == 200
+
+  finalize_response = client.post(
+    f"/api/sessions/{session_id}/subjective-finalize",
+    json={
+      "problem_number": 13,
+      "bucket_scores": [
+        {"bucket_id": "good", "score": 6.0, "feedback": "Reasoning is mostly correct."},
+      ]
+    }
+  )
+  assert finalize_response.status_code == 200
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute("""
+      SELECT id, feedback
+      FROM problems
+      WHERE session_id = ? AND problem_number = ?
+      ORDER BY id
+    """, (session_id, 13))
+    rows = cursor.fetchall()
+    assert len(rows) == 2
+    for row in rows:
+      assert row["feedback"] == (
+        "General feedback:\n"
+        "State assumptions clearly.\n\n"
+        "Response-specific feedback:\n"
+        "Reasoning is mostly correct."
+      )
+
+
 def test_subjective_reopen_restores_triaged_state(client):
   """Reopen should clear finalized grades and return to triaged/ungraded."""
   session_id = create_test_session(client, "Subjective Reopen")
