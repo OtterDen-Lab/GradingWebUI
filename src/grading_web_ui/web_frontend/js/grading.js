@@ -16,6 +16,10 @@ let currentSubjectiveSettings = null;
 let selectedSubjectiveBucketId = null;
 let activeSubjectiveBucketFilter = '';
 let subjectiveAssignInFlight = false;
+const PREFETCH_QUEUE_TARGET = 2;
+const prefetchedNextProblems = [];
+let prefetchQueueInFlight = false;
+let prefetchQueueProblemNumber = null;
 
 const DEFAULT_SUBJECTIVE_BUCKETS = [
     { id: 'perfect', label: 'Perfect', color: '#16a34a' },
@@ -24,6 +28,127 @@ const DEFAULT_SUBJECTIVE_BUCKETS = [
     { id: 'passable', label: 'Passable', color: '#f59e0b' },
     { id: 'poor_blank', label: 'Poor/Blank', color: '#ef4444' }
 ];
+
+function invalidateNextProblemPrefetch() {
+    prefetchedNextProblems.length = 0;
+    prefetchQueueInFlight = false;
+    prefetchQueueProblemNumber = null;
+}
+
+function canPrefetchNextProblems() {
+    if (!currentSession || !currentProblemNumber || activeSubjectiveBucketFilter) {
+        return false;
+    }
+    const problemNumber = Number(currentProblemNumber);
+    if (prefetchQueueProblemNumber === null) {
+        prefetchQueueProblemNumber = problemNumber;
+    } else if (prefetchQueueProblemNumber !== problemNumber) {
+        prefetchedNextProblems.length = 0;
+        prefetchQueueProblemNumber = problemNumber;
+    }
+    return true;
+}
+
+function getPrefetchExcludeProblemIds() {
+    const ids = new Set();
+    if (currentProblem?.id) {
+        ids.add(Number(currentProblem.id));
+    }
+    prefetchedNextProblems.forEach((problem) => {
+        if (problem?.id) {
+            ids.add(Number(problem.id));
+        }
+    });
+    return Array.from(ids).filter((id) => Number.isInteger(id) && id > 0);
+}
+
+async function prefetchNextProblemCandidate() {
+    if (!canPrefetchNextProblems()) {
+        return false;
+    }
+
+    const requestedSessionId = Number(currentSession.id);
+    const requestedProblemNumber = Number(currentProblemNumber);
+    const requestedFilter = activeSubjectiveBucketFilter;
+    const excludeIds = getPrefetchExcludeProblemIds();
+    const params = new URLSearchParams();
+    if (excludeIds.length > 0) {
+        params.set('exclude_problem_ids', excludeIds.join(','));
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const response = await fetch(
+        `${API_BASE}/problems/${requestedSessionId}/${requestedProblemNumber}/next${query}`
+    );
+
+    if (response.status === 404) {
+        return false;
+    }
+    if (!response.ok) {
+        const message = await response.text();
+        console.debug('Prefetch next problem failed:', response.status, message);
+        return false;
+    }
+
+    const candidate = await response.json();
+    if (
+        !candidate ||
+        Number(currentSession?.id) !== requestedSessionId ||
+        Number(currentProblemNumber) !== requestedProblemNumber ||
+        activeSubjectiveBucketFilter !== requestedFilter
+    ) {
+        return false;
+    }
+
+    if (
+        (currentProblem && candidate.id === currentProblem.id) ||
+        prefetchedNextProblems.some((problem) => problem.id === candidate.id)
+    ) {
+        return false;
+    }
+
+    prefetchedNextProblems.push(candidate);
+    return true;
+}
+
+async function fillNextProblemPrefetchQueue() {
+    if (prefetchQueueInFlight || !canPrefetchNextProblems()) {
+        return;
+    }
+    prefetchQueueInFlight = true;
+    try {
+        while (prefetchedNextProblems.length < PREFETCH_QUEUE_TARGET) {
+            const added = await prefetchNextProblemCandidate();
+            if (!added) {
+                break;
+            }
+        }
+    } finally {
+        prefetchQueueInFlight = false;
+    }
+}
+
+function triggerNextProblemPrefetch() {
+    void fillNextProblemPrefetchQueue();
+}
+
+function usePrefetchedNextProblemIfAvailable() {
+    if (!canPrefetchNextProblems()) {
+        return false;
+    }
+
+    while (prefetchedNextProblems.length > 0) {
+        const candidate = prefetchedNextProblems.shift();
+        if (!candidate) continue;
+        if (currentProblem && candidate.id === currentProblem.id) continue;
+
+        currentProblem = candidate;
+        addToHistory(currentProblem);
+        displayCurrentProblem();
+        triggerNextProblemPrefetch();
+        return true;
+    }
+    return false;
+}
 
 function cacheRegeneratedAnswer(problemId, data) {
     regeneratedAnswerCache.set(problemId, data);
@@ -707,12 +832,14 @@ async function loadProblemNumbers() {
 
         currentProblemNumber = availableProblemNumbers[0] || 1;
         activeSubjectiveBucketFilter = '';
+        invalidateNextProblemPrefetch();
         select.value = currentProblemNumber;
         await loadSubjectiveSettings(currentProblemNumber, true);
         applyGradingModeUI();
         select.onchange = async () => {
             currentProblemNumber = parseInt(select.value);
             activeSubjectiveBucketFilter = '';
+            invalidateNextProblemPrefetch();
             await loadSubjectiveSettings(currentProblemNumber, true);
             applyGradingModeUI();
             updateMaxPointsDropdown();
@@ -921,6 +1048,7 @@ function setupGradingControls() {
             await saveSubjectiveSettings();
             await loadSubjectiveSettings(Number(currentProblemNumber), true);
             applyGradingModeUI();
+            invalidateNextProblemPrefetch();
             await loadProblemOrMostRecent();
         } catch (error) {
             console.error('Failed to save grading mode:', error);
@@ -957,6 +1085,7 @@ function setupGradingControls() {
     if (subjectiveFilterSelect) {
         subjectiveFilterSelect.addEventListener('change', async (e) => {
             activeSubjectiveBucketFilter = e.target.value || '';
+            invalidateNextProblemPrefetch();
             if (!activeSubjectiveBucketFilter) {
                 await loadProblemOrMostRecent();
                 return;
@@ -1251,6 +1380,7 @@ async function loadProblemOrMostRecent() {
             await loadSubjectiveSettings(currentProblemNumber);
             addToHistory(currentProblem);
             displayCurrentProblem();
+            triggerNextProblemPrefetch();
         } else if (nextResponse.status === 404) {
             // No ungraded problems, load most recently graded
             const prevResponse = await fetch(
@@ -1262,6 +1392,7 @@ async function loadProblemOrMostRecent() {
                 await loadSubjectiveSettings(currentProblemNumber);
                 addToHistory(currentProblem);
                 displayCurrentProblem();
+                triggerNextProblemPrefetch();
             } else {
                 alert('No problems found for this problem number');
             }
@@ -1283,6 +1414,7 @@ function shouldUseSubjectiveBucketFilter() {
 
 async function loadProblemFromActiveBucketFilter(direction = 'next', reset = false) {
     if (!currentSession || !currentProblemNumber || !activeSubjectiveBucketFilter) return false;
+    invalidateNextProblemPrefetch();
 
     const endpoint = direction === 'previous' ? 'previous' : 'next';
     const params = new URLSearchParams();
@@ -1423,6 +1555,10 @@ async function loadNextProblem() {
             return;
         }
 
+        if (usePrefetchedNextProblemIfAvailable()) {
+            return;
+        }
+
         const response = await fetch(
             `${API_BASE}/problems/${currentSession.id}/${currentProblemNumber}/next`
         );
@@ -1443,6 +1579,7 @@ async function loadNextProblem() {
                     // Show notification if we just graded something
                     lastGradedProblemNumber = null;
                     showNotification(`All submissions for Problem ${currentProblemNumber} are graded! Moving to Problem ${nextUngradedProblem}...`, async () => {
+                        invalidateNextProblemPrefetch();
                         currentProblemNumber = nextUngradedProblem;
                         document.getElementById('problem-select').value = currentProblemNumber;
                         await loadSubjectiveSettings(currentProblemNumber, true);
@@ -1452,6 +1589,7 @@ async function loadNextProblem() {
                     });
                 } else {
                     // Silently move to next ungraded problem
+                    invalidateNextProblemPrefetch();
                     currentProblemNumber = nextUngradedProblem;
                     document.getElementById('problem-select').value = currentProblemNumber;
                     await loadSubjectiveSettings(currentProblemNumber, true);
@@ -1497,6 +1635,7 @@ async function loadNextProblem() {
         // Add to history and display
         addToHistory(currentProblem);
         displayCurrentProblem();
+        triggerNextProblemPrefetch();
 
     } catch (error) {
         console.error('Failed to load problem:', error);
@@ -1720,6 +1859,7 @@ async function openRandomBucketSample(bucketId) {
         closeSubjectiveFinalizeDialog();
         currentProblem = payload;
         activeSubjectiveBucketFilter = bucketId;
+        invalidateNextProblemPrefetch();
         await loadSubjectiveSettings(currentProblemNumber);
         const filter = document.getElementById('subjective-view-filter');
         if (filter) {
@@ -1766,6 +1906,7 @@ async function submitSubjectiveReopen() {
 
         await loadSubjectiveSettings(Number(currentProblemNumber), true);
         await updateOverallProgress();
+        invalidateNextProblemPrefetch();
         await loadProblemOrMostRecent();
         showNotification(`Reopened ${payload.reopened_count || 0} responses for Problem ${currentProblemNumber}.`);
     } catch (error) {
@@ -1921,6 +2062,7 @@ async function submitSubjectiveFinalize() {
         }
 
         closeSubjectiveFinalizeDialog();
+        invalidateNextProblemPrefetch();
         await loadSubjectiveSettings(Number(currentProblemNumber), true);
         await updateOverallProgress();
         updateSubjectiveFinalizeButton();

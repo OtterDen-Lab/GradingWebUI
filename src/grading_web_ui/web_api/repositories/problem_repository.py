@@ -282,7 +282,8 @@ class ProblemRepository(BaseRepository[Problem]):
         (session_id, problem_number)
       )
 
-  def get_next_ungraded(self, session_id: int, problem_number: int) -> Optional[Problem]:
+  def get_next_ungraded(self, session_id: int, problem_number: int,
+                        exclude_problem_ids: Optional[List[int]] = None) -> Optional[Problem]:
     """
     Get next ungraded problem for a specific problem number.
 
@@ -296,39 +297,83 @@ class ProblemRepository(BaseRepository[Problem]):
     Returns:
       Next ungraded Problem or None if all graded
     """
+    exclude_ids = []
+    if exclude_problem_ids:
+      exclude_ids = sorted({
+        int(problem_id) for problem_id in exclude_problem_ids
+        if problem_id is not None and int(problem_id) > 0
+      })
+
     with self._get_connection() as conn:
-      return self._execute_and_fetch_one(
-        conn,
-        """
+      if not exclude_ids:
+        return self._execute_and_fetch_one(
+          conn,
+          """
+          SELECT * FROM problems
+          WHERE session_id = ? AND problem_number = ? AND graded = 0
+          ORDER BY is_blank ASC, RANDOM()
+          LIMIT 1
+          """,
+          (session_id, problem_number)
+        )
+
+      cursor = conn.cursor()
+      placeholders = ",".join("?" for _ in exclude_ids)
+      cursor.execute(f"""
         SELECT * FROM problems
         WHERE session_id = ? AND problem_number = ? AND graded = 0
+          AND id NOT IN ({placeholders})
         ORDER BY is_blank ASC, RANDOM()
         LIMIT 1
-        """,
-        (session_id, problem_number)
-      )
+      """, (session_id, problem_number, *exclude_ids))
+      row = cursor.fetchone()
+      return self._row_to_domain(row) if row else None
 
   def get_next_ungraded_untriaged(self, session_id: int,
-                                  problem_number: int) -> Optional[Problem]:
+                                  problem_number: int,
+                                  exclude_problem_ids: Optional[List[int]] = None) -> Optional[Problem]:
     """
     Get next ungraded problem with no subjective triage assignment.
 
     Used for subjective grading flow where responses are first bucketed.
     """
+    exclude_ids = []
+    if exclude_problem_ids:
+      exclude_ids = sorted({
+        int(problem_id) for problem_id in exclude_problem_ids
+        if problem_id is not None and int(problem_id) > 0
+      })
+
     with self._get_connection() as conn:
-      return self._execute_and_fetch_one(
-        conn,
-        """
+      if not exclude_ids:
+        return self._execute_and_fetch_one(
+          conn,
+          """
+          SELECT p.*
+          FROM problems p
+          LEFT JOIN subjective_triage st ON st.problem_id = p.id
+          WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
+            AND st.problem_id IS NULL
+          ORDER BY p.is_blank ASC, RANDOM()
+          LIMIT 1
+          """,
+          (session_id, problem_number)
+        )
+
+      cursor = conn.cursor()
+      placeholders = ",".join("?" for _ in exclude_ids)
+      cursor.execute(f"""
         SELECT p.*
         FROM problems p
         LEFT JOIN subjective_triage st ON st.problem_id = p.id
         WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
           AND st.problem_id IS NULL
+          AND p.id NOT IN ({placeholders})
         ORDER BY p.is_blank ASC, RANDOM()
         LIMIT 1
-        """,
-        (session_id, problem_number)
-      )
+      """, (session_id, problem_number, *exclude_ids))
+      row = cursor.fetchone()
+      return self._row_to_domain(row) if row else None
 
   def get_previous_graded(self, session_id: int, problem_number: int) -> Optional[Problem]:
     """

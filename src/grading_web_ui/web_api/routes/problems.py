@@ -196,6 +196,27 @@ def _parse_manual_qr_payload(payload_text: str) -> dict:
   }
 
 
+def _parse_exclude_problem_ids_param(raw_value: Optional[str]) -> list[int]:
+  if not raw_value:
+    return []
+
+  exclude_ids: list[int] = []
+  for raw_part in raw_value.split(","):
+    value = raw_part.strip()
+    if not value:
+      continue
+    try:
+      parsed = int(value)
+    except (TypeError, ValueError) as exc:
+      raise ValueError(f"Invalid problem id '{value}' in exclude_problem_ids") from exc
+    if parsed <= 0:
+      raise ValueError(f"Problem id must be positive in exclude_problem_ids: {value}")
+    exclude_ids.append(parsed)
+
+  # Preserve order but remove duplicates.
+  return list(dict.fromkeys(exclude_ids))
+
+
 def _get_subjective_settings(session_id: int, problem_number: int) -> tuple[str, list[dict]]:
   metadata_repo = ProblemMetadataRepository()
   grading_mode = metadata_repo.get_grading_mode(session_id, problem_number)
@@ -467,6 +488,7 @@ def get_problem_image_data(problem, submission_repo: SubmissionRepository = None
 async def get_next_problem(
   session_id: int,
   problem_number: int,
+  exclude_problem_ids: Optional[str] = None,
   current_user: dict = Depends(require_session_access())
 ):
   """Get next ungraded problem for a specific problem number (requires session access)"""
@@ -475,12 +497,24 @@ async def get_next_problem(
 
   triage_repo = SubjectiveTriageRepository()
   grading_mode, _ = _get_subjective_settings(session_id, problem_number)
+  try:
+    excluded_ids = _parse_exclude_problem_ids_param(exclude_problem_ids)
+  except ValueError as exc:
+    raise HTTPException(status_code=400, detail=str(exc))
 
   # In subjective mode, "next" means next untriaged response.
   if grading_mode == "subjective":
-    problem = problem_repo.get_next_ungraded_untriaged(session_id, problem_number)
+    problem = problem_repo.get_next_ungraded_untriaged(
+      session_id,
+      problem_number,
+      excluded_ids
+    )
   else:
-    problem = problem_repo.get_next_ungraded(session_id, problem_number)
+    problem = problem_repo.get_next_ungraded(
+      session_id,
+      problem_number,
+      excluded_ids
+    )
   if not problem:
     raise HTTPException(
       status_code=404,

@@ -664,6 +664,53 @@ def test_subjective_settings_and_triage_flow(client, monkeypatch):
   assert len(updated_payload["buckets"]) == 3
 
 
+def test_next_problem_supports_exclude_problem_ids(client, monkeypatch):
+  """Next-problem endpoint should skip IDs listed in exclude_problem_ids."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  monkeypatch.setattr(
+    problems_routes,
+    "get_problem_image_data",
+    lambda problem, submission_repo=None: ""
+  )
+
+  session_id = create_test_session(client, "Exclude IDs")
+  _, problem_id_a = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=7
+  )
+  _, problem_id_b = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=7
+  )
+  _, problem_id_c = seed_submission_with_problem(
+    session_id, document_id=3, problem_number=7
+  )
+
+  first_response = client.get(f"/api/problems/{session_id}/7/next")
+  assert first_response.status_code == 200
+  first_id = first_response.json()["id"]
+
+  second_response = client.get(
+    f"/api/problems/{session_id}/7/next?exclude_problem_ids={first_id}"
+  )
+  assert second_response.status_code == 200
+  second_id = second_response.json()["id"]
+  assert second_id != first_id
+
+  third_response = client.get(
+    f"/api/problems/{session_id}/7/next?exclude_problem_ids={first_id},{second_id}"
+  )
+  assert third_response.status_code == 200
+  third_id = third_response.json()["id"]
+  assert third_id in {problem_id_a, problem_id_b, problem_id_c}
+  assert third_id not in {first_id, second_id}
+
+  invalid_response = client.get(
+    f"/api/problems/{session_id}/7/next?exclude_problem_ids=abc"
+  )
+  assert invalid_response.status_code == 400
+  assert "exclude_problem_ids" in invalid_response.json()["detail"]
+
+
 def test_subjective_finalize_applies_bucket_scores(client):
   """Finalizing subjective buckets should grade all triaged responses."""
   session_id = create_test_session(client, "Subjective Finalize")
