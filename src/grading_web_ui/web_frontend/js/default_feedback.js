@@ -9,20 +9,34 @@ let currentDefaultFeedback = {
     // Default ON at 100% means "apply to all submissions" unless customized.
     applyOnThreshold: true
 };
+const defaultFeedbackCache = new Map(); // key=sessionId:problemNumber -> {text, threshold}
 
 // =============================================================================
 // LOAD AND DISPLAY DEFAULT FEEDBACK
 // =============================================================================
 
-async function loadDefaultFeedback(sessionId, problemNumber) {
+function defaultFeedbackCacheKey(sessionId, problemNumber) {
+    return `${sessionId}:${problemNumber}`;
+}
+
+async function loadDefaultFeedback(sessionId, problemNumber, options = {}) {
+    const force = Boolean(options?.force);
+    const cacheKey = defaultFeedbackCacheKey(sessionId, problemNumber);
+
     try {
-        const response = await fetch(`${API_BASE}/sessions/${sessionId}/default-feedback/${problemNumber}`);
+        let data = null;
+        if (!force && defaultFeedbackCache.has(cacheKey)) {
+            data = defaultFeedbackCache.get(cacheKey);
+        } else {
+            const response = await fetch(`${API_BASE}/sessions/${sessionId}/default-feedback/${problemNumber}`);
 
-        if (!response.ok) {
-            throw new Error('Failed to load default feedback');
+            if (!response.ok) {
+                throw new Error('Failed to load default feedback');
+            }
+
+            data = await response.json();
+            defaultFeedbackCache.set(cacheKey, data);
         }
-
-        const data = await response.json();
 
         currentDefaultFeedback.text = data.default_feedback;
         currentDefaultFeedback.threshold = data.default_feedback_threshold || 100.0;
@@ -169,6 +183,13 @@ async function saveDefaultFeedback() {
         currentDefaultFeedback.applyOnZero = applyOnZero;
         currentDefaultFeedback.applyOnBlank = applyOnBlank;
         currentDefaultFeedback.applyOnThreshold = applyOnThreshold;
+        defaultFeedbackCache.set(
+            defaultFeedbackCacheKey(currentSession.id, currentProblemNumber),
+            {
+                default_feedback: currentDefaultFeedback.text,
+                default_feedback_threshold: currentDefaultFeedback.threshold
+            }
+        );
 
         // Update display
         displayDefaultFeedback();

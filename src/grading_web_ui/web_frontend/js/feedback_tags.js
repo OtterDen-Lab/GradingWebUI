@@ -3,12 +3,35 @@
 
 let feedbackTags = []; // Array of tag objects {id, short_name, comment_text, use_count}
 let selectedTagIds = new Set(); // Set of selected tag IDs
+const feedbackTagsCache = new Map(); // key=sessionId:problemNumber -> tags array
 
 // =============================================================================
 // LOAD AND DISPLAY TAGS
 // =============================================================================
 
-async function loadFeedbackTags(sessionId, problemNumber) {
+function feedbackTagsCacheKey(sessionId, problemNumber) {
+    return `${sessionId}:${problemNumber}`;
+}
+
+function invalidateFeedbackTagsCache(sessionId, problemNumber) {
+    if (!sessionId || !problemNumber) return;
+    feedbackTagsCache.delete(feedbackTagsCacheKey(sessionId, problemNumber));
+}
+
+async function loadFeedbackTags(sessionId, problemNumber, options = {}) {
+    const force = Boolean(options?.force);
+    const cacheKey = feedbackTagsCacheKey(sessionId, problemNumber);
+
+    if (!force && feedbackTagsCache.has(cacheKey)) {
+        feedbackTags = feedbackTagsCache.get(cacheKey);
+        displayFeedbackTags();
+        const container = document.getElementById('feedback-tags-container');
+        if (container) {
+            container.style.display = 'block';
+        }
+        return;
+    }
+
     try {
         const response = await fetch(`${API_BASE}/feedback-tags/${sessionId}/${problemNumber}`);
 
@@ -17,6 +40,7 @@ async function loadFeedbackTags(sessionId, problemNumber) {
         }
 
         feedbackTags = await response.json();
+        feedbackTagsCache.set(cacheKey, feedbackTags);
         displayFeedbackTags();
 
         // Show the tags container if we're on the grading page
@@ -182,7 +206,8 @@ async function applySelectedTags() {
 
         // Reload tags to update use counts
         if (currentSession && currentProblemNumber) {
-            await loadFeedbackTags(currentSession.id, currentProblemNumber);
+            invalidateFeedbackTagsCache(currentSession.id, currentProblemNumber);
+            await loadFeedbackTags(currentSession.id, currentProblemNumber, { force: true });
         }
     } catch (error) {
         console.error('Failed to increment tag usage:', error);
@@ -278,7 +303,8 @@ async function createNewTag() {
         }
 
         // Success - reload tags
-        await loadFeedbackTags(currentSession.id, currentProblemNumber);
+        invalidateFeedbackTagsCache(currentSession.id, currentProblemNumber);
+        await loadFeedbackTags(currentSession.id, currentProblemNumber, { force: true });
 
         // Close dialog
         hideAddTagDialog();
@@ -317,7 +343,8 @@ async function deleteTag(tagId, tagName) {
 
         // Reload tags
         if (currentSession && currentProblemNumber) {
-            await loadFeedbackTags(currentSession.id, currentProblemNumber);
+            invalidateFeedbackTagsCache(currentSession.id, currentProblemNumber);
+            await loadFeedbackTags(currentSession.id, currentProblemNumber, { force: true });
         }
 
     } catch (error) {

@@ -1,18 +1,31 @@
 // AI Grading Notes (per-problem instructions for autograding)
 
 let currentAiGradingNotes = null;
+const aiGradingNotesCache = new Map(); // key=sessionId:problemNumber -> notes payload
 
-async function loadAiGradingNotes(sessionId, problemNumber) {
+function aiGradingNotesCacheKey(sessionId, problemNumber) {
+  return `${sessionId}:${problemNumber}`;
+}
+
+async function loadAiGradingNotes(sessionId, problemNumber, options = {}) {
+  const force = Boolean(options?.force);
+  const cacheKey = aiGradingNotesCacheKey(sessionId, problemNumber);
   try {
-    const response = await fetch(
-      `${API_BASE}/sessions/${sessionId}/ai-grading-notes/${problemNumber}`
-    );
+    let data = null;
+    if (!force && aiGradingNotesCache.has(cacheKey)) {
+      data = aiGradingNotesCache.get(cacheKey);
+    } else {
+      const response = await fetch(
+        `${API_BASE}/sessions/${sessionId}/ai-grading-notes/${problemNumber}`
+      );
 
-    if (!response.ok) {
-      throw new Error('Failed to load AI grading notes');
+      if (!response.ok) {
+        throw new Error('Failed to load AI grading notes');
+      }
+
+      data = await response.json();
+      aiGradingNotesCache.set(cacheKey, data);
     }
-
-    const data = await response.json();
     currentAiGradingNotes = data.ai_grading_notes;
     displayAiGradingNotes();
 
@@ -106,6 +119,10 @@ async function saveAiGradingNotes() {
     }
 
     currentAiGradingNotes = notesText || null;
+    aiGradingNotesCache.set(
+      aiGradingNotesCacheKey(currentSession.id, currentProblemNumber),
+      { ai_grading_notes: currentAiGradingNotes }
+    );
     displayAiGradingNotes();
     hideAiGradingNotesDialog();
   } catch (error) {

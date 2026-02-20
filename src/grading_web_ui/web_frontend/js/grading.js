@@ -1248,7 +1248,7 @@ async function loadProblemOrMostRecent() {
         if (nextResponse.ok) {
             // Found an ungraded problem, load it directly
             currentProblem = await nextResponse.json();
-            await loadSubjectiveSettings(currentProblemNumber, true);
+            await loadSubjectiveSettings(currentProblemNumber);
             addToHistory(currentProblem);
             displayCurrentProblem();
         } else if (nextResponse.status === 404) {
@@ -1259,7 +1259,7 @@ async function loadProblemOrMostRecent() {
 
             if (prevResponse.ok) {
                 currentProblem = await prevResponse.json();
-                await loadSubjectiveSettings(currentProblemNumber, true);
+                await loadSubjectiveSettings(currentProblemNumber);
                 addToHistory(currentProblem);
                 displayCurrentProblem();
             } else {
@@ -1303,7 +1303,7 @@ async function loadProblemFromActiveBucketFilter(direction = 'next', reset = fal
     }
 
     currentProblem = await response.json();
-    await loadSubjectiveSettings(currentProblemNumber, true);
+    await loadSubjectiveSettings(currentProblemNumber);
     addToHistory(currentProblem);
     displayCurrentProblem();
     return true;
@@ -1363,7 +1363,7 @@ async function loadPreviousProblem() {
         if (currentProblem && currentProblem.problem_number) {
             currentProblemNumber = currentProblem.problem_number;
             document.getElementById('problem-select').value = currentProblemNumber;
-            await loadSubjectiveSettings(currentProblemNumber, true);
+            await loadSubjectiveSettings(currentProblemNumber);
             applyGradingModeUI();
         }
         displayCurrentProblem();
@@ -1492,7 +1492,7 @@ async function loadNextProblem() {
         }
 
         currentProblem = await response.json();
-        await loadSubjectiveSettings(currentProblemNumber, true);
+        await loadSubjectiveSettings(currentProblemNumber);
 
         // Add to history and display
         addToHistory(currentProblem);
@@ -1641,7 +1641,6 @@ async function submitSubjectiveTriage(options = {}) {
             throw new Error(payload?.detail || 'Failed to assign subjective bucket');
         }
 
-        await loadSubjectiveSettings(currentProblemNumber, true);
         const progressPromise = updateOverallProgress();
         await loadNextProblem();
         await progressPromise;
@@ -1721,7 +1720,7 @@ async function openRandomBucketSample(bucketId) {
         closeSubjectiveFinalizeDialog();
         currentProblem = payload;
         activeSubjectiveBucketFilter = bucketId;
-        await loadSubjectiveSettings(currentProblemNumber, true);
+        await loadSubjectiveSettings(currentProblemNumber);
         const filter = document.getElementById('subjective-view-filter');
         if (filter) {
             renderSubjectiveBucketFilter();
