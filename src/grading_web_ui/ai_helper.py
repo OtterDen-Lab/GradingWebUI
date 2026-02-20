@@ -19,6 +19,9 @@ log = logging.getLogger(__name__)
 # Constants
 DEFAULT_MAX_TOKENS = 1000  # Default token limit for AI responses
 DEFAULT_MAX_RETRIES = 3  # Default number of retries for failed requests
+DEFAULT_ANTHROPIC_ENV_FALLBACKS = (
+  "claude-3-7-sonnet-latest,claude-3-5-sonnet-latest,claude-haiku-4-5,claude-3-5-haiku-latest"
+)
 
 # Provider model defaults (can be overridden via environment variables):
 # ANTHROPIC_MODEL_SMALL/MEDIUM/LARGE
@@ -43,6 +46,10 @@ MODEL_CONFIG = {
 }
 
 DEFAULT_MODEL_TIER = "medium"
+
+
+def _parse_model_csv(raw_value: str) -> List[str]:
+  return [model.strip() for model in (raw_value or "").split(",") if model.strip()]
 
 
 def get_model_for_tier(provider: str, tier: str = DEFAULT_MODEL_TIER) -> str:
@@ -85,23 +92,39 @@ class AI_Helper__Anthropic(AI_Helper):
   @classmethod
   def _candidate_models(cls,
                         explicit_models: Optional[List[str]] = None) -> List[str]:
+    def _dedupe(sequence: List[str]) -> List[str]:
+      seen = set()
+      deduped = []
+      for model in sequence:
+        if model and model not in seen:
+          seen.add(model)
+          deduped.append(model)
+      return deduped
+
     primary = os.getenv("ANTHROPIC_MODEL", "").strip()
     if not primary:
       primary = get_model_for_tier("anthropic", "medium")
 
     fallback_csv = os.getenv("ANTHROPIC_FALLBACK_MODELS",
-                             "claude-3-7-sonnet-latest,claude-3-5-sonnet-latest,claude-haiku-4-5,claude-3-5-haiku-latest")
-    fallbacks = [
-      model.strip() for model in fallback_csv.split(",") if model.strip()
-    ]
+                             DEFAULT_ANTHROPIC_ENV_FALLBACKS)
+    env_fallbacks = _parse_model_csv(fallback_csv)
 
     seed_models = explicit_models if explicit_models else [primary]
 
-    models: List[str] = []
-    for model in [*seed_models, *fallbacks]:
-      if model and model not in models:
-        models.append(model)
-    return models
+    # Always append resilient built-in candidates so stale env overrides do not
+    # hard-fail model selection.
+    resilient_fallbacks = _dedupe([
+      get_model_for_tier("anthropic", "medium"),
+      get_model_for_tier("anthropic", "small"),
+      get_model_for_tier("anthropic", "large"),
+      *_parse_model_csv(DEFAULT_ANTHROPIC_ENV_FALLBACKS),
+    ])
+
+    return _dedupe([
+      *seed_models,
+      *env_fallbacks,
+      *resilient_fallbacks,
+    ])
 
   @staticmethod
   def _is_model_not_found_error(error: Exception) -> bool:
@@ -143,6 +166,7 @@ class AI_Helper__Anthropic(AI_Helper):
     })
 
     last_error = None
+    model_not_found_count = 0
     candidate_models = cls._candidate_models(candidate_models)
 
     for index, model_name in enumerate(candidate_models):
@@ -171,6 +195,8 @@ class AI_Helper__Anthropic(AI_Helper):
       except Exception as e:
         last_error = e
         is_model_error = cls._is_model_not_found_error(e)
+        if is_model_error:
+          model_not_found_count += 1
         has_next_model = index < (len(candidate_models) - 1)
         if is_model_error and has_next_model:
           log.warning(
@@ -179,9 +205,18 @@ class AI_Helper__Anthropic(AI_Helper):
             candidate_models[index + 1]
           )
           continue
+        if is_model_error:
+          break
         raise
 
     if last_error:
+      if model_not_found_count == len(candidate_models):
+        tried = ", ".join(candidate_models)
+        raise RuntimeError(
+          "No available Anthropic model from configured candidates. "
+          f"Tried: {tried}. "
+          "Update ANTHROPIC_MODEL / ANTHROPIC_FALLBACK_MODELS to valid models."
+        ) from last_error
       raise last_error
     raise RuntimeError("Anthropic query failed with no candidate model attempts")
 

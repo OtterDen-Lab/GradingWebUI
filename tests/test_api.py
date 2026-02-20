@@ -887,6 +887,80 @@ def test_subjective_finalize_applies_bucket_scores(client):
     assert cursor.fetchone()["count"] == 3
 
 
+def test_subjective_finalize_supports_dash_blank_score(client):
+  """Subjective finalize should allow '-' to mark a bucket as manual blank."""
+  session_id = create_test_session(client, "Subjective Finalize Dash Blank")
+  _, problem_id_blank = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=14, max_points=8.0
+  )
+  _, problem_id_numeric = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=14, max_points=8.0
+  )
+
+  mode_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 14,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "blank", "label": "Blank"},
+        {"id": "missing_little", "label": "Missing a little"},
+      ]
+    }
+  )
+  assert mode_response.status_code == 200
+
+  triage_blank = client.post(
+    f"/api/problems/{problem_id_blank}/subjective-triage",
+    json={"bucket_id": "blank"}
+  )
+  assert triage_blank.status_code == 200
+  triage_numeric = client.post(
+    f"/api/problems/{problem_id_numeric}/subjective-triage",
+    json={"bucket_id": "missing_little"}
+  )
+  assert triage_numeric.status_code == 200
+
+  finalize_response = client.post(
+    f"/api/sessions/{session_id}/subjective-finalize",
+    json={
+      "problem_number": 14,
+      "bucket_scores": [
+        {"bucket_id": "blank", "score": "-", "feedback": "No response provided."},
+        {"bucket_id": "missing_little", "score": 5.0, "feedback": "Close, but incomplete."},
+      ]
+    }
+  )
+  assert finalize_response.status_code == 200
+  payload = finalize_response.json()
+  assert payload["status"] == "finalized"
+  assert payload["graded_count"] == 2
+  blank_updates = [u for u in payload["bucket_updates"] if u["bucket_id"] == "blank"]
+  assert blank_updates
+  assert blank_updates[0]["score"] == "-"
+  assert blank_updates[0]["is_blank"] is True
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute("""
+      SELECT id, graded, score, feedback, is_blank, blank_method
+      FROM problems
+      WHERE session_id = ? AND problem_number = ?
+    """, (session_id, 14))
+    rows = {row["id"]: dict(row) for row in cursor.fetchall()}
+
+    assert rows[problem_id_blank]["graded"] == 1
+    assert rows[problem_id_blank]["score"] == 0.0
+    assert rows[problem_id_blank]["feedback"] == "No response provided."
+    assert rows[problem_id_blank]["is_blank"] == 1
+    assert rows[problem_id_blank]["blank_method"] == "manual"
+
+    assert rows[problem_id_numeric]["graded"] == 1
+    assert rows[problem_id_numeric]["score"] == 5.0
+    assert rows[problem_id_numeric]["feedback"] == "Close, but incomplete."
+    assert rows[problem_id_numeric]["is_blank"] in (0, None)
+
+
 def test_grade_problem_includes_general_feedback_section(client):
   """Manual grading should persist default feedback as a general section."""
   session_id = create_test_session(client, "General Feedback Grade")

@@ -924,19 +924,43 @@ async def finalize_subjective_scores(
       if not problem_ids:
         continue
       bucket_score = provided_scores[bucket_id]
+      raw_score = bucket_score.score
+      is_dash_blank = isinstance(raw_score, str) and raw_score.strip() == "-"
+
+      if is_dash_blank:
+        score_value = 0.0
+      else:
+        try:
+          score_value = float(raw_score)
+        except (TypeError, ValueError):
+          raise HTTPException(
+            status_code=400,
+            detail=(
+              f"Invalid score value for bucket '{bucket_id}': "
+              f"{raw_score}. Use a number or '-' for blank."
+            )
+          )
+
       merged_feedback = merge_general_feedback(
         default_feedback,
         bucket_score.feedback
       )
-      updated_rows = repos.problems.bulk_grade(
-        problem_ids,
-        bucket_score.score,
-        merged_feedback
-      )
+      if is_dash_blank:
+        updated_rows = repos.problems.bulk_mark_as_blank(
+          problem_ids,
+          merged_feedback
+        )
+      else:
+        updated_rows = repos.problems.bulk_grade(
+          problem_ids,
+          score_value,
+          merged_feedback
+        )
       total_graded_now += updated_rows
       graded_updates.append({
         "bucket_id": bucket_id,
-        "score": bucket_score.score,
+        "score": "-" if is_dash_blank else score_value,
+        "is_blank": is_dash_blank,
         "feedback": merged_feedback,
         "count": updated_rows
       })

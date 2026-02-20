@@ -183,7 +183,7 @@ class SubjectiveTriageSubmission(BaseModel):
 class SubjectiveBucketFinalizeScore(BaseModel):
   """Score assignment for one subjective bucket."""
   bucket_id: str = Field(..., min_length=1, max_length=80)
-  score: float
+  score: Union[float, str]
   feedback: Optional[str] = Field(None, max_length=4000)
 
 

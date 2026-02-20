@@ -2086,11 +2086,9 @@ function renderSubjectiveFinalizeRows(settings) {
         label.appendChild(sampleBtn);
 
         const scoreInput = document.createElement('input');
-        scoreInput.type = 'number';
-        scoreInput.step = '0.25';
-        scoreInput.min = '0';
-        scoreInput.max = String(maxPoints);
-        scoreInput.placeholder = 'Score';
+        scoreInput.type = 'text';
+        scoreInput.inputMode = 'decimal';
+        scoreInput.placeholder = `Score (0-${maxPoints}) or -`;
         scoreInput.className = 'subjective-finalize-score';
 
         const feedbackInput = document.createElement('textarea');
@@ -2139,16 +2137,17 @@ function collectSubjectiveFinalizePayload() {
         const scoreInput = row.querySelector('.subjective-finalize-score');
         const feedbackInput = row.querySelector('.subjective-finalize-feedback');
         const scoreText = (scoreInput?.value || '').trim();
+        const isBlankScore = scoreText === '-';
         const score = parseFloat(scoreText);
-        if (!scoreText || Number.isNaN(score)) {
-            throw new Error(`Enter a numeric score for bucket "${bucketId}".`);
+        if (!scoreText || (!isBlankScore && Number.isNaN(score))) {
+            throw new Error(`Enter a numeric score or '-' for bucket "${bucketId}".`);
         }
-        if (score < 0 || score > maxPoints) {
+        if (!isBlankScore && (score < 0 || score > maxPoints)) {
             throw new Error(`Score for bucket "${bucketId}" must be between 0 and ${maxPoints}.`);
         }
         return {
             bucket_id: bucketId,
-            score,
+            score: isBlankScore ? '-' : score,
             feedback: (feedbackInput?.value || '').trim() || null
         };
     });

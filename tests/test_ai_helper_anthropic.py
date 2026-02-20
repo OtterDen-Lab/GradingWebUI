@@ -43,9 +43,9 @@ def test_anthropic_candidate_models_from_env(monkeypatch):
   monkeypatch.setenv("ANTHROPIC_FALLBACK_MODELS",
                      "model-a, model-b, model-primary, model-c")
 
-  assert AI_Helper__Anthropic._candidate_models() == [
-    "model-primary", "model-a", "model-b", "model-c"
-  ]
+  candidates = AI_Helper__Anthropic._candidate_models()
+  assert candidates[:4] == ["model-primary", "model-a", "model-b", "model-c"]
+  assert len(candidates) == len(set(candidates))
 
 
 def test_anthropic_query_falls_back_when_model_not_found(monkeypatch):
@@ -81,4 +81,19 @@ def test_anthropic_query_does_not_swallow_non_model_errors(monkeypatch):
   AI_Helper__Anthropic._client = _FakeClient(handler)
 
   with pytest.raises(RuntimeError, match="429 rate limit"):
+    AI_Helper__Anthropic.query_ai("hello", attachments=[])
+
+
+def test_anthropic_query_reports_clear_error_when_all_candidates_missing(monkeypatch):
+  monkeypatch.setenv("ANTHROPIC_MODEL", "missing-primary")
+  monkeypatch.setenv("ANTHROPIC_FALLBACK_MODELS", "missing-fallback")
+
+  def handler(_model):
+    raise RuntimeError(
+      "Error code: 404 - {'type':'error','error':{'type':'not_found_error','message':'model unavailable'}}"
+    )
+
+  AI_Helper__Anthropic._client = _FakeClient(handler)
+
+  with pytest.raises(RuntimeError, match="No available Anthropic model"):
     AI_Helper__Anthropic.query_ai("hello", attachments=[])

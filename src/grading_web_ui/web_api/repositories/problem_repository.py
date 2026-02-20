@@ -569,6 +569,32 @@ class ProblemRepository(BaseRepository[Problem]):
       """, (score, feedback, ai_reasoning, *problem_ids))
       return int(cursor.rowcount or 0)
 
+  def bulk_mark_as_blank(self, problem_ids: List[int],
+                         feedback: Optional[str] = None) -> int:
+    """
+    Mark many problems as manual blank.
+
+    Sets score to 0, graded to 1, is_blank to 1, and manual blank metadata.
+    Returns number of rows updated.
+    """
+    if not problem_ids:
+      return 0
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      placeholders = ",".join("?" for _ in problem_ids)
+      cursor.execute(f"""
+        UPDATE problems
+        SET score = 0,
+            feedback = ?,
+            graded = 1,
+            graded_at = CURRENT_TIMESTAMP,
+            is_blank = 1,
+            blank_method = 'manual',
+            blank_reasoning = 'Manually marked as blank by grader (dash in score field)'
+        WHERE id IN ({placeholders})
+      """, (feedback, *problem_ids))
+      return int(cursor.rowcount or 0)
+
   def bulk_ungrade(self, problem_ids: List[int]) -> int:
     """Reopen graded problems by clearing score/feedback and graded flags."""
     if not problem_ids:
