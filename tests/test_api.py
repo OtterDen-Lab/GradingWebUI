@@ -1136,6 +1136,63 @@ def test_subjective_reopen_restores_triaged_state(client):
       assert row["feedback"] is None
 
 
+def test_subjective_previous_falls_back_to_last_graded_after_finalize(client, monkeypatch):
+  """Subjective previous endpoint should return a graded response after finalize."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  monkeypatch.setattr(
+    problems_routes,
+    "get_problem_image_data",
+    lambda problem, submission_repo=None: ""
+  )
+
+  session_id = create_test_session(client, "Subjective Previous Fallback")
+  _, problem_id_a = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=15, max_points=8.0
+  )
+  _, problem_id_b = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=15, max_points=8.0
+  )
+
+  mode_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 15,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "good", "label": "Good"},
+      ]
+    }
+  )
+  assert mode_response.status_code == 200
+
+  for problem_id in [problem_id_a, problem_id_b]:
+    triage_response = client.post(
+      f"/api/problems/{problem_id}/subjective-triage",
+      json={"bucket_id": "good"}
+    )
+    assert triage_response.status_code == 200
+
+  finalize_response = client.post(
+    f"/api/sessions/{session_id}/subjective-finalize",
+    json={
+      "problem_number": 15,
+      "bucket_scores": [
+        {"bucket_id": "good", "score": 6.0}
+      ]
+    }
+  )
+  assert finalize_response.status_code == 200
+
+  previous_response = client.get(f"/api/problems/{session_id}/15/previous")
+  assert previous_response.status_code == 200
+  payload = previous_response.json()
+  assert payload["id"] in {problem_id_a, problem_id_b}
+  assert payload["graded"] is True
+  assert payload["grading_mode"] == "subjective"
+  assert payload["subjective_bucket_id"] == "good"
+
+
 def test_subjective_bucket_navigation_endpoints(client, monkeypatch):
   """Bucket navigation should iterate triaged responses within a bucket."""
   from grading_web_ui.web_api.routes import problems as problems_routes

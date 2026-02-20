@@ -601,16 +601,20 @@ async def get_previous_problem(
   triage_repo = SubjectiveTriageRepository()
   grading_mode, _ = _get_subjective_settings(session_id, problem_number)
 
-  # In subjective mode, "previous" means most recently triaged response.
+  # In subjective mode, prefer most recently triaged (ungraded) response.
+  # If everything is already finalized for this problem, fall back to the
+  # most recently graded response so the UI can still reopen/adjust scores.
   if grading_mode == "subjective":
     problem = problem_repo.get_previous_triaged(session_id, problem_number)
+    if not problem:
+      problem = problem_repo.get_previous_graded(session_id, problem_number)
   else:
     problem = problem_repo.get_previous_graded(session_id, problem_number)
   if not problem:
     raise HTTPException(
       status_code=404,
       detail=(
-        f"No triaged problems found for problem {problem_number}"
+        f"No triaged or graded problems found for problem {problem_number}"
         if grading_mode == "subjective"
         else f"No graded problems found for problem {problem_number}"
       )

@@ -16,6 +16,7 @@ let currentSubjectiveSettings = null;
 let selectedSubjectiveBucketId = null;
 let activeSubjectiveBucketFilter = '';
 let subjectiveAssignInFlight = false;
+let gradingKeyboardShortcutsBound = false;
 const PREFETCH_QUEUE_TARGET = 2;
 const prefetchedNextProblems = [];
 let prefetchQueueInFlight = false;
@@ -661,6 +662,41 @@ function renderSubjectiveBucketEditor() {
         colorInput.value = bucket.color || '';
         colorInput.placeholder = '#hex color';
 
+        const controls = document.createElement('div');
+        controls.style.display = 'flex';
+        controls.style.gap = '4px';
+        controls.style.justifyContent = 'flex-end';
+
+        const moveUpBtn = document.createElement('button');
+        moveUpBtn.type = 'button';
+        moveUpBtn.className = 'btn btn-secondary btn-small';
+        moveUpBtn.textContent = 'Up';
+        moveUpBtn.disabled = index === 0;
+        moveUpBtn.onclick = () => {
+            if (index === 0) return;
+            const movedBucket = settings.buckets.splice(index, 1)[0];
+            settings.buckets.splice(index - 1, 0, movedBucket);
+            renderSubjectiveBucketEditor();
+            renderSubjectiveBucketButtons();
+            renderSubjectiveBucketFilter();
+            renderSubjectiveBucketHistogram();
+        };
+
+        const moveDownBtn = document.createElement('button');
+        moveDownBtn.type = 'button';
+        moveDownBtn.className = 'btn btn-secondary btn-small';
+        moveDownBtn.textContent = 'Down';
+        moveDownBtn.disabled = index === settings.buckets.length - 1;
+        moveDownBtn.onclick = () => {
+            if (index >= settings.buckets.length - 1) return;
+            const movedBucket = settings.buckets.splice(index, 1)[0];
+            settings.buckets.splice(index + 1, 0, movedBucket);
+            renderSubjectiveBucketEditor();
+            renderSubjectiveBucketButtons();
+            renderSubjectiveBucketFilter();
+            renderSubjectiveBucketHistogram();
+        };
+
         const removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.className = 'btn btn-secondary btn-small';
@@ -672,11 +708,17 @@ function renderSubjectiveBucketEditor() {
             }
             renderSubjectiveBucketEditor();
             renderSubjectiveBucketButtons();
+            renderSubjectiveBucketFilter();
+            renderSubjectiveBucketHistogram();
         };
+
+        controls.appendChild(moveUpBtn);
+        controls.appendChild(moveDownBtn);
+        controls.appendChild(removeBtn);
 
         row.appendChild(labelInput);
         row.appendChild(colorInput);
-        row.appendChild(removeBtn);
+        row.appendChild(controls);
         editor.appendChild(row);
     });
 }
@@ -855,8 +897,9 @@ function updateSubjectiveFinalizeButton() {
 
     reopenBtn.style.display = canReopen ? 'inline-block' : 'none';
     reopenBtn.disabled = !canReopen;
+    reopenBtn.textContent = `Adjust Bucket Scores (P${currentProblemNumber})`;
     if (canReopen) {
-        reopenBtn.title = `${finalizedCount} finalized responses can be reopened`;
+        reopenBtn.title = `${finalizedCount} finalized responses can be rescored`;
     } else {
         reopenBtn.title = '';
     }
@@ -1076,7 +1119,7 @@ function setupGradingControls() {
     document.getElementById('subjective-assign-btn').onclick = submitSubjectiveTriage;
     document.getElementById('subjective-clear-btn').onclick = clearSubjectiveTriage;
     document.getElementById('subjective-finalize-btn').onclick = openSubjectiveFinalizeDialog;
-    document.getElementById('subjective-reopen-btn').onclick = submitSubjectiveReopen;
+    document.getElementById('subjective-reopen-btn').onclick = () => submitSubjectiveReopen({ openFinalizeDialog: true });
     document.getElementById('next-problem-btn').onclick = loadNextProblem;
     document.getElementById('back-problem-btn').onclick = loadPreviousProblem;
     document.getElementById('view-stats-btn').onclick = () => {
@@ -1094,7 +1137,7 @@ function setupGradingControls() {
 
     // Max points input handler
     const maxPointsInput = document.getElementById('max-points-input');
-    maxPointsInput.addEventListener('change', async (e) => {
+    maxPointsInput.onchange = async (e) => {
         const maxPoints = parseFloat(e.target.value);
         if (!isNaN(maxPoints) && maxPoints > 0 && currentProblemNumber) {
             // Update input max
@@ -1122,10 +1165,10 @@ function setupGradingControls() {
                 alert('Failed to save max points: ' + error.message);
             }
         }
-    });
+    };
 
     const gradingModeSelect = document.getElementById('grading-mode-select');
-    gradingModeSelect.addEventListener('change', async (e) => {
+    gradingModeSelect.onchange = async (e) => {
         const mode = e.target.value === 'subjective' ? 'subjective' : 'calculation';
         const settings = getCurrentSubjectiveSettings() || {
             problem_number: Number(currentProblemNumber),
@@ -1153,9 +1196,9 @@ function setupGradingControls() {
             await loadSubjectiveSettings(Number(currentProblemNumber), true);
             applyGradingModeUI();
         }
-    });
+    };
 
-    document.getElementById('subjective-add-bucket-btn').addEventListener('click', () => {
+    document.getElementById('subjective-add-bucket-btn').onclick = () => {
         const settings = getCurrentSubjectiveSettings();
         if (!settings) return;
         const nextIndex = settings.buckets.length + 1;
@@ -1166,9 +1209,11 @@ function setupGradingControls() {
         });
         renderSubjectiveBucketEditor();
         renderSubjectiveBucketButtons();
-    });
+        renderSubjectiveBucketFilter();
+        renderSubjectiveBucketHistogram();
+    };
 
-    document.getElementById('subjective-save-settings-btn').addEventListener('click', async () => {
+    document.getElementById('subjective-save-settings-btn').onclick = async () => {
         try {
             await saveSubjectiveSettings();
             showNotification('Subjective bucket settings saved.');
@@ -1176,11 +1221,11 @@ function setupGradingControls() {
             console.error('Failed to save subjective settings:', error);
             alert(error.message || 'Failed to save subjective settings');
         }
-    });
+    };
 
     const subjectiveFilterSelect = document.getElementById('subjective-view-filter');
     if (subjectiveFilterSelect) {
-        subjectiveFilterSelect.addEventListener('change', async (e) => {
+        subjectiveFilterSelect.onchange = async (e) => {
             activeSubjectiveBucketFilter = e.target.value || '';
             invalidateNextProblemPrefetch();
             if (!activeSubjectiveBucketFilter) {
@@ -1193,14 +1238,17 @@ function setupGradingControls() {
                 console.error('Failed to apply bucket filter:', error);
                 alert('Failed to load filtered responses: ' + error.message);
             }
-        });
+        };
     }
 
     document.getElementById('subjective-finalize-cancel-btn').onclick = closeSubjectiveFinalizeDialog;
     document.getElementById('subjective-finalize-confirm-btn').onclick = submitSubjectiveFinalize;
 
     // Keyboard shortcuts
-    document.addEventListener('keydown', handleGradingKeyboard);
+    if (!gradingKeyboardShortcutsBound) {
+        document.addEventListener('keydown', handleGradingKeyboard);
+        gradingKeyboardShortcutsBound = true;
+    }
 }
 
 // Handle keyboard shortcuts for grading
@@ -2010,17 +2058,21 @@ async function openRandomBucketSample(bucketId) {
     }
 }
 
-async function submitSubjectiveReopen() {
+async function submitSubjectiveReopen(options = {}) {
     if (!currentSession || !currentProblemNumber) return;
 
-    if (!confirm(`Reopen subjective scores for Problem ${currentProblemNumber}?\n\nThis will clear current scores/feedback and return responses to triaged state.`)) {
+    const { openFinalizeDialog = false } = options;
+    const confirmMessage = openFinalizeDialog
+        ? `Adjust finalized scores for Problem ${currentProblemNumber}?\n\nThis keeps bucket assignments, clears current scores/feedback, and opens the scoring dialog.`
+        : `Reopen subjective scores for Problem ${currentProblemNumber}?\n\nThis will clear current scores/feedback and return responses to triaged state.`;
+
+    if (!confirm(confirmMessage)) {
         return;
     }
 
     const reopenBtn = document.getElementById('subjective-reopen-btn');
-    const originalText = reopenBtn.textContent;
     reopenBtn.disabled = true;
-    reopenBtn.textContent = 'Reopening...';
+    reopenBtn.textContent = openFinalizeDialog ? 'Preparing...' : 'Reopening...';
 
     try {
         const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/subjective-reopen`, {
@@ -2044,13 +2096,17 @@ async function submitSubjectiveReopen() {
         await updateOverallProgress();
         invalidateNextProblemPrefetch();
         await loadProblemOrMostRecent();
-        showNotification(`Reopened ${payload.reopened_count || 0} responses for Problem ${currentProblemNumber}.`);
+        if (openFinalizeDialog) {
+            await openSubjectiveFinalizeDialog();
+            showNotification(`Ready to rescore ${payload.reopened_count || 0} responses for Problem ${currentProblemNumber}.`);
+        } else {
+            showNotification(`Reopened ${payload.reopened_count || 0} responses for Problem ${currentProblemNumber}.`);
+        }
     } catch (error) {
         console.error('Failed to reopen subjective scores:', error);
         alert(error.message || 'Failed to reopen subjective scores');
     } finally {
-        reopenBtn.disabled = false;
-        reopenBtn.textContent = originalText;
+        updateSubjectiveFinalizeButton();
     }
 }
 
