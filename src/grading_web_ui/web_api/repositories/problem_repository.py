@@ -571,9 +571,70 @@ class ProblemRepository(BaseRepository[Problem]):
       cursor = conn.cursor()
       cursor.execute("""
         UPDATE problems
-        SET max_points = ?, qr_encrypted_data = ?
+        SET max_points = ?, qr_encrypted_data = ?,
+            regeneration_cache_key = NULL,
+            regeneration_response_json = NULL,
+            regeneration_cached_at = NULL
         WHERE id = ?
       """, (max_points, encrypted_data, problem_id))
+
+  def get_regeneration_cache(self, problem_id: int) -> Optional[Dict]:
+    """
+    Get persisted regeneration cache entry for a problem.
+
+    Returns:
+      Dict with cache_key and response payload, or None.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        SELECT regeneration_cache_key, regeneration_response_json
+        FROM problems
+        WHERE id = ?
+      """, (problem_id,))
+      row = cursor.fetchone()
+      if not row:
+        return None
+      cache_key = row["regeneration_cache_key"]
+      payload_json = row["regeneration_response_json"]
+      if not cache_key or not payload_json:
+        return None
+      try:
+        payload = json.loads(payload_json)
+      except (TypeError, json.JSONDecodeError):
+        return None
+      if not isinstance(payload, dict):
+        return None
+      return {"cache_key": cache_key, "response": payload}
+
+  def set_regeneration_cache(self, problem_id: int, cache_key: str,
+                             response: Dict) -> None:
+    """
+    Persist regeneration cache entry for a problem.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        UPDATE problems
+        SET regeneration_cache_key = ?,
+            regeneration_response_json = ?,
+            regeneration_cached_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      """, (cache_key, json.dumps(response), problem_id))
+
+  def clear_regeneration_cache(self, problem_id: int) -> None:
+    """
+    Clear persisted regeneration cache entry for a problem.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        UPDATE problems
+        SET regeneration_cache_key = NULL,
+            regeneration_response_json = NULL,
+            regeneration_cached_at = NULL
+        WHERE id = ?
+      """, (problem_id,))
 
   def get_counts_for_problem_number(self, session_id: int,
                                    problem_number: int) -> Dict[str, int]:

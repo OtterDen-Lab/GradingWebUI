@@ -65,18 +65,30 @@ def _cache_key_for_regeneration(problem, quiz_yaml_text: Optional[str]) -> tuple
   )
 
 
+def _serialize_regeneration_cache_key(cache_key: tuple) -> str:
+  return json.dumps(
+    list(cache_key), separators=(",", ":"), ensure_ascii=False
+  )
+
+
 def _get_cached_regeneration(problem_id: int, cache_key: tuple) -> Optional[dict]:
   with _regeneration_cache_lock:
     entry = _regeneration_cache.get(problem_id)
-    if not entry:
-      return None
-    if entry.get("cache_key") != cache_key:
-      return None
-    return entry.get("response")
+    if entry and entry.get("cache_key") == cache_key:
+      return entry.get("response")
 
+  persisted = ProblemRepository().get_regeneration_cache(problem_id)
+  if not persisted:
+    return None
 
-def _set_cached_regeneration(problem_id: int, cache_key: tuple,
-                             response: dict) -> None:
+  cache_key_str = _serialize_regeneration_cache_key(cache_key)
+  if persisted.get("cache_key") != cache_key_str:
+    return None
+
+  response = persisted.get("response")
+  if not isinstance(response, dict):
+    return None
+
   with _regeneration_cache_lock:
     _regeneration_cache[problem_id] = {
       "cache_key": cache_key,
@@ -86,10 +98,43 @@ def _set_cached_regeneration(problem_id: int, cache_key: tuple,
       oldest_key = next(iter(_regeneration_cache))
       _regeneration_cache.pop(oldest_key, None)
 
+  return response
+
+
+def _set_cached_regeneration(problem_id: int, cache_key: tuple,
+                             response: dict) -> None:
+  cache_key_str = _serialize_regeneration_cache_key(cache_key)
+
+  with _regeneration_cache_lock:
+    _regeneration_cache[problem_id] = {
+      "cache_key": cache_key,
+      "response": response
+    }
+    if len(_regeneration_cache) > _regeneration_cache_max_entries:
+      oldest_key = next(iter(_regeneration_cache))
+      _regeneration_cache.pop(oldest_key, None)
+
+  try:
+    ProblemRepository().set_regeneration_cache(problem_id, cache_key_str, response)
+  except Exception as exc:
+    log.warning(
+      "Failed to persist regeneration cache for problem %s: %s",
+      problem_id,
+      exc
+    )
+
 
 def _clear_cached_regeneration(problem_id: int) -> None:
   with _regeneration_cache_lock:
     _regeneration_cache.pop(problem_id, None)
+  try:
+    ProblemRepository().clear_regeneration_cache(problem_id)
+  except Exception as exc:
+    log.warning(
+      "Failed to clear persistent regeneration cache for problem %s: %s",
+      problem_id,
+      exc
+    )
 
 
 def _parse_manual_qr_payload(payload_text: str) -> dict:

@@ -462,6 +462,64 @@ def test_prefetch_regeneration_warms_cache_for_problem(client, monkeypatch):
   assert call_count["count"] == call_count_before
 
 
+def test_regeneration_cache_persists_when_memory_cache_is_cleared(client, monkeypatch):
+  """Regeneration payload should be reused from DB cache after in-memory cache clears."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  session_id = create_test_session(client, "Regeneration Persistent Cache")
+  _, problem_id = seed_submission_with_problem(
+    session_id,
+    qr_encrypted_data="persistent-cache-encrypted",
+    max_points=7.0,
+  )
+
+  call_count = {"count": 0}
+
+  def fake_regenerate(**kwargs):
+    call_count["count"] += 1
+    return {
+      "question_type": "numeric",
+      "seed": 456,
+      "version": "test",
+      "answer_objects": [{"value": "99"}],
+      "explanation_markdown": "Persistent cache explanation"
+    }
+
+  monkeypatch.setattr(
+    problems_routes,
+    "regenerate_from_encrypted_compat",
+    fake_regenerate
+  )
+
+  first_response = client.get(f"/api/problems/{problem_id}/regenerate-answer")
+  assert first_response.status_code == 200
+  assert first_response.json()["answers"][0]["value"] == "99"
+  assert call_count["count"] == 1
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute(
+      """
+      SELECT regeneration_cache_key, regeneration_response_json
+      FROM problems
+      WHERE id = ?
+      """,
+      (problem_id,)
+    )
+    row = cursor.fetchone()
+    assert row is not None
+    assert row["regeneration_cache_key"] is not None
+    assert row["regeneration_response_json"] is not None
+
+  with problems_routes._regeneration_cache_lock:
+    problems_routes._regeneration_cache.clear()
+
+  second_response = client.get(f"/api/problems/{problem_id}/regenerate-answer")
+  assert second_response.status_code == 200
+  assert second_response.json()["answers"][0]["value"] == "99"
+  assert call_count["count"] == 1
+
+
 def test_manual_qr_payload_updates_problem_and_metadata(client):
   """Manual QR payload endpoint should persist max_points and encrypted data."""
   session_id = create_test_session(client, "Manual QR Payload")

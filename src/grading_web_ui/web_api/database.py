@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 25
+CURRENT_SCHEMA_VERSION = 26
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -285,6 +285,9 @@ def create_schema(cursor):
             ai_reasoning TEXT,
             region_coords TEXT,
             qr_encrypted_data TEXT,
+            regeneration_cache_key TEXT,
+            regeneration_response_json TEXT,
+            regeneration_cached_at TIMESTAMP,
             transcription TEXT,
             transcription_model TEXT,
             transcription_cached_at TIMESTAMP,
@@ -555,6 +558,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 25:
     migrate_to_v25(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (25)")
+
+  if from_version < 26:
+    migrate_to_v26(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (26)")
 
 
 def migrate_to_v2(cursor):
@@ -1097,6 +1104,30 @@ def migrate_to_v25(cursor):
     CREATE INDEX IF NOT EXISTS idx_subjective_triage_session_problem
     ON subjective_triage(session_id, problem_number)
   """)
+
+
+def migrate_to_v26(cursor):
+  """Add persistent regeneration cache columns to problems table."""
+  log.info(
+    "Migrating to schema version 26: adding regeneration cache columns to problems"
+  )
+
+  cursor.execute("PRAGMA table_info(problems)")
+  existing_columns = {row[1] for row in cursor.fetchall()}
+
+  if 'regeneration_cache_key' not in existing_columns:
+    cursor.execute("ALTER TABLE problems ADD COLUMN regeneration_cache_key TEXT")
+    log.info("Added regeneration_cache_key column")
+
+  if 'regeneration_response_json' not in existing_columns:
+    cursor.execute(
+      "ALTER TABLE problems ADD COLUMN regeneration_response_json TEXT")
+    log.info("Added regeneration_response_json column")
+
+  if 'regeneration_cached_at' not in existing_columns:
+    cursor.execute(
+      "ALTER TABLE problems ADD COLUMN regeneration_cached_at TIMESTAMP")
+    log.info("Added regeneration_cached_at column")
 
 
 def update_problem_stats(session_id: int):

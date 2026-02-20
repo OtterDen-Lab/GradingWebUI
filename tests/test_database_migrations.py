@@ -36,6 +36,29 @@ def _create_v23_database(path: Path) -> None:
       UNIQUE(session_id, problem_number)
     )
   """)
+  cursor.execute("""
+    CREATE TABLE problems (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL,
+      submission_id INTEGER NOT NULL,
+      problem_number INTEGER NOT NULL,
+      score REAL,
+      feedback TEXT,
+      graded INTEGER DEFAULT 0,
+      graded_at TIMESTAMP,
+      is_blank INTEGER DEFAULT 0,
+      blank_confidence REAL DEFAULT 0.0,
+      blank_method TEXT,
+      blank_reasoning TEXT,
+      max_points REAL,
+      ai_reasoning TEXT,
+      region_coords TEXT,
+      qr_encrypted_data TEXT,
+      transcription TEXT,
+      transcription_model TEXT,
+      transcription_cached_at TIMESTAMP
+    )
+  """)
   conn.commit()
   conn.close()
 
@@ -74,8 +97,13 @@ def test_migration_from_v23_creates_backup_and_upgrades(monkeypatch, tmp_path):
   assert cursor.fetchone()[0] == CURRENT_SCHEMA_VERSION
   cursor.execute("PRAGMA table_info(problem_metadata)")
   columns = {row[1] for row in cursor.fetchall()}
+  cursor.execute("PRAGMA table_info(problems)")
+  problem_columns = {row[1] for row in cursor.fetchall()}
   conn.close()
   assert "ai_grading_notes" in columns
+  assert "regeneration_cache_key" in problem_columns
+  assert "regeneration_response_json" in problem_columns
+  assert "regeneration_cached_at" in problem_columns
 
   backup_files = list(backup_dir.glob("legacy_v23.db.v23.bak-*"))
   assert backup_files, "Expected pre-migration backup to be created"

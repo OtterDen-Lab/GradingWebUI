@@ -32,6 +32,35 @@ jobs:
         run: |
           # Toolchain exceptions:
           # - pip/wheel advisories are tracked in the CI base image/tooling lifecycle.
-          uv run pip-audit \
-            --ignore-vuln GHSA-6vgw-5pg2-w6jp \
-            --ignore-vuln GHSA-8rrh-rw8j-w5fx
+          max_attempts=3
+          attempt=1
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "Dependency audit attempt ${attempt}/${max_attempts}"
+
+            set +e
+            audit_output="$(uv run pip-audit \
+              --skip-editable \
+              --ignore-vuln GHSA-6vgw-5pg2-w6jp \
+              --ignore-vuln GHSA-8rrh-rw8j-w5fx 2>&1)"
+            audit_status=$?
+            set -e
+
+            echo "$audit_output"
+
+            if [ "$audit_status" -eq 0 ]; then
+              exit 0
+            fi
+
+            if echo "$audit_output" | grep -Eiq "(503|502|504|429|service unavailable|read timeout|connection reset|temporar)"; then
+              if [ "$attempt" -lt "$max_attempts" ]; then
+                sleep_seconds=$((attempt * 10))
+                echo "Transient package index/network error detected; retrying in ${sleep_seconds}s..."
+                sleep "$sleep_seconds"
+                attempt=$((attempt + 1))
+                continue
+              fi
+            fi
+
+            echo "Dependency audit failed (either non-transient error or retries exhausted)."
+            exit "$audit_status"
+          done

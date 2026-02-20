@@ -440,8 +440,8 @@ async def get_session_stats(
     num_blank_ungraded = manual_blank_counts["ungraded_manual_blank"]
     num_blank_total = num_blank + num_blank_ungraded
 
-    # Debug log
-    log.info(
+    # Keep detailed per-problem stats at DEBUG to avoid INFO log noise.
+    log.debug(
       f"[STATS] Problem {problem_num}: total={num_total}, graded={num_graded}, "
       f"manual_blank_ungraded={num_blank_ungraded}, manual_blank_total={num_blank_total}"
     )

@@ -71,14 +71,29 @@ async function getRegeneratedAnswer(problemId) {
     }
 }
 
-function prefetchRegeneratedAnswer(problemId) {
-    if (!problemId || regeneratedAnswerCache.has(problemId) || regeneratedAnswerRequests.has(problemId)) {
-        return;
+async function ensureExplanationLoaded(problemId) {
+    if (!problemId) {
+        return false;
     }
 
-    getRegeneratedAnswer(problemId).catch((error) => {
-        console.debug(`Background answer regeneration failed for problem ${problemId}:`, error);
-    });
+    if (explanationCache[problemId]) {
+        return true;
+    }
+
+    try {
+        const data = await getRegeneratedAnswer(problemId);
+        if (data.explanation_html || data.explanation_markdown) {
+            explanationCache[problemId] = {
+                html: data.explanation_html || null,
+                markdown: data.explanation_markdown || null
+            };
+            return true;
+        }
+    } catch (error) {
+        console.error('Failed to load explanation:', error);
+    }
+
+    return false;
 }
 
 function invalidateRegeneratedAnswer(problemId) {
@@ -701,8 +716,9 @@ async function loadProblemNumbers() {
             await loadSubjectiveSettings(currentProblemNumber, true);
             applyGradingModeUI();
             updateMaxPointsDropdown();
-            await updateOverallProgress(); // Update progress bar when changing problems
+            const progressPromise = updateOverallProgress(); // Update progress bar when changing problems
             await loadProblemOrMostRecent();
+            await progressPromise;
         };
 
         loadNextProblem();
@@ -1096,7 +1112,6 @@ function displayCurrentProblem() {
     const showAnswerBtn = document.getElementById('show-answer-btn');
     if (currentProblem.has_qr_data) {
         showAnswerBtn.style.display = 'inline-block';
-        prefetchRegeneratedAnswer(currentProblem.id);
     } else {
         showAnswerBtn.style.display = 'none';
     }
@@ -1213,8 +1228,8 @@ function displayCurrentProblem() {
         loadAiGradingNotes(currentSession.id, currentProblemNumber);
     }
 
-    // Load explanation from QR code if available
-    loadExplanation();
+    // Set explanation UI state (avoid eager regeneration fetch on every navigation)
+    loadExplanation({ eager: false });
 }
 
 // Load problem for current problem number (ungraded if available, otherwise most recent)
@@ -1526,8 +1541,13 @@ async function submitGrade() {
 
     let feedback = document.getElementById('feedback-input').value;
 
-    // Auto-include explanation if checkbox is enabled and explanation is available
+    // Auto-include explanation if checkbox is enabled.
     const includeExplanation = document.getElementById('include-explanation-checkbox');
+    if (includeExplanation && includeExplanation.checked && currentProblem) {
+        if (!explanationCache[currentProblem.id]) {
+            await ensureExplanationLoaded(currentProblem.id);
+        }
+    }
     if (includeExplanation && includeExplanation.checked && currentProblem && explanationCache[currentProblem.id]) {
         const cachedExplanation = explanationCache[currentProblem.id];
         const explanationText = cachedExplanation.markdown || cachedExplanation.html || '';
@@ -1562,11 +1582,10 @@ async function submitGrade() {
         // Mark that we just graded this problem number
         lastGradedProblemNumber = currentProblemNumber;
 
-        // Update overall progress
-        await updateOverallProgress();
-
-        // Load next problem
+        // Load next problem first so navigation feels responsive on slower links.
+        const progressPromise = updateOverallProgress();
         await loadNextProblem();
+        await progressPromise;
 
         // Restore button state after loading next problem
         submitBtn.disabled = false;
@@ -1623,8 +1642,9 @@ async function submitSubjectiveTriage(options = {}) {
         }
 
         await loadSubjectiveSettings(currentProblemNumber, true);
-        await updateOverallProgress();
+        const progressPromise = updateOverallProgress();
         await loadNextProblem();
+        await progressPromise;
     } catch (error) {
         console.error('Failed to assign subjective bucket:', error);
         alert(error.message || 'Failed to assign subjective bucket');
@@ -3072,10 +3092,7 @@ manualQrApplyBtn.addEventListener('click', async () => {
             document.getElementById('show-answer-btn').style.display =
                 currentProblem.has_qr_data ? 'inline-block' : 'none';
 
-            if (currentProblem.has_qr_data) {
-                prefetchRegeneratedAnswer(problemId);
-            }
-            await loadExplanation();
+            await loadExplanation({ eager: true });
         }
 
         closeManualQrDialog();
@@ -3642,8 +3659,8 @@ function updateSortIndicators(column) {
 // Cache for explanations { problemId: { html?: string, markdown?: string } }
 let explanationCache = {};
 
-// Load explanation from QR code if available
-async function loadExplanation() {
+// Load explanation UI state, optionally warming cache for the current problem.
+async function loadExplanation({ eager = false } = {}) {
     const controls = document.getElementById('explanation-controls');
     const viewBtn = document.getElementById('view-explanation-btn');
 
@@ -3655,49 +3672,49 @@ async function loadExplanation() {
 
     if (controls) controls.style.display = 'block';
     if (viewBtn) {
+        viewBtn.disabled = false;
+        viewBtn.textContent = 'View Explanation';
+    }
+
+    if (!eager) {
+        return;
+    }
+
+    if (viewBtn) {
         viewBtn.disabled = true;
         viewBtn.textContent = 'Loading...';
     }
 
-    // Check cache first
-    if (explanationCache[currentProblem.id]) {
-        if (viewBtn) {
-            viewBtn.disabled = false;
-            viewBtn.textContent = 'View Explanation';
-        }
+    const ok = await ensureExplanationLoaded(currentProblem.id);
+    if (!ok) {
+        if (controls) controls.style.display = 'none';
         return;
     }
 
-    try {
-        const data = await getRegeneratedAnswer(currentProblem.id);
-
-        if (data.explanation_html || data.explanation_markdown) {
-            explanationCache[currentProblem.id] = {
-                html: data.explanation_html || null,
-                markdown: data.explanation_markdown || null
-            };
-            if (viewBtn) {
-                viewBtn.disabled = false;
-                viewBtn.textContent = 'View Explanation';
-            }
-        } else {
-            // No explanation available
-            if (controls) controls.style.display = 'none';
-        }
-
-    } catch (error) {
-        console.error('Failed to load explanation:', error);
-        if (controls) controls.style.display = 'none';
+    if (viewBtn) {
+        viewBtn.disabled = false;
+        viewBtn.textContent = 'View Explanation';
     }
 }
 
-function showExplanationDialog() {
+async function showExplanationDialog() {
     const dialog = document.getElementById('explanation-dialog');
     const content = document.getElementById('explanation-dialog-content');
 
-    if (!currentProblem || !explanationCache[currentProblem.id]) {
+    if (!currentProblem) {
         showNotification('Explanation not available for this problem.');
         return;
+    }
+
+    if (!explanationCache[currentProblem.id]) {
+        content.innerHTML = '<div style="padding: 20px; text-align: center;">Loading explanation...</div>';
+        dialog.style.display = 'flex';
+        const loaded = await ensureExplanationLoaded(currentProblem.id);
+        if (!loaded) {
+            dialog.style.display = 'none';
+            showNotification('Explanation not available for this problem.');
+            return;
+        }
     }
 
     const explanation = explanationCache[currentProblem.id];
@@ -3712,8 +3729,8 @@ function showExplanationDialog() {
     }
 }
 
-document.getElementById('view-explanation-btn')?.addEventListener('click', () => {
-    showExplanationDialog();
+document.getElementById('view-explanation-btn')?.addEventListener('click', async () => {
+    await showExplanationDialog();
 });
 
 document.getElementById('close-explanation-x')?.addEventListener('click', () => {

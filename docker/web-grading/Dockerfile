@@ -32,8 +32,9 @@ COPY LICENSE /app/
 # Install uv for fast package management
 RUN pip install --no-cache-dir uv
 
-# Install dependencies (includes QuizGenerator>=0.4.0 from PyPI)
-RUN uv pip install --system -e /app
+# Install dependencies (includes QuizGenerator>=0.4.0 from PyPI).
+# Avoid persistent uv cache in containerized build environments with tight disk limits.
+RUN uv pip install --system --no-cache -e /app
 
 # Create data directory for database
 RUN mkdir -p /data
