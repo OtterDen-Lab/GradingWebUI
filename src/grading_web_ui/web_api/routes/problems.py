@@ -45,11 +45,12 @@ _session_prefetch_tasks = {}
 _session_prefetch_tasks_lock = threading.Lock()
 
 _DEFAULT_SUBJECTIVE_BUCKETS = [
-  {"id": "perfect", "label": "Perfect", "color": "#16a34a"},
-  {"id": "excellent", "label": "Excellent", "color": "#22c55e"},
-  {"id": "good", "label": "Good", "color": "#3b82f6"},
-  {"id": "passable", "label": "Passable", "color": "#f59e0b"},
-  {"id": "poor_blank", "label": "Poor/Blank", "color": "#ef4444"},
+  {"id": "above_beyond", "label": "Above and beyond", "color": "#16a34a"},
+  {"id": "has_everything", "label": "Has everything", "color": "#2563eb"},
+  {"id": "missing_little", "label": "Missing a little", "color": "#f59e0b"},
+  {"id": "missing_lot", "label": "Missing a lot", "color": "#ef4444"},
+  {"id": "random", "label": "Random", "color": "#6b7280"},
+  {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
 
 

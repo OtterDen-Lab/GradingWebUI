@@ -23,11 +23,12 @@ let prefetchQueueProblemNumber = null;
 let lastSessionStats = null;
 
 const DEFAULT_SUBJECTIVE_BUCKETS = [
-    { id: 'perfect', label: 'Perfect', color: '#16a34a' },
-    { id: 'excellent', label: 'Excellent', color: '#22c55e' },
-    { id: 'good', label: 'Good', color: '#3b82f6' },
-    { id: 'passable', label: 'Passable', color: '#f59e0b' },
-    { id: 'poor_blank', label: 'Poor/Blank', color: '#ef4444' }
+    { id: 'above_beyond', label: 'Above and beyond', color: '#16a34a' },
+    { id: 'has_everything', label: 'Has everything', color: '#2563eb' },
+    { id: 'missing_little', label: 'Missing a little', color: '#f59e0b' },
+    { id: 'missing_lot', label: 'Missing a lot', color: '#ef4444' },
+    { id: 'random', label: 'Random', color: '#6b7280' },
+    { id: 'blank', label: 'Blank', color: '#9ca3af' }
 ];
 
 function invalidateNextProblemPrefetch() {
@@ -1256,6 +1257,10 @@ function handleGradingKeyboard(e) {
     // Also ignore if any modifier keys are pressed (Cmd/Ctrl/Alt for browser shortcuts like zoom)
     if ((/^[0-9]$/.test(e.key) || e.key === '-') &&
         !e.metaKey && !e.ctrlKey && !e.altKey && // Ignore if modifier keys are held
+        e.target.tagName !== 'INPUT' &&
+        e.target.tagName !== 'SELECT' &&
+        e.target.tagName !== 'TEXTAREA' &&
+        !e.target.isContentEditable &&
         e.target.id !== 'score-input' &&
         e.target.id !== 'feedback-input' &&
         e.target.id !== 'max-points-input' &&
