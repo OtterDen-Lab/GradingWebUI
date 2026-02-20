@@ -428,6 +428,69 @@ function getCurrentSubjectiveSettings() {
     return currentSubjectiveSettings;
 }
 
+function toNonNegativeNumber(value, fallback = 0) {
+    const parsed = Number(value);
+    if (Number.isNaN(parsed) || !Number.isFinite(parsed)) {
+        return Math.max(0, Number(fallback) || 0);
+    }
+    return Math.max(0, parsed);
+}
+
+function applyLocalSubjectiveStateUpdate({
+    triagedCount = null,
+    untriagedCount = null,
+    finalizedCount = null,
+    bucketUsage = null,
+    previousBucketId = null,
+    bucketId = null
+} = {}) {
+    const settings = getCurrentSubjectiveSettings();
+    if (!settings || settings.grading_mode !== 'subjective') {
+        return;
+    }
+
+    settings.triaged_count = toNonNegativeNumber(
+        triagedCount,
+        settings.triaged_count
+    );
+    settings.untriaged_count = toNonNegativeNumber(
+        untriagedCount,
+        settings.untriaged_count
+    );
+    settings.finalized_count = toNonNegativeNumber(
+        finalizedCount,
+        settings.finalized_count
+    );
+
+    if (bucketUsage && typeof bucketUsage === 'object') {
+        settings.bucket_usage = { ...bucketUsage };
+    } else {
+        const usage = { ...(settings.bucket_usage || {}) };
+        if (previousBucketId && previousBucketId !== bucketId) {
+            usage[previousBucketId] = Math.max(
+                0,
+                toNonNegativeNumber(usage[previousBucketId], 0) - 1
+            );
+        }
+        if (bucketId && previousBucketId !== bucketId) {
+            usage[bucketId] = toNonNegativeNumber(usage[bucketId], 0) + 1;
+        }
+        settings.bucket_usage = usage;
+    }
+
+    if (currentProblem && currentProblem.grading_mode === 'subjective') {
+        currentProblem.subjective_triaged_count = settings.triaged_count;
+        currentProblem.subjective_untriaged_count = settings.untriaged_count;
+    }
+
+    subjectiveSettingsByProblem.set(Number(currentProblemNumber), settings);
+    currentSubjectiveSettings = settings;
+    renderSubjectiveBucketButtons();
+    renderSubjectiveBucketFilter();
+    renderSubjectiveBucketHistogram();
+    updateSubjectiveFinalizeButton();
+}
+
 function renderSubjectiveBucketButtons() {
     const container = document.getElementById('subjective-bucket-buttons');
     const settings = getCurrentSubjectiveSettings();
@@ -1200,6 +1263,38 @@ function displayCurrentProblem() {
         }
     };
 
+    const settings = getCurrentSubjectiveSettings();
+    if (settings) {
+        settings.grading_mode = currentProblem.grading_mode || settings.grading_mode || 'calculation';
+        if (settings.grading_mode === 'subjective') {
+            // Keep local subjective counters authoritative to avoid regressions from
+            // stale prefetched payloads.
+            const triagedCount = toNonNegativeNumber(
+                settings.triaged_count,
+                currentProblem.subjective_triaged_count || 0
+            );
+            const untriagedCount = toNonNegativeNumber(
+                settings.untriaged_count,
+                currentProblem.subjective_untriaged_count || 0
+            );
+            settings.triaged_count = triagedCount;
+            settings.untriaged_count = untriagedCount;
+            currentProblem.subjective_triaged_count = triagedCount;
+            currentProblem.subjective_untriaged_count = untriagedCount;
+        } else {
+            settings.triaged_count = 0;
+            settings.untriaged_count = 0;
+        }
+        settings.total_count = currentProblem.total_count || settings.total_count || 0;
+        subjectiveSettingsByProblem.set(Number(currentProblemNumber), settings);
+        currentSubjectiveSettings = settings;
+    }
+    selectedSubjectiveBucketId = currentProblem.subjective_bucket_id || null;
+    const subjectiveNotesInput = document.getElementById('subjective-notes-input');
+    if (subjectiveNotesInput) {
+        subjectiveNotesInput.value = currentProblem.subjective_notes || '';
+    }
+
     // Update progress with blank count
     let progressText = `${currentProblem.current_index} / ${currentProblem.total_count}`;
     if (currentProblem.grading_mode === 'subjective') {
@@ -1211,21 +1306,6 @@ function displayCurrentProblem() {
         if (currentProblem.ungraded_blank > 0) {
             progressText += ` (${currentProblem.ungraded_blank} blank)`;
         }
-    }
-
-    const settings = getCurrentSubjectiveSettings();
-    if (settings) {
-        settings.grading_mode = currentProblem.grading_mode || settings.grading_mode || 'calculation';
-        settings.triaged_count = currentProblem.subjective_triaged_count || 0;
-        settings.untriaged_count = currentProblem.subjective_untriaged_count || 0;
-        settings.total_count = currentProblem.total_count || settings.total_count || 0;
-        subjectiveSettingsByProblem.set(Number(currentProblemNumber), settings);
-        currentSubjectiveSettings = settings;
-    }
-    selectedSubjectiveBucketId = currentProblem.subjective_bucket_id || null;
-    const subjectiveNotesInput = document.getElementById('subjective-notes-input');
-    if (subjectiveNotesInput) {
-        subjectiveNotesInput.value = currentProblem.subjective_notes || '';
     }
 
     document.getElementById('grading-progress').textContent = progressText;
@@ -1754,6 +1834,7 @@ async function submitSubjectiveTriage(options = {}) {
     }
 
     const notes = document.getElementById('subjective-notes-input').value.trim();
+    const previousBucketId = currentProblem.subjective_bucket_id || null;
     const assignBtn = document.getElementById('subjective-assign-btn');
     const originalText = assignBtn.textContent;
     subjectiveAssignInFlight = true;
@@ -1780,9 +1861,19 @@ async function submitSubjectiveTriage(options = {}) {
             throw new Error(payload?.detail || 'Failed to assign subjective bucket');
         }
 
-        const progressPromise = updateOverallProgress();
+        applyLocalSubjectiveStateUpdate({
+            triagedCount: payload?.triaged_count,
+            untriagedCount: payload?.untriaged_count,
+            finalizedCount: payload?.finalized_count,
+            bucketUsage: payload?.bucket_usage,
+            previousBucketId,
+            bucketId: selectedSubjectiveBucketId
+        });
+        currentProblem.subjective_bucket_id = selectedSubjectiveBucketId;
+        currentProblem.subjective_notes = notes || '';
+        currentProblem.subjective_triaged = true;
+
         await loadNextProblem();
-        await progressPromise;
     } catch (error) {
         console.error('Failed to assign subjective bucket:', error);
         alert(error.message || 'Failed to assign subjective bucket');
@@ -1801,6 +1892,7 @@ async function clearSubjectiveTriage() {
 
     const clearBtn = document.getElementById('subjective-clear-btn');
     const originalText = clearBtn.textContent;
+    const previousBucketId = currentProblem.subjective_bucket_id || null;
     clearBtn.disabled = true;
     clearBtn.textContent = 'Clearing...';
     try {
@@ -1817,13 +1909,18 @@ async function clearSubjectiveTriage() {
             throw new Error(payload?.detail || 'Failed to clear subjective triage');
         }
         selectedSubjectiveBucketId = null;
+        currentProblem.subjective_bucket_id = null;
+        currentProblem.subjective_notes = '';
+        currentProblem.subjective_triaged = false;
         document.getElementById('subjective-notes-input').value = '';
-        await loadSubjectiveSettings(currentProblemNumber, true);
-        renderSubjectiveBucketButtons();
-        renderSubjectiveBucketFilter();
-        renderSubjectiveBucketHistogram();
-        updateSubjectiveFinalizeButton();
-        await updateOverallProgress();
+        applyLocalSubjectiveStateUpdate({
+            triagedCount: payload?.triaged_count,
+            untriagedCount: payload?.untriaged_count,
+            finalizedCount: payload?.finalized_count,
+            bucketUsage: payload?.bucket_usage,
+            previousBucketId,
+            bucketId: null
+        });
     } catch (error) {
         console.error('Failed to clear subjective triage:', error);
         alert(error.message || 'Failed to clear subjective triage');

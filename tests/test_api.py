@@ -616,7 +616,11 @@ def test_subjective_settings_and_triage_flow(client, monkeypatch):
     json={"bucket_id": "perfect", "notes": "Strong work"}
   )
   assert triage_response.status_code == 200
-  assert triage_response.json()["status"] == "triaged"
+  triage_payload = triage_response.json()
+  assert triage_payload["status"] == "triaged"
+  assert triage_payload["previous_bucket_id"] is None
+  assert triage_payload["bucket_usage"]["perfect"] == 1
+  assert triage_payload["triaged_count"] == 1
 
   next_response = client.get(f"/api/problems/{session_id}/3/next")
   assert next_response.status_code == 200
@@ -662,6 +666,41 @@ def test_subjective_settings_and_triage_flow(client, monkeypatch):
   assert valid_update.status_code == 200
   updated_payload = valid_update.json()
   assert len(updated_payload["buckets"]) == 3
+
+
+def test_subjective_triage_clear_returns_bucket_usage(client):
+  """Clearing subjective triage should return updated bucket usage/counts."""
+  session_id = create_test_session(client, "Subjective Clear Usage")
+  _, problem_id = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=11
+  )
+
+  settings_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 11,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "good", "label": "Good"},
+      ]
+    }
+  )
+  assert settings_response.status_code == 200
+
+  triage_response = client.post(
+    f"/api/problems/{problem_id}/subjective-triage",
+    json={"bucket_id": "good", "notes": "First pass"}
+  )
+  assert triage_response.status_code == 200
+  assert triage_response.json()["bucket_usage"]["good"] == 1
+
+  clear_response = client.delete(f"/api/problems/{problem_id}/subjective-triage")
+  assert clear_response.status_code == 200
+  payload = clear_response.json()
+  assert payload["status"] == "cleared"
+  assert payload["cleared_bucket_id"] == "good"
+  assert payload["triaged_count"] == 0
+  assert payload["bucket_usage"] == {}
 
 
 def test_next_problem_supports_exclude_problem_ids(client, monkeypatch):

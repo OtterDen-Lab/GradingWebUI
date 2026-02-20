@@ -1386,6 +1386,9 @@ async def assign_subjective_triage(
       detail=f"Unknown bucket id '{request.bucket_id}' for this problem"
     )
 
+  existing_triage = triage_repo.get_for_problem(problem.id)
+  previous_bucket_id = existing_triage["bucket_id"] if existing_triage else None
+
   triage_repo.upsert(
     problem_id=problem.id,
     session_id=problem.session_id,
@@ -1398,14 +1401,21 @@ async def assign_subjective_triage(
   triaged_count = triage_repo.count_ungraded_for_problem_number(
     problem.session_id, problem.problem_number
   )
+  finalized_count = triage_repo.count_graded_for_problem_number(
+    problem.session_id, problem.problem_number
+  )
   untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
+  bucket_usage = triage_repo.get_bucket_counts(problem.session_id, problem.problem_number)
 
   return {
     "status": "triaged",
     "problem_id": problem_id,
     "problem_number": problem.problem_number,
+    "previous_bucket_id": previous_bucket_id,
     "bucket_id": request.bucket_id,
+    "bucket_usage": bucket_usage,
     "triaged_count": triaged_count,
+    "finalized_count": finalized_count,
     "untriaged_count": untriaged_count
   }
 
@@ -1429,18 +1439,28 @@ async def clear_subjective_triage(
     if not assignment_repo.is_user_assigned(problem.session_id, current_user["user_id"]):
       raise HTTPException(status_code=403, detail="You do not have access to this grading session")
 
+  existing_triage = triage_repo.get_for_problem(problem.id)
+  cleared_bucket_id = existing_triage["bucket_id"] if existing_triage else None
+
   triage_repo.clear(problem_id)
   counts = problem_repo.get_counts_for_problem_number(problem.session_id, problem.problem_number)
   triaged_count = triage_repo.count_ungraded_for_problem_number(
     problem.session_id, problem.problem_number
   )
+  finalized_count = triage_repo.count_graded_for_problem_number(
+    problem.session_id, problem.problem_number
+  )
   untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
+  bucket_usage = triage_repo.get_bucket_counts(problem.session_id, problem.problem_number)
 
   return {
     "status": "cleared",
     "problem_id": problem_id,
     "problem_number": problem.problem_number,
+    "cleared_bucket_id": cleared_bucket_id,
+    "bucket_usage": bucket_usage,
     "triaged_count": triaged_count,
+    "finalized_count": finalized_count,
     "untriaged_count": untriaged_count
   }
 
