@@ -17,6 +17,7 @@ let selectedSubjectiveBucketId = null;
 let activeSubjectiveBucketFilter = '';
 let subjectiveAssignInFlight = false;
 let gradingKeyboardShortcutsBound = false;
+const subjectiveFinalizeDraftByProblem = new Map();
 const PREFETCH_QUEUE_TARGET = 2;
 const prefetchedNextProblems = [];
 let prefetchQueueInFlight = false;
@@ -341,6 +342,38 @@ function sanitizeSubjectiveBucketId(label, fallbackIndex = 1) {
     return slug || `bucket_${fallbackIndex}`;
 }
 
+function bucketColorFromSeed(seedText) {
+    const seed = String(seedText || 'bucket');
+    let hash = 0;
+    for (let i = 0; i < seed.length; i += 1) {
+        hash = ((hash << 5) - hash) + seed.charCodeAt(i);
+        hash |= 0;
+    }
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 70%, 45%)`;
+}
+
+function getBucketColor(bucket, fallbackIndex = 1) {
+    const explicitColor = (bucket?.color || '').trim();
+    if (explicitColor) {
+        return explicitColor;
+    }
+    const seed = bucket?.id || bucket?.label || `bucket_${fallbackIndex}`;
+    return bucketColorFromSeed(seed);
+}
+
+function normalizeSubjectiveBuckets(rawBuckets = []) {
+    return rawBuckets.map((bucket, index) => {
+        const bucketLabel = (bucket?.label || '').trim() || `Bucket ${index + 1}`;
+        const bucketId = (bucket?.id || '').trim() || sanitizeSubjectiveBucketId(bucketLabel, index + 1);
+        return {
+            id: bucketId,
+            label: bucketLabel,
+            color: getBucketColor({ id: bucketId, label: bucketLabel, color: bucket?.color }, index + 1)
+        };
+    });
+}
+
 function getCurrentProblemMaxPoints() {
     const maxPointsInput = document.getElementById('max-points-input');
     const fromInput = parseFloat(maxPointsInput?.value || '');
@@ -394,7 +427,11 @@ async function loadSubjectiveSettings(problemNumber, force = false) {
         const settings = {
             problem_number: problemNumber,
             grading_mode: payload.grading_mode || 'calculation',
-            buckets: Array.isArray(payload.buckets) && payload.buckets.length > 0 ? payload.buckets : cloneDefaultSubjectiveBuckets(),
+            buckets: normalizeSubjectiveBuckets(
+                Array.isArray(payload.buckets) && payload.buckets.length > 0
+                    ? payload.buckets
+                    : cloneDefaultSubjectiveBuckets()
+            ),
             bucket_usage: payload.bucket_usage || {},
             triaged_count: payload.triaged_count || 0,
             finalized_count: payload.finalized_count || 0,
@@ -409,7 +446,7 @@ async function loadSubjectiveSettings(problemNumber, force = false) {
         const fallback = {
             problem_number: problemNumber,
             grading_mode: 'calculation',
-            buckets: cloneDefaultSubjectiveBuckets(),
+            buckets: normalizeSubjectiveBuckets(cloneDefaultSubjectiveBuckets()),
             bucket_usage: {},
             triaged_count: 0,
             finalized_count: 0,
@@ -511,11 +548,10 @@ function renderSubjectiveBucketButtons() {
         if (selectedSubjectiveBucketId === bucket.id) {
             button.classList.add('selected');
         }
-        if (bucket.color) {
-            button.style.borderColor = bucket.color;
-            if (selectedSubjectiveBucketId === bucket.id) {
-                button.style.boxShadow = `0 0 0 2px ${bucket.color}33`;
-            }
+        const bucketColor = getBucketColor(bucket);
+        button.style.borderColor = bucketColor;
+        if (selectedSubjectiveBucketId === bucket.id) {
+            button.style.boxShadow = `0 0 0 2px ${bucketColor}33`;
         }
         const usage = Number(settings.bucket_usage?.[bucket.id] || 0);
         button.textContent = usage > 0 ? `${bucket.label} (${usage})` : bucket.label;
@@ -611,7 +647,7 @@ function renderSubjectiveBucketHistogram() {
         const fill = document.createElement('div');
         fill.className = 'subjective-histogram-fill';
         fill.style.width = `${Math.max(0, Math.min(100, relativePct))}%`;
-        if (bucket.color) fill.style.background = bucket.color;
+        fill.style.background = getBucketColor(bucket);
         track.appendChild(fill);
 
         const value = document.createElement('div');
@@ -659,7 +695,7 @@ function renderSubjectiveBucketEditor() {
 
         const colorInput = document.createElement('input');
         colorInput.type = 'text';
-        colorInput.value = bucket.color || '';
+        colorInput.value = getBucketColor(bucket, index + 1);
         colorInput.placeholder = '#hex color';
 
         const controls = document.createElement('div');
@@ -742,10 +778,17 @@ function collectBucketsFromEditor() {
         }
         usedIds.add(bucketId);
         row.dataset.bucketId = bucketId;
+        const bucketColor = getBucketColor(
+            { id: bucketId, label: label || `Bucket ${idx + 1}`, color: (colorInput?.value || '').trim() || null },
+            idx + 1
+        );
+        if (colorInput && !(colorInput.value || '').trim()) {
+            colorInput.value = bucketColor;
+        }
         return {
             id: bucketId,
             label: label || `Bucket ${idx + 1}`,
-            color: (colorInput?.value || '').trim() || null
+            color: bucketColor
         };
     });
 }
@@ -759,13 +802,9 @@ async function saveSubjectiveSettings() {
     // Fall back to in-memory settings/defaults so mode toggle can persist cleanly.
     if (buckets.length === 0) {
         if (Array.isArray(settings.buckets) && settings.buckets.length > 0) {
-            buckets = settings.buckets.map((bucket, index) => ({
-                id: bucket.id || sanitizeSubjectiveBucketId(bucket.label || '', index + 1),
-                label: (bucket.label || '').trim() || `Bucket ${index + 1}`,
-                color: (bucket.color || null)
-            }));
+            buckets = normalizeSubjectiveBuckets(settings.buckets);
         } else if (settings.grading_mode === 'subjective') {
-            buckets = cloneDefaultSubjectiveBuckets();
+            buckets = normalizeSubjectiveBuckets(cloneDefaultSubjectiveBuckets());
         }
     }
     if (buckets.length === 0 && settings.grading_mode === 'subjective') {
@@ -797,7 +836,7 @@ async function saveSubjectiveSettings() {
     const updated = {
         problem_number: Number(currentProblemNumber),
         grading_mode: payload.grading_mode || settings.grading_mode,
-        buckets: payload.buckets || buckets,
+        buckets: normalizeSubjectiveBuckets(payload.buckets || buckets),
         bucket_usage: payload.bucket_usage || {},
         triaged_count: payload.triaged_count || 0,
         finalized_count: payload.finalized_count || 0,
@@ -1202,10 +1241,11 @@ function setupGradingControls() {
         const settings = getCurrentSubjectiveSettings();
         if (!settings) return;
         const nextIndex = settings.buckets.length + 1;
+        const newBucketId = `bucket_${Date.now()}_${nextIndex}`;
         settings.buckets.push({
-            id: `bucket_${Date.now()}_${nextIndex}`,
+            id: newBucketId,
             label: `Bucket ${nextIndex}`,
-            color: null
+            color: bucketColorFromSeed(newBucketId)
         });
         renderSubjectiveBucketEditor();
         renderSubjectiveBucketButtons();
@@ -2017,11 +2057,66 @@ async function clearSubjectiveTriage() {
     }
 }
 
-function closeSubjectiveFinalizeDialog() {
-  const dialog = document.getElementById('subjective-finalize-dialog');
-  if (dialog) {
-    dialog.style.display = 'none';
-  }
+function captureSubjectiveFinalizeDraft(problemNumber = Number(currentProblemNumber)) {
+    if (!problemNumber) return;
+    const rows = [...document.querySelectorAll('#subjective-finalize-rows .subjective-finalize-row')];
+    if (rows.length === 0) return;
+
+    const draft = {};
+    let hasValues = false;
+    rows.forEach((row) => {
+        const bucketId = row.dataset.bucketId;
+        if (!bucketId) return;
+        const scoreInput = row.querySelector('.subjective-finalize-score');
+        const feedbackInput = row.querySelector('.subjective-finalize-feedback');
+        const score = (scoreInput?.value || '').trim();
+        const feedback = (feedbackInput?.value || '').trim();
+        draft[bucketId] = { score, feedback };
+        if (score || feedback) {
+            hasValues = true;
+        }
+    });
+
+    if (hasValues) {
+        subjectiveFinalizeDraftByProblem.set(Number(problemNumber), draft);
+    } else {
+        subjectiveFinalizeDraftByProblem.delete(Number(problemNumber));
+    }
+}
+
+function restoreSubjectiveFinalizeDraft(problemNumber = Number(currentProblemNumber)) {
+    const draft = subjectiveFinalizeDraftByProblem.get(Number(problemNumber));
+    if (!draft) return;
+
+    const rows = [...document.querySelectorAll('#subjective-finalize-rows .subjective-finalize-row')];
+    rows.forEach((row) => {
+        const bucketId = row.dataset.bucketId;
+        const bucketDraft = draft[bucketId];
+        if (!bucketDraft) return;
+        const scoreInput = row.querySelector('.subjective-finalize-score');
+        const feedbackInput = row.querySelector('.subjective-finalize-feedback');
+        if (scoreInput) {
+            scoreInput.value = bucketDraft.score || '';
+        }
+        if (feedbackInput) {
+            feedbackInput.value = bucketDraft.feedback || '';
+        }
+    });
+}
+
+function clearSubjectiveFinalizeDraft(problemNumber = Number(currentProblemNumber)) {
+    subjectiveFinalizeDraftByProblem.delete(Number(problemNumber));
+}
+
+function closeSubjectiveFinalizeDialog(options = {}) {
+    const { preserveDraft = true } = options;
+    if (preserveDraft) {
+        captureSubjectiveFinalizeDraft();
+    }
+    const dialog = document.getElementById('subjective-finalize-dialog');
+    if (dialog) {
+        dialog.style.display = 'none';
+    }
 }
 
 async function openRandomBucketSample(bucketId) {
@@ -2040,6 +2135,7 @@ async function openRandomBucketSample(bucketId) {
             throw new Error(payload?.detail || 'Failed to load bucket sample');
         }
 
+        captureSubjectiveFinalizeDraft(Number(currentProblemNumber));
         closeSubjectiveFinalizeDialog();
         currentProblem = payload;
         activeSubjectiveBucketFilter = bucketId;
@@ -2187,6 +2283,7 @@ async function openSubjectiveFinalizeDialog() {
         return;
     }
 
+    restoreSubjectiveFinalizeDraft(Number(currentProblemNumber));
     document.getElementById('subjective-finalize-dialog').style.display = 'flex';
 }
 
@@ -2259,7 +2356,8 @@ async function submitSubjectiveFinalize() {
             throw new Error(payload?.detail || 'Failed to finalize subjective scores');
         }
 
-        closeSubjectiveFinalizeDialog();
+        clearSubjectiveFinalizeDraft(targetProblemNumber);
+        closeSubjectiveFinalizeDialog({ preserveDraft: false });
         invalidateNextProblemPrefetch();
         await loadSubjectiveSettings(targetProblemNumber, true);
         await updateOverallProgress();
