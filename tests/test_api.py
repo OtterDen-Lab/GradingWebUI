@@ -711,6 +711,61 @@ def test_next_problem_supports_exclude_problem_ids(client, monkeypatch):
   assert "exclude_problem_ids" in invalid_response.json()["detail"]
 
 
+def test_decipher_default_uses_anthropic(client, monkeypatch):
+  """Default decipher should use Anthropic helper, not Ollama."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  session_id = create_test_session(client, "Decipher Default")
+  _, problem_id = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=8
+  )
+
+  monkeypatch.setattr(
+    problems_routes,
+    "get_problem_image_data",
+    lambda problem, submission_repo=None: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+  )
+
+  class _FakeAnthropic:
+    @classmethod
+    def query_ai(cls, *args, **kwargs):
+      return ("transcribed text", {"model": "claude-sonnet-4-5"})
+
+  class _FakeOllama:
+    @classmethod
+    def query_ai(cls, *args, **kwargs):
+      raise AssertionError("Ollama should not be called for default decipher")
+
+  monkeypatch.setattr(problems_routes.ai_helper, "AI_Helper__Anthropic", _FakeAnthropic)
+  monkeypatch.setattr(problems_routes.ai_helper, "AI_Helper__Ollama", _FakeOllama)
+
+  response = client.post(f"/api/problems/{problem_id}/decipher?model=default")
+  assert response.status_code == 200
+  payload = response.json()
+  assert payload["transcription"] == "transcribed text"
+  assert payload["model"] == "Anthropic (claude-sonnet-4-5)"
+
+
+def test_decipher_ollama_disabled_by_default(client, monkeypatch):
+  """Ollama decipher should be rejected unless explicitly enabled."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  session_id = create_test_session(client, "Decipher Ollama Disabled")
+  _, problem_id = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=9
+  )
+
+  monkeypatch.setattr(
+    problems_routes,
+    "get_problem_image_data",
+    lambda problem, submission_repo=None: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+  )
+
+  response = client.post(f"/api/problems/{problem_id}/decipher?model=ollama")
+  assert response.status_code == 400
+  assert "disabled" in response.json()["detail"].lower()
+
+
 def test_subjective_finalize_applies_bucket_scores(client):
   """Finalizing subjective buckets should grade all triaged responses."""
   session_id = create_test_session(client, "Subjective Finalize")

@@ -4,7 +4,7 @@ import os
 import random
 import re
 import ollama
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Optional
 
 import dotenv
 import openai.types.chat.completion_create_params
@@ -19,6 +19,46 @@ log = logging.getLogger(__name__)
 # Constants
 DEFAULT_MAX_TOKENS = 1000  # Default token limit for AI responses
 DEFAULT_MAX_RETRIES = 3  # Default number of retries for failed requests
+
+# Provider model defaults (can be overridden via environment variables):
+# ANTHROPIC_MODEL_SMALL/MEDIUM/LARGE
+# OPENAI_MODEL_SMALL/MEDIUM/LARGE
+# OLLAMA_MODEL_SMALL/MEDIUM/LARGE
+MODEL_CONFIG = {
+  "anthropic": {
+    "small": "claude-haiku-4-5",
+    "medium": "claude-sonnet-4-5",
+    "large": "claude-opus-4-5",
+  },
+  "openai": {
+    "small": "gpt-4.1-nano",
+    "medium": "gpt-4.1-mini",
+    "large": "gpt-4.1",
+  },
+  "ollama": {
+    "small": "qwen3:4b",
+    "medium": "qwen3:14b",
+    "large": "qwen3:32b",
+  },
+}
+
+DEFAULT_MODEL_TIER = "medium"
+
+
+def get_model_for_tier(provider: str, tier: str = DEFAULT_MODEL_TIER) -> str:
+  provider_key = (provider or "").strip().lower()
+  tier_key = (tier or DEFAULT_MODEL_TIER).strip().lower()
+
+  provider_models = MODEL_CONFIG.get(provider_key, {})
+  if tier_key not in provider_models:
+    tier_key = "small"
+
+  env_key = f"{provider_key.upper()}_MODEL_{tier_key.upper()}"
+  env_value = os.getenv(env_key, "").strip()
+  if env_value:
+    return env_value
+
+  return provider_models.get(tier_key, "unknown")
 
 
 class AI_Helper(abc.ABC):
@@ -43,17 +83,22 @@ class AI_Helper__Anthropic(AI_Helper):
     self.__class__._client = Anthropic()
 
   @classmethod
-  def _candidate_models(cls) -> List[str]:
-    primary = os.getenv("ANTHROPIC_MODEL",
-                        "claude-3-5-sonnet-latest").strip()
+  def _candidate_models(cls,
+                        explicit_models: Optional[List[str]] = None) -> List[str]:
+    primary = os.getenv("ANTHROPIC_MODEL", "").strip()
+    if not primary:
+      primary = get_model_for_tier("anthropic", "medium")
+
     fallback_csv = os.getenv("ANTHROPIC_FALLBACK_MODELS",
-                             "claude-3-5-haiku-latest")
+                             "claude-3-7-sonnet-latest,claude-3-5-sonnet-latest,claude-haiku-4-5,claude-3-5-haiku-latest")
     fallbacks = [
       model.strip() for model in fallback_csv.split(",") if model.strip()
     ]
 
+    seed_models = explicit_models if explicit_models else [primary]
+
     models: List[str] = []
-    for model in [primary, *fallbacks]:
+    for model in [*seed_models, *fallbacks]:
       if model and model not in models:
         models.append(model)
     return models
@@ -72,7 +117,8 @@ class AI_Helper__Anthropic(AI_Helper):
                message: str,
                attachments: List[Tuple[str, str]],
                max_response_tokens: int = DEFAULT_MAX_TOKENS,
-               max_retries: int = DEFAULT_MAX_RETRIES) -> Tuple[str, Dict]:
+               max_retries: int = DEFAULT_MAX_RETRIES,
+               candidate_models: Optional[List[str]] = None) -> Tuple[str, Dict]:
     messages = []
 
     attachment_messages = []
@@ -97,7 +143,7 @@ class AI_Helper__Anthropic(AI_Helper):
     })
 
     last_error = None
-    candidate_models = cls._candidate_models()
+    candidate_models = cls._candidate_models(candidate_models)
 
     for index, model_name in enumerate(candidate_models):
       try:

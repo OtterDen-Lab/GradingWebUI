@@ -1,4 +1,5 @@
 // User Management - Create and manage instructor/TA accounts
+let latestGeneratedPassword = '';
 
 // Initialize user management when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
@@ -33,6 +34,32 @@ function setupUserManagementListeners() {
             navigateToSection('session-section');
         };
     }
+
+    setupCopyPasswordButton();
+}
+
+function setupCopyPasswordButton() {
+    const copyBtn = document.getElementById('copy-password-btn');
+    if (!copyBtn) return;
+
+    copyBtn.onclick = () => {
+        const passwordToCopy =
+            latestGeneratedPassword ||
+            document.getElementById('generated-password')?.textContent ||
+            '';
+
+        if (!passwordToCopy) {
+            return;
+        }
+
+        navigator.clipboard.writeText(passwordToCopy).then(() => {
+            const originalText = copyBtn.textContent;
+            copyBtn.textContent = '✓ Copied!';
+            setTimeout(() => {
+                copyBtn.textContent = originalText;
+            }, 2000);
+        });
+    };
 }
 
 // Load and display all users
@@ -191,20 +218,9 @@ async function createUser() {
         const newUser = await response.json();
 
         // Show success with generated password
+        latestGeneratedPassword = password;
         document.getElementById('generated-password').textContent = password;
         successDiv.style.display = 'block';
-
-        // Setup copy button
-        document.getElementById('copy-password-btn').onclick = () => {
-            navigator.clipboard.writeText(password).then(() => {
-                const btn = document.getElementById('copy-password-btn');
-                const originalText = btn.textContent;
-                btn.textContent = '✓ Copied!';
-                setTimeout(() => {
-                    btn.textContent = originalText;
-                }, 2000);
-            });
-        };
 
         // Clear form fields but keep the success message visible
         document.getElementById('user-username').value = '';
@@ -263,4 +279,5 @@ function showUserFormError(message) {
 function resetUserForm() {
     document.getElementById('user-form').reset();
     document.getElementById('user-form-error').style.display = 'none';
+    latestGeneratedPassword = '';
 }

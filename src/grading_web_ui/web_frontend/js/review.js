@@ -272,7 +272,7 @@ document.getElementById('review-decipher-btn').addEventListener('click', async (
     transcriptionDialog.style.display = 'flex';
 
     try {
-        const transcription = await fetchTranscription(problemId, false);
+        const transcription = await fetchTranscription(problemId, 'default');
         displayTranscription(transcription);
     } catch (error) {
         console.error('Failed to decipher handwriting:', error);

@@ -2771,8 +2771,8 @@ closeTranscription.addEventListener('click', () => {
 
 // Function to fetch transcription (with caching)
 async function fetchTranscription(problemId, model = 'default') {
-    // Normalize 'default' to 'ollama' for caching since they use the same backend model
-    const cacheKey = model === 'default' ? 'ollama' : model;
+    // Normalize 'default' to 'sonnet' for caching since default routes to Anthropic.
+    const cacheKey = model === 'default' ? 'sonnet' : model;
 
     // Check cache first
     if (transcriptionCache[problemId] && transcriptionCache[problemId][cacheKey]) {
@@ -2787,7 +2787,16 @@ async function fetchTranscription(problemId, model = 'default') {
     const response = await fetch(url, { method: 'POST' });
 
     if (!response.ok) {
-        throw new Error('Transcription failed');
+        let detail = 'Transcription failed';
+        try {
+            const errorPayload = await response.json();
+            if (errorPayload?.detail) {
+                detail = errorPayload.detail;
+            }
+        } catch (_error) {
+            // Keep default detail
+        }
+        throw new Error(detail);
     }
 
     const data = await response.json();
@@ -2815,9 +2824,6 @@ function displayTranscription(transcription) {
     transcriptionActions.style.display = 'block';
     transcriptionActions.innerHTML = `
         <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
-            <button id="retry-ollama-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                Try Ollama
-            </button>
             <button id="retry-sonnet-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
                 Try Sonnet
             </button>
@@ -2828,7 +2834,6 @@ function displayTranscription(transcription) {
     `;
 
     // Add event listeners for the new buttons
-    document.getElementById('retry-ollama-btn').addEventListener('click', () => retryWithModel('ollama'));
     document.getElementById('retry-sonnet-btn').addEventListener('click', () => retryWithModel('sonnet'));
     document.getElementById('retry-opus-btn').addEventListener('click', () => retryWithModel('opus'));
 }
@@ -2838,7 +2843,7 @@ async function retryWithModel(model) {
     if (!currentProblem) return;
 
     const modelNames = {
-        'ollama': 'Ollama (Local)',
+        'default': 'Anthropic',
         'sonnet': 'Sonnet',
         'opus': 'Opus (Premium)'
     };
@@ -2852,7 +2857,8 @@ async function retryWithModel(model) {
         displayTranscription(transcription);
     } catch (error) {
         console.error(`Failed to decipher with ${model}:`, error);
-        transcriptionText.innerHTML = `<div style="color: var(--danger-color);">Failed to transcribe with ${modelNames[model]}. Please try again.</div>`;
+        const modelLabel = modelNames[model] || model;
+        transcriptionText.innerHTML = `<div style="color: var(--danger-color);">Failed to transcribe with ${modelLabel}. ${error.message}</div>`;
         // Show buttons again so user can retry
         transcriptionActions.style.display = 'block';
     }
@@ -2865,16 +2871,16 @@ async function updateTranscriptionDialog() {
         return;
     }
 
-    // Check if we have a cached transcription for this problem (default to ollama)
-    const cacheKey = 'ollama';
+    // Check if we have a cached transcription for this problem (default to sonnet)
+    const cacheKey = 'sonnet';
     if (transcriptionCache[currentProblem.id] && transcriptionCache[currentProblem.id][cacheKey]) {
         // Show cached transcription immediately
         console.log(`Showing cached transcription for problem ${currentProblem.id}`);
         displayTranscription(transcriptionCache[currentProblem.id][cacheKey]);
     } else {
-        // No cache - fetch new transcription with Ollama
+        // No cache - fetch new transcription with Anthropic default
         console.log(`No cache found, fetching new transcription for problem ${currentProblem.id}`);
-        transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with Ollama...</div>';
+        transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with Anthropic...</div>';
         transcriptionActions.style.display = 'none';
 
         try {
@@ -2882,7 +2888,7 @@ async function updateTranscriptionDialog() {
             displayTranscription(transcription);
         } catch (error) {
             console.error('Failed to auto-fetch transcription:', error);
-            transcriptionText.innerHTML = '<div style="color: var(--danger-color);">Failed to transcribe handwriting. Please try again.</div>';
+            transcriptionText.innerHTML = `<div style="color: var(--danger-color);">Failed to transcribe handwriting. ${error.message}</div>`;
             transcriptionActions.style.display = 'block';
         }
     }
@@ -2958,7 +2964,7 @@ contextDialog.addEventListener('click', (e) => {
     }
 });
 
-// Decipher handwriting button (defaults to Ollama)
+// Decipher handwriting button (defaults to Anthropic)
 decipherBtn.addEventListener('click', async () => {
     if (!currentProblem) {
         alert('No problem loaded');
@@ -2966,17 +2972,17 @@ decipherBtn.addEventListener('click', async () => {
     }
 
     // Show dialog with loading state
-    transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with Ollama...</div>';
+    transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with Anthropic...</div>';
     transcriptionActions.style.display = 'none';
     transcriptionDialog.style.display = 'flex';
 
     try {
-        // Default to 'default' which uses Ollama
+        // Default to 'default' which uses Anthropic Sonnet-family candidates
         const transcription = await fetchTranscription(currentProblem.id, 'default');
         displayTranscription(transcription);
     } catch (error) {
         console.error('Failed to decipher handwriting:', error);
-        transcriptionText.innerHTML = '<div style="color: var(--danger-color);">Failed to transcribe handwriting. Please try again.</div>';
+        transcriptionText.innerHTML = `<div style="color: var(--danger-color);">Failed to transcribe handwriting. ${error.message}</div>`;
 
         // Show model selection buttons
         transcriptionActions.style.display = 'block';

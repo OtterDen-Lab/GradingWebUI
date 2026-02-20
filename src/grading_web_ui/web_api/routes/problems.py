@@ -217,6 +217,21 @@ def _parse_exclude_problem_ids_param(raw_value: Optional[str]) -> list[int]:
   return list(dict.fromkeys(exclude_ids))
 
 
+def _parse_model_csv(raw_value: str) -> list[str]:
+  return [
+    value.strip() for value in (raw_value or "").split(",") if value.strip()
+  ]
+
+
+def _is_truthy(raw_value: str) -> bool:
+  return (raw_value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _ollama_transcription_enabled() -> bool:
+  # Disabled by default due operational reliability issues.
+  return _is_truthy(os.getenv("ENABLE_OLLAMA_DECIPHER", "false"))
+
+
 def _get_subjective_settings(session_id: int, problem_number: int) -> tuple[str, list[dict]]:
   metadata_repo = ProblemMetadataRepository()
   grading_mode = metadata_repo.get_grading_mode(session_id, problem_number)
@@ -1071,8 +1086,8 @@ async def decipher_handwriting(
 
     Args:
         problem_id: ID of the problem to transcribe
-        model: AI model to use ("default", "ollama", "sonnet", "opus")
-               "default" uses Ollama (cheapest, may have quality issues)
+        model: AI model to use ("default", "sonnet", "opus", "ollama")
+               "default" uses Anthropic Sonnet-family candidates
     """
   problem_repo = ProblemRepository()
   submission_repo = SubmissionRepository()
@@ -1095,48 +1110,57 @@ async def decipher_handwriting(
   query = "Transcribe all handwritten text from this image. Output only the transcribed text."
 
   try:
+    selected_model = (model or "default").strip().lower()
+
     # Select AI provider based on model parameter
-    if model == "opus":
-      # Use Opus directly via Anthropic client
+    if selected_model == "opus":
       ai = ai_helper.AI_Helper__Anthropic()
-      response = ai._client.messages.create(
-        model="claude-opus-4-20250514",  # Most capable model
-        max_tokens=2000,
-        messages=[{
-          "role":
-          "user",
-          "content": [{
-            "type": "text",
-            "text": query
-          }, {
-            "type": "image",
-            "source": {
-              "type": "base64",
-              "media_type": "image/png",
-              "data": image_base64
-            }
-          }]
-        }])
-      transcription = response.content[0].text
-      model_name = "Opus (Premium)"
-    elif model == "sonnet":
-      # Use Sonnet via standard query_ai
+      opus_candidates = _parse_model_csv(
+        os.getenv("ANTHROPIC_OPUS_MODELS",
+                  "claude-opus-4-5,claude-opus-4-20250514")
+      )
+      opus_fallbacks = _parse_model_csv(
+        os.getenv(
+          "ANTHROPIC_OPUS_FALLBACK_MODELS",
+          "claude-sonnet-4-5,claude-3-7-sonnet-latest,claude-3-5-sonnet-latest"
+        )
+      )
+      response, usage = ai.query_ai(
+        query,
+        attachments=[("png", image_base64)],
+        candidate_models=[*opus_candidates, *opus_fallbacks]
+      )
+      transcription = response
+      used_model = usage.get("model", "unknown")
+      model_name = (
+        f"Opus (Premium: {used_model})"
+        if used_model in set(opus_candidates) else
+        f"Anthropic fallback ({used_model})"
+      )
+    elif selected_model in ("default", "sonnet"):
       ai = ai_helper.AI_Helper__Anthropic()
-      response, _ = ai.query_ai(query, attachments=[("png", image_base64)])
+      response, usage = ai.query_ai(query, attachments=[("png", image_base64)])
       transcription = response
-      model_name = "Sonnet"
-    elif model == "ollama":
-      # Use Ollama explicitly
+      model_name = f"Anthropic ({usage.get('model', 'unknown')})"
+    elif selected_model == "ollama":
+      if not _ollama_transcription_enabled():
+        raise HTTPException(
+          status_code=400,
+          detail=(
+            "Ollama transcription is disabled. Use 'default' (Anthropic) or "
+            "'sonnet'/'opus' instead."
+          )
+        )
+
       ai = ai_helper.AI_Helper__Ollama()
-      response, _ = ai.query_ai(query, attachments=[("png", image_base64)])
+      response, usage = ai.query_ai(query, attachments=[("png", image_base64)])
       transcription = response
-      model_name = f"Ollama ({os.getenv('OLLAMA_MODEL', 'qwen3-vl:2b')})"
-    else:  # "default" or any other value
-      # Default to Ollama (cheapest, may have quality issues)
-      ai = ai_helper.AI_Helper__Ollama()
-      response, _ = ai.query_ai(query, attachments=[("png", image_base64)])
-      transcription = response
-      model_name = f"Ollama ({os.getenv('OLLAMA_MODEL', 'qwen3-vl:2b')})"
+      model_name = f"Ollama ({usage.get('model', os.getenv('OLLAMA_MODEL', 'qwen3-vl:2b'))})"
+    else:
+      raise HTTPException(
+        status_code=400,
+        detail="Unknown model. Expected one of: default, sonnet, opus, ollama"
+      )
 
     # Validate transcription is not empty
     if not transcription or not transcription.strip():
@@ -1155,6 +1179,8 @@ async def decipher_handwriting(
       "transcription": transcription.strip(),
       "model": model_name
     }
+  except HTTPException:
+    raise
   except Exception as e:
     import traceback
     log.error(f"Transcription failed: {traceback.format_exc()}")
