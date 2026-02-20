@@ -104,10 +104,39 @@ document.getElementById('problem-selector-review-btn').addEventListener('click',
     await openReviewForProblem(selectedProblem);
 });
 
-// Function to open review directly from stat card click
-function reviewProblemFromStats(problemNumber) {
+// Function to jump directly into grading from stats card click
+async function reviewProblemFromStats(problemNumber) {
     if (!currentSession) return;
-    openReviewForProblem(problemNumber);
+
+    const targetProblemNumber = Number(problemNumber);
+    if (!Number.isInteger(targetProblemNumber) || targetProblemNumber <= 0) {
+        return;
+    }
+
+    try {
+        // Avoid grading-section auto-init from the navigation hook; we are
+        // loading a specific problem via dropdown-equivalent flow below.
+        window.__skipNextGradingInitialize = true;
+        navigateToSection('grading-section');
+
+        const problemSelect = document.getElementById('problem-select');
+        if (problemSelect) {
+            problemSelect.value = String(targetProblemNumber);
+        }
+
+        currentProblemNumber = targetProblemNumber;
+        activeSubjectiveBucketFilter = '';
+        invalidateNextProblemPrefetch();
+        await loadSubjectiveSettings(targetProblemNumber, true);
+        applyGradingModeUI();
+        updateMaxPointsDropdown();
+        const progressPromise = updateOverallProgress();
+        await loadProblemOrMostRecent();
+        await progressPromise;
+    } catch (error) {
+        console.error('Failed to open problem from stats:', error);
+        alert('Failed to open problem from stats: ' + error.message);
+    }
 }
 
 // Close review dialog

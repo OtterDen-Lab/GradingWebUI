@@ -2060,11 +2060,12 @@ async function openRandomBucketSample(bucketId) {
 
 async function submitSubjectiveReopen(options = {}) {
     if (!currentSession || !currentProblemNumber) return;
+    const targetProblemNumber = Number(currentProblemNumber);
 
     const { openFinalizeDialog = false } = options;
     const confirmMessage = openFinalizeDialog
-        ? `Adjust finalized scores for Problem ${currentProblemNumber}?\n\nThis keeps bucket assignments, clears current scores/feedback, and opens the scoring dialog.`
-        : `Reopen subjective scores for Problem ${currentProblemNumber}?\n\nThis will clear current scores/feedback and return responses to triaged state.`;
+        ? `Adjust finalized scores for Problem ${targetProblemNumber}?\n\nThis keeps bucket assignments, clears current scores/feedback, and opens the scoring dialog.`
+        : `Reopen subjective scores for Problem ${targetProblemNumber}?\n\nThis will clear current scores/feedback and return responses to triaged state.`;
 
     if (!confirm(confirmMessage)) {
         return;
@@ -2079,7 +2080,7 @@ async function submitSubjectiveReopen(options = {}) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                problem_number: Number(currentProblemNumber)
+                problem_number: targetProblemNumber
             })
         });
         let payload = null;
@@ -2092,15 +2093,20 @@ async function submitSubjectiveReopen(options = {}) {
             throw new Error(payload?.detail || 'Failed to reopen subjective scores');
         }
 
-        await loadSubjectiveSettings(Number(currentProblemNumber), true);
+        currentProblemNumber = targetProblemNumber;
+        const problemSelect = document.getElementById('problem-select');
+        if (problemSelect) {
+            problemSelect.value = String(targetProblemNumber);
+        }
+        await loadSubjectiveSettings(targetProblemNumber, true);
         await updateOverallProgress();
         invalidateNextProblemPrefetch();
         await loadProblemOrMostRecent();
         if (openFinalizeDialog) {
             await openSubjectiveFinalizeDialog();
-            showNotification(`Ready to rescore ${payload.reopened_count || 0} responses for Problem ${currentProblemNumber}.`);
+            showNotification(`Ready to rescore ${payload.reopened_count || 0} responses for Problem ${targetProblemNumber}.`);
         } else {
-            showNotification(`Reopened ${payload.reopened_count || 0} responses for Problem ${currentProblemNumber}.`);
+            showNotification(`Reopened ${payload.reopened_count || 0} responses for Problem ${targetProblemNumber}.`);
         }
     } catch (error) {
         console.error('Failed to reopen subjective scores:', error);
@@ -2213,6 +2219,7 @@ function collectSubjectiveFinalizePayload() {
 
 async function submitSubjectiveFinalize() {
     if (!currentSession || !currentProblemNumber) return;
+    const targetProblemNumber = Number(currentProblemNumber);
 
     let bucketScores;
     try {
@@ -2222,7 +2229,7 @@ async function submitSubjectiveFinalize() {
         return;
     }
 
-    if (!confirm(`Apply subjective scores for Problem ${currentProblemNumber}? This will mark all triaged responses as graded.`)) {
+    if (!confirm(`Apply subjective scores for Problem ${targetProblemNumber}? This will mark all triaged responses as graded.`)) {
         return;
     }
 
@@ -2236,7 +2243,7 @@ async function submitSubjectiveFinalize() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                problem_number: Number(currentProblemNumber),
+                problem_number: targetProblemNumber,
                 bucket_scores: bucketScores
             })
         });
@@ -2254,11 +2261,11 @@ async function submitSubjectiveFinalize() {
 
         closeSubjectiveFinalizeDialog();
         invalidateNextProblemPrefetch();
-        await loadSubjectiveSettings(Number(currentProblemNumber), true);
+        await loadSubjectiveSettings(targetProblemNumber, true);
         await updateOverallProgress();
         updateSubjectiveFinalizeButton();
         await loadNextProblem();
-        showNotification(`Finalized ${payload.graded_count || 0} responses for Problem ${currentProblemNumber}.`);
+        showNotification(`Finalized ${payload.graded_count || 0} responses for Problem ${targetProblemNumber}.`);
     } catch (error) {
         console.error('Failed to finalize subjective scores:', error);
         alert(error.message || 'Failed to finalize subjective scores');
@@ -2428,7 +2435,7 @@ async function loadStatistics() {
 
         // Add per-problem stats
         if (stats.problem_stats.length > 0) {
-            container.innerHTML += '<h3 style="margin-top: 30px;">Per-Problem Statistics <small style="font-size: 14px; font-weight: normal; color: var(--gray-600);">(click a card to review)</small></h3>';
+            container.innerHTML += '<h3 style="margin-top: 30px;">Per-Problem Statistics <small style="font-size: 14px; font-weight: normal; color: var(--gray-600);">(click a card to open in grading)</small></h3>';
             const problemStatsHtml = stats.problem_stats.map(ps => {
                 const problemProgress = ps.num_total > 0 ? (ps.num_graded / ps.num_total * 100) : 0;
 

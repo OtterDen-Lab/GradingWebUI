@@ -446,10 +446,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sectionId === 'matching-section') {
             loadNameMatching();
         } else if (sectionId === 'grading-section') {
-            if (typeof window.initializeGrading === 'function') {
-                window.initializeGrading();
-            } else {
-                console.error('initializeGrading is not available on window');
+            const skipInit = Boolean(window.__skipNextGradingInitialize);
+            window.__skipNextGradingInitialize = false;
+            if (!skipInit) {
+                if (typeof window.initializeGrading === 'function') {
+                    window.initializeGrading();
+                } else {
+                    console.error('initializeGrading is not available on window');
+                }
             }
         } else if (sectionId === 'stats-section') {
             loadStatistics();
