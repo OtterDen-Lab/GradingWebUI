@@ -477,6 +477,15 @@ function toNonNegativeNumber(value, fallback = 0) {
     return Math.max(0, parsed);
 }
 
+function getEstimatedRemainingBlankCount() {
+    if (!currentProblem || currentProblem.grading_mode !== 'subjective') {
+        return 0;
+    }
+    const remaining = toNonNegativeNumber(currentProblem.subjective_untriaged_count, 0);
+    const ungradedBlank = toNonNegativeNumber(currentProblem.ungraded_blank, 0);
+    return Math.min(remaining, ungradedBlank);
+}
+
 function applyLocalSubjectiveStateUpdate({
     triagedCount = null,
     untriagedCount = null,
@@ -672,7 +681,12 @@ function renderSubjectiveBucketHistogram() {
     if (untriaged > 0) {
         const remaining = document.createElement('div');
         remaining.style.cssText = 'margin-top: 4px; font-size: 12px; color: var(--gray-700);';
-        remaining.textContent = `Remaining untriaged: ${untriaged}`;
+        const estimatedBlank = getEstimatedRemainingBlankCount();
+        if (estimatedBlank > 0) {
+            remaining.textContent = `Remaining untriaged: ${untriaged} (est. blank: ${estimatedBlank})`;
+        } else {
+            remaining.textContent = `Remaining untriaged: ${untriaged}`;
+        }
         container.appendChild(remaining);
     }
 }
@@ -709,9 +723,12 @@ function renderSubjectiveBucketEditor() {
         moveUpBtn.textContent = 'Up';
         moveUpBtn.disabled = index === 0;
         moveUpBtn.onclick = () => {
+            syncSubjectiveBucketsFromEditor();
+            const latestSettings = getCurrentSubjectiveSettings();
+            if (!latestSettings) return;
             if (index === 0) return;
-            const movedBucket = settings.buckets.splice(index, 1)[0];
-            settings.buckets.splice(index - 1, 0, movedBucket);
+            const movedBucket = latestSettings.buckets.splice(index, 1)[0];
+            latestSettings.buckets.splice(index - 1, 0, movedBucket);
             renderSubjectiveBucketEditor();
             renderSubjectiveBucketButtons();
             renderSubjectiveBucketFilter();
@@ -724,9 +741,12 @@ function renderSubjectiveBucketEditor() {
         moveDownBtn.textContent = 'Down';
         moveDownBtn.disabled = index === settings.buckets.length - 1;
         moveDownBtn.onclick = () => {
-            if (index >= settings.buckets.length - 1) return;
-            const movedBucket = settings.buckets.splice(index, 1)[0];
-            settings.buckets.splice(index + 1, 0, movedBucket);
+            syncSubjectiveBucketsFromEditor();
+            const latestSettings = getCurrentSubjectiveSettings();
+            if (!latestSettings) return;
+            if (index >= latestSettings.buckets.length - 1) return;
+            const movedBucket = latestSettings.buckets.splice(index, 1)[0];
+            latestSettings.buckets.splice(index + 1, 0, movedBucket);
             renderSubjectiveBucketEditor();
             renderSubjectiveBucketButtons();
             renderSubjectiveBucketFilter();
@@ -738,7 +758,10 @@ function renderSubjectiveBucketEditor() {
         removeBtn.className = 'btn btn-secondary btn-small';
         removeBtn.textContent = 'Remove';
         removeBtn.onclick = () => {
-            settings.buckets.splice(index, 1);
+            syncSubjectiveBucketsFromEditor();
+            const latestSettings = getCurrentSubjectiveSettings();
+            if (!latestSettings) return;
+            latestSettings.buckets.splice(index, 1);
             if (selectedSubjectiveBucketId === bucket.id) {
                 selectedSubjectiveBucketId = null;
             }
@@ -791,6 +814,16 @@ function collectBucketsFromEditor() {
             color: bucketColor
         };
     });
+}
+
+function syncSubjectiveBucketsFromEditor() {
+    const settings = getCurrentSubjectiveSettings();
+    if (!settings) return;
+    const buckets = collectBucketsFromEditor();
+    if (buckets.length === 0) return;
+    settings.buckets = buckets;
+    currentSubjectiveSettings = settings;
+    subjectiveSettingsByProblem.set(Number(currentProblemNumber), settings);
 }
 
 async function saveSubjectiveSettings() {
@@ -1426,7 +1459,10 @@ function displayCurrentProblem() {
     if (currentProblem.grading_mode === 'subjective') {
         progressText = `${currentProblem.subjective_triaged_count} triaged / ${currentProblem.total_count}`;
         if (currentProblem.subjective_untriaged_count > 0) {
-            progressText += ` (${currentProblem.subjective_untriaged_count} remaining)`;
+            const estimatedBlank = getEstimatedRemainingBlankCount();
+            progressText += estimatedBlank > 0
+                ? ` (${currentProblem.subjective_untriaged_count} remaining, est. blank ${estimatedBlank})`
+                : ` (${currentProblem.subjective_untriaged_count} remaining)`;
         }
     } else if (currentProblem.ungraded_blank > 0 || currentProblem.ungraded_nonblank > 0) {
         if (currentProblem.ungraded_blank > 0) {
