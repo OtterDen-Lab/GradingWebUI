@@ -703,6 +703,90 @@ def test_subjective_triage_clear_returns_bucket_usage(client):
   assert payload["bucket_usage"] == {}
 
 
+def test_tag_mode_triage_and_finalize(client, monkeypatch):
+  """Tag mode should support multi-tag triage and finalize by tag signature."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  monkeypatch.setattr(
+    problems_routes,
+    "get_problem_image_data",
+    lambda problem, submission_repo=None: ""
+  )
+
+  session_id = create_test_session(client, "Tag Mode Flow")
+  _, problem_id_a = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=16, max_points=8.0
+  )
+  _, problem_id_b = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=16, max_points=8.0
+  )
+
+  update_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 16,
+      "grading_mode": "tag",
+      "buckets": [
+        {"id": "missing_x", "label": "Missing X"},
+        {"id": "poorly_written", "label": "Poorly Written"},
+      ]
+    }
+  )
+  assert update_response.status_code == 200
+  assert update_response.json()["grading_mode"] == "tag"
+
+  triage_a = client.post(
+    f"/api/problems/{problem_id_a}/subjective-triage",
+    json={"tag_ids": ["poorly_written", "missing_x"], "notes": "Needs clarity"}
+  )
+  assert triage_a.status_code == 200
+  triage_a_payload = triage_a.json()
+  assert triage_a_payload["bucket_id"] == "missing_x|poorly_written"
+  assert triage_a_payload["tag_ids"] == ["missing_x", "poorly_written"]
+
+  triage_b = client.post(
+    f"/api/problems/{problem_id_b}/subjective-triage",
+    json={"tag_ids": ["missing_x"]}
+  )
+  assert triage_b.status_code == 200
+  assert triage_b.json()["bucket_id"] == "missing_x"
+
+  previous_response = client.get(f"/api/problems/{session_id}/16/previous")
+  assert previous_response.status_code == 200
+  previous_payload = previous_response.json()
+  assert previous_payload["grading_mode"] == "tag"
+  assert previous_payload["subjective_triaged"] is True
+
+  finalize_response = client.post(
+    f"/api/sessions/{session_id}/subjective-finalize",
+    json={
+      "problem_number": 16,
+      "bucket_scores": [
+        {"bucket_id": "missing_x", "score": 6.0},
+        {"bucket_id": "missing_x|poorly_written", "score": 4.0},
+      ]
+    }
+  )
+  assert finalize_response.status_code == 200
+  finalize_payload = finalize_response.json()
+  assert finalize_payload["status"] == "finalized"
+  assert finalize_payload["graded_count"] == 2
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute("""
+      SELECT id, score, graded
+      FROM problems
+      WHERE session_id = ? AND problem_number = ?
+      ORDER BY id
+    """, (session_id, 16))
+    rows = {row["id"]: dict(row) for row in cursor.fetchall()}
+    assert rows[problem_id_a]["graded"] == 1
+    assert rows[problem_id_a]["score"] == 4.0
+    assert rows[problem_id_b]["graded"] == 1
+    assert rows[problem_id_b]["score"] == 6.0
+
+
 def test_next_problem_supports_exclude_problem_ids(client, monkeypatch):
   """Next-problem endpoint should skip IDs listed in exclude_problem_ids."""
   from grading_web_ui.web_api.routes import problems as problems_routes

@@ -14,11 +14,14 @@ const regenerationSessionPrefetchStarted = new Set();
 const subjectiveSettingsByProblem = new Map();
 let currentSubjectiveSettings = null;
 let selectedSubjectiveBucketId = null;
+let selectedSubjectiveTagIds = new Set();
 let activeSubjectiveBucketFilter = '';
 let subjectiveAssignInFlight = false;
 let gradingKeyboardShortcutsBound = false;
 let problemResizeHandlersBound = false;
 const subjectiveFinalizeDraftByProblem = new Map();
+const subjectiveBucketDraftByProblem = new Map();
+let activeSubjectiveBucketEditorProblemNumber = null;
 const PREFETCH_QUEUE_TARGET = 2;
 const prefetchedNextProblems = [];
 let prefetchQueueInFlight = false;
@@ -33,6 +36,7 @@ const DEFAULT_SUBJECTIVE_BUCKETS = [
     { id: 'random', label: 'Random', color: '#6b7280' },
     { id: 'blank', label: 'Blank', color: '#9ca3af' }
 ];
+const TAG_SIGNATURE_DELIMITER = '|';
 
 function invalidateNextProblemPrefetch() {
     prefetchedNextProblems.length = 0;
@@ -375,6 +379,58 @@ function normalizeSubjectiveBuckets(rawBuckets = []) {
     });
 }
 
+function isGroupingMode(gradingMode) {
+    return gradingMode === 'subjective' || gradingMode === 'tag';
+}
+
+function isTagMode(gradingMode) {
+    return gradingMode === 'tag';
+}
+
+function normalizeGradingMode(gradingMode) {
+    if (isGroupingMode(gradingMode)) return gradingMode;
+    return 'calculation';
+}
+
+function normalizeTagIds(tagIds = []) {
+    const normalized = [];
+    const seen = new Set();
+    tagIds.forEach((tagId) => {
+        if (tagId === null || tagId === undefined) return;
+        const value = String(tagId || '').trim();
+        if (!value || seen.has(value)) return;
+        seen.add(value);
+        normalized.push(value);
+    });
+    normalized.sort();
+    return normalized;
+}
+
+function parseTagSignature(signature) {
+    if (!signature) return [];
+    return normalizeTagIds(String(signature).split(TAG_SIGNATURE_DELIMITER));
+}
+
+function buildTagSignature(tagIds) {
+    return normalizeTagIds(tagIds).join(TAG_SIGNATURE_DELIMITER);
+}
+
+function getBucketLabelMap(settings) {
+    const labelMap = new Map();
+    (settings?.buckets || []).forEach((bucket) => {
+        if (!bucket?.id) return;
+        labelMap.set(bucket.id, bucket.label || bucket.id);
+    });
+    return labelMap;
+}
+
+function formatTagSignatureLabel(signature, settings) {
+    const tagIds = parseTagSignature(signature);
+    if (tagIds.length === 0) return '(no tags)';
+    const labelMap = getBucketLabelMap(settings);
+    return tagIds.map((tagId) => labelMap.get(tagId) || tagId).join(' + ');
+}
+
 function getCurrentProblemMaxPoints() {
     const maxPointsInput = document.getElementById('max-points-input');
     const fromInput = parseFloat(maxPointsInput?.value || '');
@@ -427,7 +483,7 @@ async function loadSubjectiveSettings(problemNumber, force = false) {
         const payload = await response.json();
         const settings = {
             problem_number: problemNumber,
-            grading_mode: payload.grading_mode || 'calculation',
+            grading_mode: normalizeGradingMode(payload.grading_mode),
             buckets: normalizeSubjectiveBuckets(
                 Array.isArray(payload.buckets) && payload.buckets.length > 0
                     ? payload.buckets
@@ -479,7 +535,7 @@ function toNonNegativeNumber(value, fallback = 0) {
 }
 
 function getEstimatedRemainingBlankCount() {
-    if (!currentProblem || currentProblem.grading_mode !== 'subjective') {
+    if (!currentProblem || !isGroupingMode(currentProblem.grading_mode)) {
         return 0;
     }
     const remaining = toNonNegativeNumber(currentProblem.subjective_untriaged_count, 0);
@@ -496,7 +552,7 @@ function applyLocalSubjectiveStateUpdate({
     bucketId = null
 } = {}) {
     const settings = getCurrentSubjectiveSettings();
-    if (!settings || settings.grading_mode !== 'subjective') {
+    if (!settings || !isGroupingMode(settings.grading_mode)) {
         return;
     }
 
@@ -529,7 +585,7 @@ function applyLocalSubjectiveStateUpdate({
         settings.bucket_usage = usage;
     }
 
-    if (currentProblem && currentProblem.grading_mode === 'subjective') {
+    if (currentProblem && isGroupingMode(currentProblem.grading_mode)) {
         currentProblem.subjective_triaged_count = settings.triaged_count;
         currentProblem.subjective_untriaged_count = settings.untriaged_count;
     }
@@ -550,25 +606,51 @@ function renderSubjectiveBucketButtons() {
 
     container.innerHTML = '';
     if (!settings || !Array.isArray(settings.buckets)) return;
+    const tagMode = isTagMode(settings.grading_mode);
+    let tagUsage = null;
+    if (tagMode) {
+        tagUsage = {};
+        Object.entries(settings.bucket_usage || {}).forEach(([signature, count]) => {
+            const numericCount = Number(count || 0);
+            if (numericCount <= 0) return;
+            parseTagSignature(signature).forEach((tagId) => {
+                tagUsage[tagId] = Number(tagUsage[tagId] || 0) + numericCount;
+            });
+        });
+    }
 
     settings.buckets.forEach((bucket) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'subjective-bucket-btn';
-        if (selectedSubjectiveBucketId === bucket.id) {
+        const isSelected = tagMode
+            ? selectedSubjectiveTagIds.has(bucket.id)
+            : selectedSubjectiveBucketId === bucket.id;
+        if (isSelected) {
             button.classList.add('selected');
         }
         const bucketColor = getBucketColor(bucket);
         button.style.borderColor = bucketColor;
-        if (selectedSubjectiveBucketId === bucket.id) {
+        if (isSelected) {
             button.style.boxShadow = `0 0 0 2px ${bucketColor}33`;
         }
-        const usage = Number(settings.bucket_usage?.[bucket.id] || 0);
+        const usage = tagMode
+            ? Number(tagUsage?.[bucket.id] || 0)
+            : Number(settings.bucket_usage?.[bucket.id] || 0);
         button.textContent = usage > 0 ? `${bucket.label} (${usage})` : bucket.label;
         button.onclick = async () => {
-            selectedSubjectiveBucketId = bucket.id;
+            if (tagMode) {
+                if (selectedSubjectiveTagIds.has(bucket.id)) {
+                    selectedSubjectiveTagIds.delete(bucket.id);
+                } else {
+                    selectedSubjectiveTagIds.add(bucket.id);
+                }
+            } else {
+                selectedSubjectiveBucketId = bucket.id;
+            }
             renderSubjectiveBucketButtons();
-            if (settings.grading_mode === 'subjective' && currentProblem && !currentProblem.graded) {
+            renderSubjectiveBucketHistogram();
+            if (!tagMode && settings.grading_mode === 'subjective' && currentProblem && !currentProblem.graded) {
                 await submitSubjectiveTriage({ triggeredByBucketClick: true });
             }
         };
@@ -589,14 +671,27 @@ function renderSubjectiveBucketFilter() {
     allOption.textContent = 'All (normal flow)';
     select.appendChild(allOption);
 
-    settings.buckets.forEach((bucket) => {
-        const usage = Number(settings.bucket_usage?.[bucket.id] || 0);
-        if (usage <= 0) return;
-        const option = document.createElement('option');
-        option.value = bucket.id;
-        option.textContent = `${bucket.label} (${usage})`;
-        select.appendChild(option);
-    });
+    const usageMap = settings.bucket_usage || {};
+    if (isTagMode(settings.grading_mode)) {
+        const entries = Object.entries(usageMap)
+            .filter(([, count]) => Number(count || 0) > 0)
+            .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0));
+        entries.forEach(([signature, count]) => {
+            const option = document.createElement('option');
+            option.value = signature;
+            option.textContent = `${formatTagSignatureLabel(signature, settings)} (${Number(count || 0)})`;
+            select.appendChild(option);
+        });
+    } else {
+        settings.buckets.forEach((bucket) => {
+            const usage = Number(usageMap[bucket.id] || 0);
+            if (usage <= 0) return;
+            const option = document.createElement('option');
+            option.value = bucket.id;
+            option.textContent = `${bucket.label} (${usage})`;
+            select.appendChild(option);
+        });
+    }
 
     const hasPrevious = [...select.options].some((opt) => opt.value === previous);
     activeSubjectiveBucketFilter = hasPrevious ? previous : '';
@@ -606,36 +701,67 @@ function renderSubjectiveBucketFilter() {
 function renderSubjectiveBucketHistogram() {
     const container = document.getElementById('subjective-bucket-histogram');
     const settings = getCurrentSubjectiveSettings();
-    if (!container || !settings || settings.grading_mode !== 'subjective') {
+    if (!container || !settings || !isGroupingMode(settings.grading_mode)) {
         if (container) container.innerHTML = '';
         return;
     }
 
+    const tagMode = isTagMode(settings.grading_mode);
     const buckets = settings.buckets || [];
     const usage = settings.bucket_usage || {};
     const triagedTotal = Math.max(Number(settings.triaged_count || 0), 0);
     const untriaged = Math.max(Number(settings.untriaged_count || 0), 0);
-    const maxBucketCount = Math.max(
-        1,
-        ...buckets.map((bucket) => Number(usage[bucket.id] || 0))
-    );
-    const canAssignFromHistogram = Boolean(
-        settings.grading_mode === 'subjective' &&
-        currentProblem &&
-        !currentProblem.graded
-    );
+    const rows = [];
+
+    if (tagMode) {
+        const tagUsage = {};
+        Object.entries(usage).forEach(([signature, count]) => {
+            const numericCount = Number(count || 0);
+            if (numericCount <= 0) return;
+            parseTagSignature(signature).forEach((tagId) => {
+                tagUsage[tagId] = Number(tagUsage[tagId] || 0) + numericCount;
+            });
+        });
+        buckets.forEach((bucket) => {
+            rows.push({
+                id: bucket.id,
+                label: bucket.label,
+                color: getBucketColor(bucket),
+                count: Number(tagUsage[bucket.id] || 0),
+                selected: selectedSubjectiveTagIds.has(bucket.id)
+            });
+        });
+    } else {
+        buckets.forEach((bucket) => {
+            rows.push({
+                id: bucket.id,
+                label: bucket.label,
+                color: getBucketColor(bucket),
+                count: Number(usage[bucket.id] || 0),
+                selected: selectedSubjectiveBucketId === bucket.id
+            });
+        });
+    }
+    const maxBucketCount = Math.max(1, ...rows.map((row) => row.count));
+    const canAssignFromHistogram = Boolean(currentProblem && !currentProblem.graded);
 
     container.innerHTML = '';
 
     const title = document.createElement('div');
     title.style.cssText = 'font-size: 12px; color: var(--gray-700); margin-bottom: 6px; font-weight: 600;';
-    title.textContent = canAssignFromHistogram
-        ? 'Bucket Distribution (click row to assign)'
-        : 'Bucket Distribution (triaged responses)';
+    if (tagMode) {
+        title.textContent = canAssignFromHistogram
+            ? 'Tag Distribution (click row to toggle)'
+            : 'Tag Distribution (triaged responses)';
+    } else {
+        title.textContent = canAssignFromHistogram
+            ? 'Bucket Distribution (click row to assign)'
+            : 'Bucket Distribution (triaged responses)';
+    }
     container.appendChild(title);
 
-    buckets.forEach((bucket) => {
-        const count = Number(usage[bucket.id] || 0);
+    rows.forEach((rowData) => {
+        const count = Number(rowData.count || 0);
         const relativePct = (count / maxBucketCount) * 100;
         const sharePct = triagedTotal > 0 ? (count / triagedTotal) * 100 : 0;
 
@@ -644,20 +770,20 @@ function renderSubjectiveBucketHistogram() {
         if (canAssignFromHistogram) {
             row.classList.add('clickable');
         }
-        if (selectedSubjectiveBucketId === bucket.id) {
+        if (rowData.selected) {
             row.classList.add('selected');
         }
-        row.dataset.bucketId = bucket.id;
+        row.dataset.bucketId = rowData.id;
 
         const label = document.createElement('div');
-        label.textContent = `${bucket.label} (${sharePct.toFixed(0)}%)`;
+        label.textContent = `${rowData.label} (${sharePct.toFixed(0)}%)`;
 
         const track = document.createElement('div');
         track.className = 'subjective-histogram-track';
         const fill = document.createElement('div');
         fill.className = 'subjective-histogram-fill';
         fill.style.width = `${Math.max(0, Math.min(100, relativePct))}%`;
-        fill.style.background = getBucketColor(bucket);
+        fill.style.background = rowData.color;
         track.appendChild(fill);
 
         const value = document.createElement('div');
@@ -670,7 +796,17 @@ function renderSubjectiveBucketHistogram() {
 
         if (canAssignFromHistogram) {
             row.onclick = async () => {
-                selectedSubjectiveBucketId = bucket.id;
+                if (tagMode) {
+                    if (selectedSubjectiveTagIds.has(rowData.id)) {
+                        selectedSubjectiveTagIds.delete(rowData.id);
+                    } else {
+                        selectedSubjectiveTagIds.add(rowData.id);
+                    }
+                    renderSubjectiveBucketHistogram();
+                    renderSubjectiveBucketButtons();
+                    return;
+                }
+                selectedSubjectiveBucketId = rowData.id;
                 renderSubjectiveBucketHistogram();
                 await submitSubjectiveTriage({ triggeredByBucketClick: true });
             };
@@ -697,8 +833,12 @@ function renderSubjectiveBucketEditor() {
     const settings = getCurrentSubjectiveSettings();
     if (!editor || !settings) return;
 
+    const problemNumber = Number(currentProblemNumber);
+    const draftBuckets = subjectiveBucketDraftByProblem.get(problemNumber) || [];
+    const isTag = isTagMode(settings.grading_mode);
     editor.innerHTML = '';
-    settings.buckets.forEach((bucket, index) => {
+
+    draftBuckets.forEach((bucket, index) => {
         const row = document.createElement('div');
         row.className = 'subjective-bucket-row';
         row.dataset.bucketId = bucket.id;
@@ -706,12 +846,23 @@ function renderSubjectiveBucketEditor() {
         const labelInput = document.createElement('input');
         labelInput.type = 'text';
         labelInput.value = bucket.label || '';
-        labelInput.placeholder = 'Bucket label';
+        labelInput.placeholder = isTag ? 'Tag label' : 'Bucket label';
+        labelInput.oninput = (event) => {
+            const draft = subjectiveBucketDraftByProblem.get(problemNumber);
+            if (!draft || !draft[index]) return;
+            draft[index].label = event.target.value;
+        };
 
         const colorInput = document.createElement('input');
         colorInput.type = 'text';
         colorInput.value = getBucketColor(bucket, index + 1);
         colorInput.placeholder = '#hex color';
+        colorInput.oninput = (event) => {
+            const draft = subjectiveBucketDraftByProblem.get(problemNumber);
+            if (!draft || !draft[index]) return;
+            const value = (event.target.value || '').trim();
+            draft[index].color = value || null;
+        };
 
         const controls = document.createElement('div');
         controls.style.display = 'flex';
@@ -724,34 +875,24 @@ function renderSubjectiveBucketEditor() {
         moveUpBtn.textContent = 'Up';
         moveUpBtn.disabled = index === 0;
         moveUpBtn.onclick = () => {
-            syncSubjectiveBucketsFromEditor();
-            const latestSettings = getCurrentSubjectiveSettings();
-            if (!latestSettings) return;
-            if (index === 0) return;
-            const movedBucket = latestSettings.buckets.splice(index, 1)[0];
-            latestSettings.buckets.splice(index - 1, 0, movedBucket);
+            const draft = subjectiveBucketDraftByProblem.get(problemNumber);
+            if (!draft || index === 0) return;
+            const movedBucket = draft.splice(index, 1)[0];
+            draft.splice(index - 1, 0, movedBucket);
             renderSubjectiveBucketEditor();
-            renderSubjectiveBucketButtons();
-            renderSubjectiveBucketFilter();
-            renderSubjectiveBucketHistogram();
         };
 
         const moveDownBtn = document.createElement('button');
         moveDownBtn.type = 'button';
         moveDownBtn.className = 'btn btn-secondary btn-small';
         moveDownBtn.textContent = 'Down';
-        moveDownBtn.disabled = index === settings.buckets.length - 1;
+        moveDownBtn.disabled = index === draftBuckets.length - 1;
         moveDownBtn.onclick = () => {
-            syncSubjectiveBucketsFromEditor();
-            const latestSettings = getCurrentSubjectiveSettings();
-            if (!latestSettings) return;
-            if (index >= latestSettings.buckets.length - 1) return;
-            const movedBucket = latestSettings.buckets.splice(index, 1)[0];
-            latestSettings.buckets.splice(index + 1, 0, movedBucket);
+            const draft = subjectiveBucketDraftByProblem.get(problemNumber);
+            if (!draft || index >= draft.length - 1) return;
+            const movedBucket = draft.splice(index, 1)[0];
+            draft.splice(index + 1, 0, movedBucket);
             renderSubjectiveBucketEditor();
-            renderSubjectiveBucketButtons();
-            renderSubjectiveBucketFilter();
-            renderSubjectiveBucketHistogram();
         };
 
         const removeBtn = document.createElement('button');
@@ -759,17 +900,10 @@ function renderSubjectiveBucketEditor() {
         removeBtn.className = 'btn btn-secondary btn-small';
         removeBtn.textContent = 'Remove';
         removeBtn.onclick = () => {
-            syncSubjectiveBucketsFromEditor();
-            const latestSettings = getCurrentSubjectiveSettings();
-            if (!latestSettings) return;
-            latestSettings.buckets.splice(index, 1);
-            if (selectedSubjectiveBucketId === bucket.id) {
-                selectedSubjectiveBucketId = null;
-            }
+            const draft = subjectiveBucketDraftByProblem.get(problemNumber);
+            if (!draft) return;
+            draft.splice(index, 1);
             renderSubjectiveBucketEditor();
-            renderSubjectiveBucketButtons();
-            renderSubjectiveBucketFilter();
-            renderSubjectiveBucketHistogram();
         };
 
         controls.appendChild(moveUpBtn);
@@ -783,17 +917,65 @@ function renderSubjectiveBucketEditor() {
     });
 }
 
-function collectBucketsFromEditor() {
-    const editor = document.getElementById('subjective-bucket-editor');
-    if (!editor) return [];
-    const rows = [...editor.querySelectorAll('.subjective-bucket-row')];
-    const usedIds = new Set();
+function buildBucketDraftFromSettings(problemNumber = Number(currentProblemNumber)) {
+    const settings = subjectiveSettingsByProblem.get(problemNumber) || getCurrentSubjectiveSettings();
+    let sourceBuckets = [];
+    if (Array.isArray(settings?.buckets) && settings.buckets.length > 0) {
+        sourceBuckets = settings.buckets;
+    } else {
+        sourceBuckets = cloneDefaultSubjectiveBuckets();
+    }
+    const draftBuckets = normalizeSubjectiveBuckets(sourceBuckets).map((bucket) => ({ ...bucket }));
+    subjectiveBucketDraftByProblem.set(problemNumber, draftBuckets);
+    return draftBuckets;
+}
 
-    return rows.map((row, idx) => {
-        const labelInput = row.querySelector('input[type="text"]');
-        const colorInput = row.querySelectorAll('input[type="text"]')[1];
-        const label = (labelInput?.value || '').trim();
-        let bucketId = (row.dataset.bucketId || '').trim();
+function openSubjectiveBucketDialog() {
+    const settings = getCurrentSubjectiveSettings();
+    if (!settings) return;
+
+    const problemNumber = Number(currentProblemNumber);
+    if (!subjectiveBucketDraftByProblem.has(problemNumber)) {
+        buildBucketDraftFromSettings(problemNumber);
+    }
+    activeSubjectiveBucketEditorProblemNumber = problemNumber;
+    renderSubjectiveBucketEditor();
+
+    const title = document.getElementById('subjective-bucket-dialog-title');
+    if (title) {
+        title.textContent = isTagMode(settings.grading_mode)
+            ? `Manage Tags (Problem ${problemNumber})`
+            : `Manage Buckets (Problem ${problemNumber})`;
+    }
+
+    const dialog = document.getElementById('subjective-bucket-dialog');
+    if (dialog) {
+        dialog.style.display = 'flex';
+    }
+}
+
+function closeSubjectiveBucketDialog(options = {}) {
+    const { discardDraft = false } = options;
+    const problemNumber = Number(activeSubjectiveBucketEditorProblemNumber || currentProblemNumber);
+    if (discardDraft && problemNumber) {
+        subjectiveBucketDraftByProblem.delete(problemNumber);
+    }
+    activeSubjectiveBucketEditorProblemNumber = null;
+    const dialog = document.getElementById('subjective-bucket-dialog');
+    if (dialog) {
+        dialog.style.display = 'none';
+    }
+}
+
+function collectBucketsFromEditor() {
+    const problemNumber = Number(currentProblemNumber);
+    const draft = subjectiveBucketDraftByProblem.get(problemNumber);
+    if (!draft) return [];
+
+    const usedIds = new Set();
+    return draft.map((bucket, idx) => {
+        const label = (bucket?.label || '').trim();
+        let bucketId = (bucket?.id || '').trim();
         if (!bucketId) {
             bucketId = sanitizeSubjectiveBucketId(label, idx + 1);
         }
@@ -801,14 +983,10 @@ function collectBucketsFromEditor() {
             bucketId = `${bucketId}_${idx + 1}`;
         }
         usedIds.add(bucketId);
-        row.dataset.bucketId = bucketId;
         const bucketColor = getBucketColor(
-            { id: bucketId, label: label || `Bucket ${idx + 1}`, color: (colorInput?.value || '').trim() || null },
+            { id: bucketId, label: label || `Bucket ${idx + 1}`, color: (bucket?.color || '').trim() || null },
             idx + 1
         );
-        if (colorInput && !(colorInput.value || '').trim()) {
-            colorInput.value = bucketColor;
-        }
         return {
             id: bucketId,
             label: label || `Bucket ${idx + 1}`,
@@ -818,31 +996,32 @@ function collectBucketsFromEditor() {
 }
 
 function syncSubjectiveBucketsFromEditor() {
-    const settings = getCurrentSubjectiveSettings();
-    if (!settings) return;
-    const buckets = collectBucketsFromEditor();
-    if (buckets.length === 0) return;
-    settings.buckets = buckets;
-    currentSubjectiveSettings = settings;
-    subjectiveSettingsByProblem.set(Number(currentProblemNumber), settings);
+    const problemNumber = Number(currentProblemNumber);
+    const normalized = collectBucketsFromEditor();
+    if (!normalized.length) return;
+    subjectiveBucketDraftByProblem.set(
+        problemNumber,
+        normalized.map((bucket) => ({ ...bucket }))
+    );
 }
 
 async function saveSubjectiveSettings() {
     const settings = getCurrentSubjectiveSettings();
     if (!settings || !currentSession || !currentProblemNumber) return;
 
+    syncSubjectiveBucketsFromEditor();
     let buckets = collectBucketsFromEditor();
     // When switching into subjective mode, the editor may not be rendered yet.
     // Fall back to in-memory settings/defaults so mode toggle can persist cleanly.
     if (buckets.length === 0) {
         if (Array.isArray(settings.buckets) && settings.buckets.length > 0) {
             buckets = normalizeSubjectiveBuckets(settings.buckets);
-        } else if (settings.grading_mode === 'subjective') {
+        } else if (isGroupingMode(settings.grading_mode)) {
             buckets = normalizeSubjectiveBuckets(cloneDefaultSubjectiveBuckets());
         }
     }
-    if (buckets.length === 0 && settings.grading_mode === 'subjective') {
-        alert('At least one bucket is required in subjective mode. Open "Manage Buckets" to add one.');
+    if (buckets.length === 0 && isGroupingMode(settings.grading_mode)) {
+        alert('At least one bucket/tag is required in subjective or tag mode. Open "Manage Buckets" to add one.');
         return;
     }
 
@@ -869,7 +1048,7 @@ async function saveSubjectiveSettings() {
 
     const updated = {
         problem_number: Number(currentProblemNumber),
-        grading_mode: payload.grading_mode || settings.grading_mode,
+        grading_mode: normalizeGradingMode(payload.grading_mode || settings.grading_mode),
         buckets: normalizeSubjectiveBuckets(payload.buckets || buckets),
         bucket_usage: payload.bucket_usage || {},
         triaged_count: payload.triaged_count || 0,
@@ -879,6 +1058,7 @@ async function saveSubjectiveSettings() {
     };
     subjectiveSettingsByProblem.set(Number(currentProblemNumber), updated);
     currentSubjectiveSettings = updated;
+    subjectiveBucketDraftByProblem.delete(Number(currentProblemNumber));
 
     if (selectedSubjectiveBucketId && !updated.buckets.some((b) => b.id === selectedSubjectiveBucketId)) {
         selectedSubjectiveBucketId = null;
@@ -892,42 +1072,59 @@ async function saveSubjectiveSettings() {
 
 function applyGradingModeUI() {
     const settings = getCurrentSubjectiveSettings();
+    const mode = settings?.grading_mode || 'calculation';
     const gradingModeSelect = document.getElementById('grading-mode-select');
     const calculationRow = document.getElementById('calculation-input-row');
     const subjectivePanel = document.getElementById('subjective-grading-panel');
+    const subjectiveModeHelp = document.getElementById('subjective-mode-help');
+    const manageBucketsBtn = document.getElementById('subjective-manage-buckets-btn');
     const submitGradeBtn = document.getElementById('submit-grade-btn');
     const subjectiveAssignBtn = document.getElementById('subjective-assign-btn');
     const subjectiveClearBtn = document.getElementById('subjective-clear-btn');
     const subjectiveFinalizeBtn = document.getElementById('subjective-finalize-btn');
     const subjectiveReopenBtn = document.getElementById('subjective-reopen-btn');
 
-    const isSubjective = settings?.grading_mode === 'subjective';
+    const isGrouping = isGroupingMode(mode);
+    const tagMode = isTagMode(mode);
     if (gradingModeSelect) {
-        gradingModeSelect.value = isSubjective ? 'subjective' : 'calculation';
+        gradingModeSelect.value = mode;
     }
     if (calculationRow) {
-        calculationRow.style.display = isSubjective ? 'none' : 'flex';
+        calculationRow.style.display = isGrouping ? 'none' : 'flex';
     }
     if (subjectivePanel) {
-        subjectivePanel.style.display = isSubjective ? 'block' : 'none';
+        subjectivePanel.style.display = isGrouping ? 'block' : 'none';
+    }
+    if (subjectiveModeHelp) {
+        subjectiveModeHelp.textContent = tagMode
+            ? 'Select one or more tags, then apply and move to the next response. Scores are assigned later.'
+            : 'Sort this response into a bucket first. Scores are assigned later.';
+    }
+    if (manageBucketsBtn) {
+        manageBucketsBtn.textContent = tagMode ? 'Manage Tags' : 'Manage Buckets';
     }
     if (submitGradeBtn) {
-        submitGradeBtn.style.display = isSubjective ? 'none' : 'inline-block';
+        submitGradeBtn.style.display = isGrouping ? 'none' : 'inline-block';
     }
     if (subjectiveAssignBtn) {
-        subjectiveAssignBtn.style.display = isSubjective ? 'inline-block' : 'none';
+        subjectiveAssignBtn.style.display = isGrouping ? 'inline-block' : 'none';
+        subjectiveAssignBtn.textContent = tagMode ? 'Apply Tags & Next' : 'Assign Bucket & Next';
     }
     if (subjectiveClearBtn) {
-        subjectiveClearBtn.style.display = isSubjective ? 'inline-block' : 'none';
+        subjectiveClearBtn.style.display = isGrouping ? 'inline-block' : 'none';
+        subjectiveClearBtn.textContent = tagMode ? 'Clear Tags' : 'Clear Bucket';
     }
-    if (subjectiveFinalizeBtn && !isSubjective) {
+    if (subjectiveFinalizeBtn && !isGrouping) {
         subjectiveFinalizeBtn.style.display = 'none';
     }
-    if (subjectiveReopenBtn && !isSubjective) {
+    if (subjectiveReopenBtn && !isGrouping) {
         subjectiveReopenBtn.style.display = 'none';
     }
+    if (subjectiveFinalizeBtn && isGrouping) {
+        subjectiveFinalizeBtn.textContent = tagMode ? 'Finalize Tag Scores' : 'Finalize Subjective Scores';
+    }
 
-    if (isSubjective) {
+    if (isGrouping) {
         renderSubjectiveBucketButtons();
         renderSubjectiveBucketFilter();
         renderSubjectiveBucketHistogram();
@@ -942,7 +1139,7 @@ function updateSubjectiveFinalizeButton() {
     const settings = getCurrentSubjectiveSettings();
     if (!finalizeBtn || !reopenBtn) return;
 
-    if (!settings || settings.grading_mode !== 'subjective') {
+    if (!settings || !isGroupingMode(settings.grading_mode)) {
         finalizeBtn.style.display = 'none';
         finalizeBtn.disabled = true;
         finalizeBtn.title = '';
@@ -957,11 +1154,15 @@ function updateSubjectiveFinalizeButton() {
     const finalizedCount = Number(settings.finalized_count || 0);
     const canFinalize = untriagedCount === 0 && triagedCount > 0;
     const canReopen = finalizedCount > 0;
+    const tagMode = isTagMode(settings.grading_mode);
 
     finalizeBtn.style.display = canFinalize ? 'inline-block' : 'none';
     finalizeBtn.disabled = !canFinalize;
+    finalizeBtn.textContent = tagMode ? 'Finalize Tag Scores' : 'Finalize Subjective Scores';
     if (untriagedCount > 0) {
-        finalizeBtn.title = `${untriagedCount} responses still need bucket assignments`;
+        finalizeBtn.title = tagMode
+            ? `${untriagedCount} responses still need tag assignments`
+            : `${untriagedCount} responses still need bucket assignments`;
     } else if (triagedCount === 0) {
         finalizeBtn.title = 'No triaged responses to finalize';
     } else {
@@ -970,7 +1171,7 @@ function updateSubjectiveFinalizeButton() {
 
     reopenBtn.style.display = canReopen ? 'inline-block' : 'none';
     reopenBtn.disabled = !canReopen;
-    reopenBtn.textContent = `Adjust Bucket Scores (P${currentProblemNumber})`;
+    reopenBtn.textContent = `${tagMode ? 'Adjust Tag Scores' : 'Adjust Bucket Scores'} (P${currentProblemNumber})`;
     if (canReopen) {
         reopenBtn.title = `${finalizedCount} finalized responses can be rescored`;
     } else {
@@ -1020,6 +1221,7 @@ async function loadProblemNumbers() {
         await loadSubjectiveSettings(currentProblemNumber, true);
         applyGradingModeUI();
         select.onchange = async () => {
+            closeSubjectiveBucketDialog();
             currentProblemNumber = parseInt(select.value);
             activeSubjectiveBucketFilter = '';
             invalidateNextProblemPrefetch();
@@ -1117,8 +1319,8 @@ function renderOverallProgressFromStats(stats) {
         currentProblemStats.num_total
     );
     const settings = subjectiveSettingsByProblem.get(Number(currentProblemNumber));
-    const isSubjective = settings?.grading_mode === 'subjective';
-    const triagedCount = isSubjective
+    const isGrouping = isGroupingMode(settings?.grading_mode);
+    const triagedCount = isGrouping
         ? Math.min(
             toNonNegativeNumber(settings?.triaged_count, 0),
             Math.max(currentProblemStats.num_total - gradedCount, 0)
@@ -1242,7 +1444,8 @@ function setupGradingControls() {
 
     const gradingModeSelect = document.getElementById('grading-mode-select');
     gradingModeSelect.onchange = async (e) => {
-        const mode = e.target.value === 'subjective' ? 'subjective' : 'calculation';
+        const requestedMode = String(e.target.value || '');
+        const mode = ['subjective', 'tag'].includes(requestedMode) ? requestedMode : 'calculation';
         const settings = getCurrentSubjectiveSettings() || {
             problem_number: Number(currentProblemNumber),
             grading_mode: mode,
@@ -1250,9 +1453,17 @@ function setupGradingControls() {
             bucket_usage: {}
         };
         settings.grading_mode = mode;
-        if (mode === 'subjective' && (!Array.isArray(settings.buckets) || settings.buckets.length === 0)) {
+        if (isGroupingMode(mode) && (!Array.isArray(settings.buckets) || settings.buckets.length === 0)) {
             settings.buckets = cloneDefaultSubjectiveBuckets();
         }
+        if (mode !== 'subjective') {
+            selectedSubjectiveBucketId = null;
+        }
+        if (mode !== 'tag') {
+            selectedSubjectiveTagIds = new Set();
+        }
+        subjectiveBucketDraftByProblem.delete(Number(currentProblemNumber));
+        closeSubjectiveBucketDialog();
         currentSubjectiveSettings = settings;
         subjectiveSettingsByProblem.set(Number(currentProblemNumber), settings);
         applyGradingModeUI();
@@ -1271,31 +1482,56 @@ function setupGradingControls() {
         }
     };
 
+    const manageBucketsBtn = document.getElementById('subjective-manage-buckets-btn');
+    if (manageBucketsBtn) {
+        manageBucketsBtn.onclick = () => {
+            openSubjectiveBucketDialog();
+        };
+    }
+
     document.getElementById('subjective-add-bucket-btn').onclick = () => {
         const settings = getCurrentSubjectiveSettings();
         if (!settings) return;
-        const nextIndex = settings.buckets.length + 1;
+        const problemNumber = Number(currentProblemNumber);
+        const draft = subjectiveBucketDraftByProblem.get(problemNumber) || buildBucketDraftFromSettings(problemNumber);
+        const nextIndex = draft.length + 1;
         const newBucketId = `bucket_${Date.now()}_${nextIndex}`;
-        settings.buckets.push({
+        const isTag = isTagMode(settings.grading_mode);
+        draft.push({
             id: newBucketId,
-            label: `Bucket ${nextIndex}`,
+            label: `${isTag ? 'Tag' : 'Bucket'} ${nextIndex}`,
             color: bucketColorFromSeed(newBucketId)
         });
+        subjectiveBucketDraftByProblem.set(problemNumber, draft);
         renderSubjectiveBucketEditor();
-        renderSubjectiveBucketButtons();
-        renderSubjectiveBucketFilter();
-        renderSubjectiveBucketHistogram();
     };
 
     document.getElementById('subjective-save-settings-btn').onclick = async () => {
         try {
             await saveSubjectiveSettings();
+            closeSubjectiveBucketDialog();
+            renderSubjectiveBucketButtons();
+            renderSubjectiveBucketFilter();
+            renderSubjectiveBucketHistogram();
             showNotification('Subjective bucket settings saved.');
         } catch (error) {
             console.error('Failed to save subjective settings:', error);
             alert(error.message || 'Failed to save subjective settings');
         }
     };
+
+    const subjectiveBucketCancelBtn = document.getElementById('subjective-bucket-cancel-btn');
+    if (subjectiveBucketCancelBtn) {
+        subjectiveBucketCancelBtn.onclick = () => closeSubjectiveBucketDialog();
+    }
+    const subjectiveBucketDialog = document.getElementById('subjective-bucket-dialog');
+    if (subjectiveBucketDialog) {
+        subjectiveBucketDialog.onclick = (event) => {
+            if (event.target === subjectiveBucketDialog) {
+                closeSubjectiveBucketDialog();
+            }
+        };
+    }
 
     const subjectiveFilterSelect = document.getElementById('subjective-view-filter');
     if (subjectiveFilterSelect) {
@@ -1360,6 +1596,11 @@ function handleGradingKeyboard(e) {
         return;
     }
 
+    const subjectiveBucketDialog = document.getElementById('subjective-bucket-dialog');
+    if (subjectiveBucketDialog && subjectiveBucketDialog.style.display === 'flex') {
+        return;
+    }
+
     // Don't handle if typing in textarea
     if (e.target.tagName === 'TEXTAREA') {
         return;
@@ -1368,7 +1609,7 @@ function handleGradingKeyboard(e) {
     // Enter key - submit and move to next
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        if (getCurrentSubjectiveSettings()?.grading_mode === 'subjective') {
+        if (isGroupingMode(getCurrentSubjectiveSettings()?.grading_mode)) {
             submitSubjectiveTriage();
         } else {
             submitGrade();
@@ -1422,8 +1663,8 @@ function displayCurrentProblem() {
 
     const settings = getCurrentSubjectiveSettings();
     if (settings) {
-        settings.grading_mode = currentProblem.grading_mode || settings.grading_mode || 'calculation';
-        if (settings.grading_mode === 'subjective') {
+        settings.grading_mode = normalizeGradingMode(currentProblem.grading_mode || settings.grading_mode || 'calculation');
+        if (isGroupingMode(settings.grading_mode)) {
             // Keep local subjective counters authoritative to avoid regressions from
             // stale prefetched payloads.
             const triagedCount = toNonNegativeNumber(
@@ -1446,7 +1687,15 @@ function displayCurrentProblem() {
         subjectiveSettingsByProblem.set(Number(currentProblemNumber), settings);
         currentSubjectiveSettings = settings;
     }
-    selectedSubjectiveBucketId = currentProblem.subjective_bucket_id || null;
+    if (isTagMode(normalizeGradingMode(currentProblem.grading_mode))) {
+        selectedSubjectiveTagIds = new Set(
+            parseTagSignature(currentProblem.subjective_bucket_id || '')
+        );
+        selectedSubjectiveBucketId = null;
+    } else {
+        selectedSubjectiveBucketId = currentProblem.subjective_bucket_id || null;
+        selectedSubjectiveTagIds = new Set();
+    }
     const subjectiveNotesInput = document.getElementById('subjective-notes-input');
     if (subjectiveNotesInput) {
         subjectiveNotesInput.value = currentProblem.subjective_notes || '';
@@ -1454,7 +1703,7 @@ function displayCurrentProblem() {
 
     // Update progress with blank count
     let progressText = `${currentProblem.current_index} / ${currentProblem.total_count}`;
-    if (currentProblem.grading_mode === 'subjective') {
+    if (isGroupingMode(currentProblem.grading_mode)) {
         progressText = `${currentProblem.subjective_triaged_count} triaged / ${currentProblem.total_count}`;
         if (currentProblem.subjective_untriaged_count > 0) {
             const estimatedBlank = getEstimatedRemainingBlankCount();
@@ -1648,7 +1897,7 @@ function shouldUseSubjectiveBucketFilter() {
     const settings = getCurrentSubjectiveSettings();
     return Boolean(
         settings &&
-        settings.grading_mode === 'subjective' &&
+        isGroupingMode(settings.grading_mode) &&
         activeSubjectiveBucketFilter
     );
 }
@@ -1667,7 +1916,11 @@ async function loadProblemFromActiveBucketFilter(direction = 'next', reset = fal
 
     const response = await fetch(url);
     if (response.status === 404) {
-        showNotification(`No responses found in bucket "${activeSubjectiveBucketFilter}" for this problem.`);
+        const settings = getCurrentSubjectiveSettings();
+        const filterLabel = isTagMode(settings?.grading_mode)
+            ? formatTagSignatureLabel(activeSubjectiveBucketFilter, settings)
+            : activeSubjectiveBucketFilter;
+        showNotification(`No responses found in filter "${filterLabel}" for this problem.`);
         return false;
     }
     if (!response.ok) {
@@ -1781,7 +2034,7 @@ async function findNextUngradedProblem() {
 
 async function maybeOfferSubjectiveFinalizeForCurrentProblem() {
     const settings = await loadSubjectiveSettings(Number(currentProblemNumber), true);
-    if (!settings || settings.grading_mode !== 'subjective') {
+    if (!settings || !isGroupingMode(settings.grading_mode)) {
         return false;
     }
 
@@ -1794,8 +2047,8 @@ async function maybeOfferSubjectiveFinalizeForCurrentProblem() {
 
     applyGradingModeUI();
     const shouldFinalizeNow = confirm(
-        `All responses for Problem ${currentProblemNumber} are bucketed.\n\n` +
-        `Finalize subjective scores now?`
+        `All responses for Problem ${currentProblemNumber} are ${isTagMode(settings.grading_mode) ? 'tagged' : 'bucketed'}.\n\n` +
+        `Finalize ${isTagMode(settings.grading_mode) ? 'tag' : 'subjective'} scores now?`
     );
     if (shouldFinalizeNow) {
         await openSubjectiveFinalizeDialog();
@@ -1998,34 +2251,52 @@ async function submitGrade() {
 
 async function submitSubjectiveTriage(options = {}) {
     if (!currentProblem) return;
-    if (getCurrentSubjectiveSettings()?.grading_mode !== 'subjective') {
-        alert('Subjective mode is not enabled for this problem.');
+    const mode = getCurrentSubjectiveSettings()?.grading_mode;
+    if (!isGroupingMode(mode)) {
+        alert('Grouping mode is not enabled for this problem.');
         return;
     }
     if (subjectiveAssignInFlight) {
         return;
     }
-    if (!selectedSubjectiveBucketId) {
+    const tagMode = isTagMode(mode);
+    const selectedTagIds = tagMode ? normalizeTagIds(Array.from(selectedSubjectiveTagIds)) : [];
+    if (tagMode) {
+        if (selectedTagIds.length === 0) {
+            alert('Select at least one tag before applying.');
+            return;
+        }
+    } else if (!selectedSubjectiveBucketId) {
         alert('Select a bucket before assigning.');
         return;
     }
 
     const notes = document.getElementById('subjective-notes-input').value.trim();
     const previousBucketId = currentProblem.subjective_bucket_id || null;
+    const resolvedBucketId = tagMode
+        ? buildTagSignature(selectedTagIds)
+        : selectedSubjectiveBucketId;
     const assignBtn = document.getElementById('subjective-assign-btn');
     const originalText = assignBtn.textContent;
     subjectiveAssignInFlight = true;
     assignBtn.disabled = true;
-    assignBtn.textContent = options.triggeredByBucketClick ? 'Applying...' : 'Assigning...';
+    assignBtn.textContent = options.triggeredByBucketClick
+        ? 'Applying...'
+        : (tagMode ? 'Applying Tags...' : 'Assigning...');
 
     try {
+        const body = {
+            notes: notes || null
+        };
+        if (tagMode) {
+            body.tag_ids = selectedTagIds;
+        } else {
+            body.bucket_id = resolvedBucketId;
+        }
         const response = await fetch(`${API_BASE}/problems/${currentProblem.id}/subjective-triage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                bucket_id: selectedSubjectiveBucketId,
-                notes: notes || null
-            })
+            body: JSON.stringify(body)
         });
         let payload = null;
         try {
@@ -2037,6 +2308,7 @@ async function submitSubjectiveTriage(options = {}) {
         if (!response.ok) {
             throw new Error(payload?.detail || 'Failed to assign subjective bucket');
         }
+        const appliedBucketId = payload?.bucket_id || resolvedBucketId;
 
         applyLocalSubjectiveStateUpdate({
             triagedCount: payload?.triaged_count,
@@ -2044,11 +2316,16 @@ async function submitSubjectiveTriage(options = {}) {
             finalizedCount: payload?.finalized_count,
             bucketUsage: payload?.bucket_usage,
             previousBucketId,
-            bucketId: selectedSubjectiveBucketId
+            bucketId: appliedBucketId
         });
-        currentProblem.subjective_bucket_id = selectedSubjectiveBucketId;
+        currentProblem.subjective_bucket_id = appliedBucketId;
         currentProblem.subjective_notes = notes || '';
         currentProblem.subjective_triaged = true;
+        if (tagMode) {
+            selectedSubjectiveTagIds = new Set(parseTagSignature(appliedBucketId));
+        } else {
+            selectedSubjectiveBucketId = appliedBucketId;
+        }
 
         await loadNextProblem();
     } catch (error) {
@@ -2063,7 +2340,7 @@ async function submitSubjectiveTriage(options = {}) {
 
 async function clearSubjectiveTriage() {
     if (!currentProblem) return;
-    if (getCurrentSubjectiveSettings()?.grading_mode !== 'subjective') {
+    if (!isGroupingMode(getCurrentSubjectiveSettings()?.grading_mode)) {
         return;
     }
 
@@ -2086,6 +2363,7 @@ async function clearSubjectiveTriage() {
             throw new Error(payload?.detail || 'Failed to clear subjective triage');
         }
         selectedSubjectiveBucketId = null;
+        selectedSubjectiveTagIds = new Set();
         currentProblem.subjective_bucket_id = null;
         currentProblem.subjective_notes = '';
         currentProblem.subjective_triaged = false;
@@ -2207,11 +2485,13 @@ async function openRandomBucketSample(bucketId) {
 async function submitSubjectiveReopen(options = {}) {
     if (!currentSession || !currentProblemNumber) return;
     const targetProblemNumber = Number(currentProblemNumber);
+    const mode = getCurrentSubjectiveSettings()?.grading_mode;
+    const modeLabel = isTagMode(mode) ? 'tag' : 'subjective';
 
     const { openFinalizeDialog = false } = options;
     const confirmMessage = openFinalizeDialog
-        ? `Adjust finalized scores for Problem ${targetProblemNumber}?\n\nThis keeps bucket assignments, clears current scores/feedback, and opens the scoring dialog.`
-        : `Reopen subjective scores for Problem ${targetProblemNumber}?\n\nThis will clear current scores/feedback and return responses to triaged state.`;
+        ? `Adjust finalized scores for Problem ${targetProblemNumber}?\n\nThis keeps ${isTagMode(mode) ? 'tag assignments' : 'bucket assignments'}, clears current scores/feedback, and opens the scoring dialog.`
+        : `Reopen ${modeLabel} scores for Problem ${targetProblemNumber}?\n\nThis will clear current scores/feedback and return responses to triaged state.`;
 
     if (!confirm(confirmMessage)) {
         return;
@@ -2267,11 +2547,21 @@ function renderSubjectiveFinalizeRows(settings) {
     const rowsContainer = document.getElementById('subjective-finalize-rows');
     if (!summary || !rowsContainer) return [];
 
+    const tagMode = isTagMode(settings?.grading_mode);
     const bucketUsage = settings?.bucket_usage || {};
-    const activeBuckets = (settings?.buckets || []).filter((bucket) => Number(bucketUsage[bucket.id] || 0) > 0);
+    const activeBuckets = tagMode
+        ? Object.entries(bucketUsage)
+            .filter(([, count]) => Number(count || 0) > 0)
+            .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+            .map(([bucket_id]) => ({
+                id: bucket_id,
+                label: formatTagSignatureLabel(bucket_id, settings),
+                color: null
+            }))
+        : (settings?.buckets || []).filter((bucket) => Number(bucketUsage[bucket.id] || 0) > 0);
     const maxPoints = getCurrentProblemMaxPoints();
 
-    summary.textContent = `Problem ${currentProblemNumber}: ${settings?.triaged_count || 0} triaged response(s), ${activeBuckets.length} active bucket(s), max points ${maxPoints}.`;
+    summary.textContent = `Problem ${currentProblemNumber}: ${settings?.triaged_count || 0} triaged response(s), ${activeBuckets.length} active ${tagMode ? 'signature(s)' : 'bucket(s)'}, max points ${maxPoints}.`;
     rowsContainer.innerHTML = '';
 
     activeBuckets.forEach((bucket) => {
@@ -2316,14 +2606,15 @@ function renderSubjectiveFinalizeRows(settings) {
 
 async function openSubjectiveFinalizeDialog() {
     const settings = await loadSubjectiveSettings(Number(currentProblemNumber), true);
-    if (!settings || settings.grading_mode !== 'subjective') {
-        alert('Subjective mode is not enabled for this problem.');
+    if (!settings || !isGroupingMode(settings.grading_mode)) {
+        alert('Grouping mode is not enabled for this problem.');
         return;
     }
 
     const untriagedCount = Number(settings.untriaged_count || 0);
     if (untriagedCount > 0) {
-        alert(`Assign buckets to all responses before finalizing. ${untriagedCount} responses remain untriaged.`);
+        const noun = isTagMode(settings.grading_mode) ? 'tags' : 'buckets';
+        alert(`Assign ${noun} to all responses before finalizing. ${untriagedCount} responses remain untriaged.`);
         return;
     }
 
@@ -2340,19 +2631,24 @@ async function openSubjectiveFinalizeDialog() {
 function collectSubjectiveFinalizePayload() {
     const rows = [...document.querySelectorAll('#subjective-finalize-rows .subjective-finalize-row')];
     const maxPoints = getCurrentProblemMaxPoints();
+    const settings = getCurrentSubjectiveSettings();
+    const tagMode = isTagMode(settings?.grading_mode);
 
     const bucketScores = rows.map((row) => {
         const bucketId = row.dataset.bucketId;
+        const bucketLabel = tagMode
+            ? formatTagSignatureLabel(bucketId, settings)
+            : bucketId;
         const scoreInput = row.querySelector('.subjective-finalize-score');
         const feedbackInput = row.querySelector('.subjective-finalize-feedback');
         const scoreText = (scoreInput?.value || '').trim();
         const isBlankScore = scoreText === '-';
         const score = parseFloat(scoreText);
         if (!scoreText || (!isBlankScore && Number.isNaN(score))) {
-            throw new Error(`Enter a numeric score or '-' for bucket "${bucketId}".`);
+            throw new Error(`Enter a numeric score or '-' for "${bucketLabel}".`);
         }
         if (!isBlankScore && (score < 0 || score > maxPoints)) {
-            throw new Error(`Score for bucket "${bucketId}" must be between 0 and ${maxPoints}.`);
+            throw new Error(`Score for "${bucketLabel}" must be between 0 and ${maxPoints}.`);
         }
         return {
             bucket_id: bucketId,
@@ -2367,6 +2663,8 @@ function collectSubjectiveFinalizePayload() {
 async function submitSubjectiveFinalize() {
     if (!currentSession || !currentProblemNumber) return;
     const targetProblemNumber = Number(currentProblemNumber);
+    const mode = getCurrentSubjectiveSettings()?.grading_mode;
+    const modeLabel = isTagMode(mode) ? 'tag' : 'subjective';
 
     let bucketScores;
     try {
@@ -2376,7 +2674,7 @@ async function submitSubjectiveFinalize() {
         return;
     }
 
-    if (!confirm(`Apply subjective scores for Problem ${targetProblemNumber}? This will mark all triaged responses as graded.`)) {
+    if (!confirm(`Apply ${modeLabel} scores for Problem ${targetProblemNumber}? This will mark all triaged responses as graded.`)) {
         return;
     }
 

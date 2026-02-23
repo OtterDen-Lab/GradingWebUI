@@ -52,6 +52,7 @@ _DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "random", "label": "Random", "color": "#6b7280"},
   {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
+TAG_SIGNATURE_DELIMITER = "|"
 
 
 def _cache_key_for_regeneration(problem, quiz_yaml_text: Optional[str]) -> tuple:
@@ -241,6 +242,30 @@ def _get_subjective_settings(session_id: int, problem_number: int) -> tuple[str,
   if not buckets:
     buckets = [dict(bucket) for bucket in _DEFAULT_SUBJECTIVE_BUCKETS]
   return grading_mode, buckets
+
+
+def _is_grouping_mode(grading_mode: Optional[str]) -> bool:
+  return grading_mode in ("subjective", "tag")
+
+
+def _normalize_tag_ids(raw_tag_ids: list[str]) -> list[str]:
+  normalized = {
+    str(tag_id).strip()
+    for tag_id in raw_tag_ids
+    if tag_id is not None and str(tag_id).strip()
+  }
+  return sorted(normalized)
+
+
+def _canonical_tag_signature(tag_ids: list[str]) -> str:
+  normalized = _normalize_tag_ids(tag_ids)
+  return TAG_SIGNATURE_DELIMITER.join(normalized)
+
+
+def _tag_ids_from_signature(signature: Optional[str]) -> list[str]:
+  if not signature:
+    return []
+  return _normalize_tag_ids(signature.split(TAG_SIGNATURE_DELIMITER))
 
 
 def _build_regeneration_response(problem_id: int, problem,
@@ -519,8 +544,8 @@ async def get_next_problem(
   except ValueError as exc:
     raise HTTPException(status_code=400, detail=str(exc))
 
-  # In subjective mode, "next" means next untriaged response.
-  if grading_mode == "subjective":
+  # In grouping modes, "next" means next untriaged response.
+  if _is_grouping_mode(grading_mode):
     problem = problem_repo.get_next_ungraded_untriaged(
       session_id,
       problem_number,
@@ -537,7 +562,7 @@ async def get_next_problem(
       status_code=404,
       detail=(
         f"No untriaged problems found for problem {problem_number}"
-        if grading_mode == "subjective"
+        if _is_grouping_mode(grading_mode)
         else f"No ungraded problems found for problem {problem_number}"
       )
     )
@@ -552,7 +577,7 @@ async def get_next_problem(
     session_id, problem_number
   )
   untriaged_count = max((total_count - graded_count) - triaged_count, 0)
-  current_index = (triaged_count + 1) if grading_mode == "subjective" else (graded_count + 1)
+  current_index = (triaged_count + 1) if _is_grouping_mode(grading_mode) else (graded_count + 1)
 
   triage_entry = triage_repo.get_for_problem(problem.id)
 
@@ -601,10 +626,10 @@ async def get_previous_problem(
   triage_repo = SubjectiveTriageRepository()
   grading_mode, _ = _get_subjective_settings(session_id, problem_number)
 
-  # In subjective mode, prefer most recently triaged (ungraded) response.
+  # In grouping modes, prefer most recently triaged (ungraded) response.
   # If everything is already finalized for this problem, fall back to the
   # most recently graded response so the UI can still reopen/adjust scores.
-  if grading_mode == "subjective":
+  if _is_grouping_mode(grading_mode):
     problem = problem_repo.get_previous_triaged(session_id, problem_number)
     if not problem:
       problem = problem_repo.get_previous_graded(session_id, problem_number)
@@ -615,7 +640,7 @@ async def get_previous_problem(
       status_code=404,
       detail=(
         f"No triaged or graded problems found for problem {problem_number}"
-        if grading_mode == "subjective"
+        if _is_grouping_mode(grading_mode)
         else f"No graded problems found for problem {problem_number}"
       )
     )
@@ -630,7 +655,7 @@ async def get_previous_problem(
     session_id, problem_number
   )
   untriaged_count = max((total_count - graded_count) - triaged_count, 0)
-  current_index = triaged_count if grading_mode == "subjective" else graded_count
+  current_index = triaged_count if _is_grouping_mode(grading_mode) else graded_count
 
   triage_entry = triage_repo.get_for_problem(problem.id)
 
@@ -684,14 +709,21 @@ async def get_next_problem_in_bucket(
     raise HTTPException(status_code=404, detail="Session not found")
 
   grading_mode, buckets = _get_subjective_settings(session_id, problem_number)
-  if grading_mode != "subjective":
+  if not _is_grouping_mode(grading_mode):
     raise HTTPException(
       status_code=400,
-      detail="Bucket navigation is only available in subjective mode"
+      detail="Bucket navigation is only available in subjective or tag mode"
     )
-  valid_bucket_ids = {bucket.get("id") for bucket in buckets}
-  if bucket_id not in valid_bucket_ids:
-    raise HTTPException(status_code=404, detail="Bucket not found for this problem")
+  if grading_mode == "subjective":
+    valid_bucket_ids = {bucket.get("id") for bucket in buckets}
+    if bucket_id not in valid_bucket_ids:
+      raise HTTPException(status_code=404, detail="Bucket not found for this problem")
+  else:
+    active_bucket_ids = set(
+      triage_repo.get_bucket_counts(session_id, problem_number).keys()
+    )
+    if bucket_id not in active_bucket_ids:
+      raise HTTPException(status_code=404, detail="Tag signature not found for this problem")
 
   problem = problem_repo.get_next_triaged_in_bucket(
     session_id, problem_number, bucket_id, current_problem_id
@@ -763,14 +795,21 @@ async def get_previous_problem_in_bucket(
     raise HTTPException(status_code=404, detail="Session not found")
 
   grading_mode, buckets = _get_subjective_settings(session_id, problem_number)
-  if grading_mode != "subjective":
+  if not _is_grouping_mode(grading_mode):
     raise HTTPException(
       status_code=400,
-      detail="Bucket navigation is only available in subjective mode"
+      detail="Bucket navigation is only available in subjective or tag mode"
     )
-  valid_bucket_ids = {bucket.get("id") for bucket in buckets}
-  if bucket_id not in valid_bucket_ids:
-    raise HTTPException(status_code=404, detail="Bucket not found for this problem")
+  if grading_mode == "subjective":
+    valid_bucket_ids = {bucket.get("id") for bucket in buckets}
+    if bucket_id not in valid_bucket_ids:
+      raise HTTPException(status_code=404, detail="Bucket not found for this problem")
+  else:
+    active_bucket_ids = set(
+      triage_repo.get_bucket_counts(session_id, problem_number).keys()
+    )
+    if bucket_id not in active_bucket_ids:
+      raise HTTPException(status_code=404, detail="Tag signature not found for this problem")
 
   problem = problem_repo.get_previous_triaged_in_bucket(
     session_id, problem_number, bucket_id, current_problem_id
@@ -841,14 +880,21 @@ async def get_sample_problem_in_bucket(
     raise HTTPException(status_code=404, detail="Session not found")
 
   grading_mode, buckets = _get_subjective_settings(session_id, problem_number)
-  if grading_mode != "subjective":
+  if not _is_grouping_mode(grading_mode):
     raise HTTPException(
       status_code=400,
-      detail="Bucket sampling is only available in subjective mode"
+      detail="Bucket sampling is only available in subjective or tag mode"
     )
-  valid_bucket_ids = {bucket.get("id") for bucket in buckets}
-  if bucket_id not in valid_bucket_ids:
-    raise HTTPException(status_code=404, detail="Bucket not found for this problem")
+  if grading_mode == "subjective":
+    valid_bucket_ids = {bucket.get("id") for bucket in buckets}
+    if bucket_id not in valid_bucket_ids:
+      raise HTTPException(status_code=404, detail="Bucket not found for this problem")
+  else:
+    active_bucket_ids = set(
+      triage_repo.get_bucket_counts(session_id, problem_number).keys()
+    )
+    if bucket_id not in active_bucket_ids:
+      raise HTTPException(status_code=404, detail="Tag signature not found for this problem")
 
   problem = problem_repo.get_random_triaged_in_bucket(
     session_id, problem_number, bucket_id
@@ -1385,18 +1431,47 @@ async def assign_subjective_triage(
   grading_mode, buckets = _get_subjective_settings(
     problem.session_id, problem.problem_number
   )
-  if grading_mode != "subjective":
+  if not _is_grouping_mode(grading_mode):
     raise HTTPException(
       status_code=400,
-      detail="Subjective triage is only available when grading mode is subjective"
+      detail="Triage is only available when grading mode is subjective or tag"
     )
 
   valid_bucket_ids = {bucket.get("id") for bucket in buckets}
-  if request.bucket_id not in valid_bucket_ids:
-    raise HTTPException(
-      status_code=400,
-      detail=f"Unknown bucket id '{request.bucket_id}' for this problem"
+  bucket_id: Optional[str] = None
+  if grading_mode == "subjective":
+    bucket_id = (request.bucket_id or "").strip()
+    if not bucket_id:
+      raise HTTPException(
+        status_code=400,
+        detail="bucket_id is required in subjective mode"
+      )
+    if bucket_id not in valid_bucket_ids:
+      raise HTTPException(
+        status_code=400,
+        detail=f"Unknown bucket id '{bucket_id}' for this problem"
+      )
+  else:
+    normalized_tag_ids = _normalize_tag_ids(request.tag_ids or [])
+    if not normalized_tag_ids:
+      raise HTTPException(
+        status_code=400,
+        detail="Select at least one tag in tag mode"
+      )
+    unknown_tag_ids = sorted(
+      [tag_id for tag_id in normalized_tag_ids if tag_id not in valid_bucket_ids]
     )
+    if unknown_tag_ids:
+      raise HTTPException(
+        status_code=400,
+        detail=f"Unknown tag id(s) for this problem: {', '.join(unknown_tag_ids)}"
+      )
+    bucket_id = _canonical_tag_signature(normalized_tag_ids)
+    if not bucket_id:
+      raise HTTPException(
+        status_code=400,
+        detail="Select at least one tag in tag mode"
+      )
 
   existing_triage = triage_repo.get_for_problem(problem.id)
   previous_bucket_id = existing_triage["bucket_id"] if existing_triage else None
@@ -1405,7 +1480,7 @@ async def assign_subjective_triage(
     problem_id=problem.id,
     session_id=problem.session_id,
     problem_number=problem.problem_number,
-    bucket_id=request.bucket_id,
+    bucket_id=bucket_id,
     notes=request.notes
   )
 
@@ -1419,17 +1494,20 @@ async def assign_subjective_triage(
   untriaged_count = max((counts["total"] - counts["graded"]) - triaged_count, 0)
   bucket_usage = triage_repo.get_bucket_counts(problem.session_id, problem.problem_number)
 
-  return {
+  response_payload = {
     "status": "triaged",
     "problem_id": problem_id,
     "problem_number": problem.problem_number,
     "previous_bucket_id": previous_bucket_id,
-    "bucket_id": request.bucket_id,
+    "bucket_id": bucket_id,
     "bucket_usage": bucket_usage,
     "triaged_count": triaged_count,
     "finalized_count": finalized_count,
     "untriaged_count": untriaged_count
   }
+  if grading_mode == "tag":
+    response_payload["tag_ids"] = _tag_ids_from_signature(bucket_id)
+  return response_payload
 
 
 @router.delete("/{problem_id}/subjective-triage")

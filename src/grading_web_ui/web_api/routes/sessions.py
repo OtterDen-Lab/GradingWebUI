@@ -58,6 +58,7 @@ DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "random", "label": "Random", "color": "#6b7280"},
   {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
+TAG_SIGNATURE_DELIMITER = "|"
 
 
 def mock_roster_enabled() -> bool:
@@ -102,6 +103,14 @@ def _normalized_subjective_buckets(raw_buckets: Optional[List[dict]]) -> List[di
     color = raw.get("color")
     if not bucket_id or not label:
       continue
+    if TAG_SIGNATURE_DELIMITER in bucket_id:
+      raise HTTPException(
+        status_code=400,
+        detail=(
+          f"Bucket id '{bucket_id}' cannot contain '{TAG_SIGNATURE_DELIMITER}' "
+          "because that character is reserved for tag signatures"
+        )
+      )
     if bucket_id in seen_ids:
       raise HTTPException(
         status_code=400,
@@ -120,6 +129,17 @@ def _normalized_subjective_buckets(raw_buckets: Optional[List[dict]]) -> List[di
       detail="At least one valid bucket is required for subjective mode"
     )
   return normalized
+
+
+def _is_grouping_mode(grading_mode: Optional[str]) -> bool:
+  return grading_mode in ("subjective", "tag")
+
+
+def _signature_tag_ids(signature: str) -> set[str]:
+  return {
+    value.strip() for value in (signature or "").split(TAG_SIGNATURE_DELIMITER)
+    if value and value.strip()
+  }
 
 
 def session_to_response(session: GradingSession) -> SessionResponse:
@@ -807,12 +827,19 @@ async def update_subjective_settings(
     triage_repo.get_used_bucket_ids(session_id, request.problem_number)
   )
   configured_bucket_ids = {bucket["id"] for bucket in buckets}
-  missing_used_ids = sorted(used_bucket_ids - configured_bucket_ids)
+  if grading_mode == "tag":
+    used_tag_ids = set()
+    for signature in used_bucket_ids:
+      used_tag_ids.update(_signature_tag_ids(signature))
+    missing_used_ids = sorted(used_tag_ids - configured_bucket_ids)
+  else:
+    missing_used_ids = sorted(used_bucket_ids - configured_bucket_ids)
   if missing_used_ids:
+    missing_label = "tags" if grading_mode == "tag" else "buckets"
     raise HTTPException(
       status_code=400,
       detail=(
-        "Cannot remove buckets with active triaged responses. "
+        f"Cannot remove {missing_label} with active triaged responses. "
         f"Still in use: {', '.join(missing_used_ids)}"
       )
     )
@@ -865,10 +892,10 @@ async def finalize_subjective_scores(
   triage_repo = SubjectiveTriageRepository()
 
   grading_mode = metadata_repo.get_grading_mode(session_id, request.problem_number)
-  if grading_mode != "subjective":
+  if not _is_grouping_mode(grading_mode):
     raise HTTPException(
       status_code=400,
-      detail="Subjective finalize is only available when grading mode is subjective"
+      detail="Finalize is only available when grading mode is subjective or tag"
     )
 
   counts = problem_repo.get_counts_for_problem_number(session_id, request.problem_number)
@@ -884,7 +911,7 @@ async def finalize_subjective_scores(
     raise HTTPException(
       status_code=400,
       detail=(
-        "Cannot finalize subjective grading until all responses are bucketed. "
+        "Cannot finalize grouping until all responses are bucketed/tagged. "
         f"{untriaged_count} responses remain untriaged."
       )
     )
@@ -1005,10 +1032,10 @@ async def reopen_subjective_scores(
   triage_repo = SubjectiveTriageRepository()
 
   grading_mode = metadata_repo.get_grading_mode(session_id, request.problem_number)
-  if grading_mode != "subjective":
+  if not _is_grouping_mode(grading_mode):
     raise HTTPException(
       status_code=400,
-      detail="Subjective reopen is only available when grading mode is subjective"
+      detail="Reopen is only available when grading mode is subjective or tag"
     )
 
   finalized_problem_ids = triage_repo.get_graded_problem_ids_for_problem_number(

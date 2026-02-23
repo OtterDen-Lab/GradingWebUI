@@ -225,7 +225,7 @@ class ProblemMetadataRepository(BaseRepository):
       """, (session_id, problem_number))
       row = cursor.fetchone()
       mode = row["grading_mode"] if row else None
-      if mode not in ("calculation", "subjective"):
+      if mode not in ("calculation", "subjective", "tag"):
         return "calculation"
       return mode
 

@@ -170,13 +170,14 @@ class SubjectiveBucket(BaseModel):
 class SubjectiveSettingsUpdate(BaseModel):
   """Update subjective grading mode/settings for a problem number."""
   problem_number: int
-  grading_mode: str = Field(..., pattern="^(calculation|subjective)$")
+  grading_mode: str = Field(..., pattern="^(calculation|subjective|tag)$")
   buckets: List[SubjectiveBucket] = []
 
 
 class SubjectiveTriageSubmission(BaseModel):
-  """Assign one response to a subjective bucket."""
-  bucket_id: str = Field(..., min_length=1, max_length=80)
+  """Assign one response to a subjective bucket or tag signature."""
+  bucket_id: Optional[str] = Field(None, min_length=1, max_length=80)
+  tag_ids: List[str] = Field(default_factory=list)
   notes: Optional[str] = Field(None, max_length=4000)
 
 
