@@ -594,6 +594,15 @@ def main():
         default="Course Schedule",
         help="Canvas module name for schedule page link when publishing (plan-course)",
     )
+    parser.add_argument(
+        "--publish-weekly-slides",
+        action="store_true",
+        help="Create/reuse Week modules and publish weekly slide URL links (plan-course)",
+    )
+    parser.add_argument(
+        "--weekly-module-template",
+        help="Template for weekly module names, e.g. 'Week {week_number}' (plan-course)",
+    )
 
     args = parser.parse_args()
     if args.debug:
@@ -666,10 +675,12 @@ def main():
             plan_path=Path(args.yaml_path),
             output_dir=Path(args.output_dir),
             publish=args.publish,
+            publish_weekly_slides=args.publish_weekly_slides,
             dry_run=args.dry_run,
             canvas_course=canvas_course,
             page_title_override=args.page_title,
             module_name=args.module_name,
+            weekly_module_template_override=args.weekly_module_template,
         )
         log.info("plan-course generated outputs:")
         for name, path in result.output_paths.items():
