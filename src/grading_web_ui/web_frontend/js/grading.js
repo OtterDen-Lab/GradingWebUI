@@ -17,6 +17,7 @@ let selectedSubjectiveBucketId = null;
 let activeSubjectiveBucketFilter = '';
 let subjectiveAssignInFlight = false;
 let gradingKeyboardShortcutsBound = false;
+let problemResizeHandlersBound = false;
 const subjectiveFinalizeDraftByProblem = new Map();
 const PREFETCH_QUEUE_TARGET = 2;
 const prefetchedNextProblems = [];
@@ -1393,34 +1394,31 @@ function handleGradingKeyboard(e) {
     }
 }
 
+function autoSizeProblemContainerToImage(problemImage) {
+    const scrollContainer = document.getElementById('problem-scroll-container');
+    if (!scrollContainer || !problemImage) return;
+
+    const displayedHeight = problemImage.offsetHeight;
+    if (!displayedHeight || displayedHeight <= 0) return;
+
+    const fullImageHeight = Math.ceil(displayedHeight + 40); // include borders/padding breathing room
+    scrollContainer.dataset.maxImageHeight = String(fullImageHeight);
+    scrollContainer.style.height = `${fullImageHeight}px`;
+}
+
 // Display the current problem (common display logic)
 function displayCurrentProblem() {
     if (!currentProblem) return;
 
     // Display problem
     const problemImage = document.getElementById('problem-image');
-    problemImage.src = `data:image/png;base64,${currentProblem.image_data}`;
-
-    // Auto-size container to fit image when it loads
     problemImage.onload = () => {
-        const scrollContainer = document.getElementById('problem-scroll-container');
-        if (scrollContainer) {
-            // Calculate the full displayed height of the image
-            const displayedHeight = problemImage.offsetHeight;
-            const fullImageHeight = displayedHeight + 40; // Add padding for borders/margins
-
-            // Store this as the maximum allowed height (so user can always expand to see full image)
-            scrollContainer.dataset.maxImageHeight = fullImageHeight;
-
-            // Check if we have a saved height preference
-            const savedHeight = localStorage.getItem('problemScrollContainerHeight');
-            if (!savedHeight) {
-                // No saved preference - default to showing full image
-                scrollContainer.style.height = `${fullImageHeight}px`;
-            }
-            // If there's a saved height, the setupProblemImageResize() function already applied it
-        }
+        autoSizeProblemContainerToImage(problemImage);
     };
+    problemImage.src = `data:image/png;base64,${currentProblem.image_data}`;
+    if (problemImage.complete && problemImage.naturalHeight > 0) {
+        requestAnimationFrame(() => autoSizeProblemContainerToImage(problemImage));
+    }
 
     const settings = getCurrentSubjectiveSettings();
     if (settings) {
@@ -1719,29 +1717,45 @@ async function loadPreviousProblem() {
         historyIndex--;
         const cachedProblem = problemHistory[historyIndex];
         currentProblem = cachedProblem;
+        const targetHistoryIndex = historyIndex;
+        const targetProblemId = cachedProblem?.id;
+        const targetProblemNumber = cachedProblem?.problem_number;
 
-        // History snapshots can be stale (e.g., after grading/feedback edits).
-        // Refresh from API so Back always shows the latest saved state.
-        if (cachedProblem && cachedProblem.id) {
+        // Render immediately from local history so Back feels instant even on high latency links.
+        if (targetProblemNumber) {
+            currentProblemNumber = targetProblemNumber;
+            document.getElementById('problem-select').value = currentProblemNumber;
+            const cachedSettings = subjectiveSettingsByProblem.get(Number(currentProblemNumber));
+            if (cachedSettings) {
+                currentSubjectiveSettings = cachedSettings;
+            }
+            applyGradingModeUI();
+        }
+        displayCurrentProblem();
+
+        // Refresh in background so history snapshots still converge to latest saved state.
+        // Guard against race: only apply if user is still on the same history entry.
+        if (targetProblemId) {
             try {
-                const freshResponse = await fetch(`${API_BASE}/problems/${cachedProblem.id}`);
+                const freshResponse = await fetch(`${API_BASE}/problems/${targetProblemId}`);
                 if (freshResponse.ok) {
                     const freshProblem = await freshResponse.json();
-                    problemHistory[historyIndex] = freshProblem;
-                    currentProblem = freshProblem;
+                    if (historyIndex === targetHistoryIndex && currentProblem?.id === targetProblemId) {
+                        problemHistory[targetHistoryIndex] = freshProblem;
+                        currentProblem = freshProblem;
+                        if (freshProblem.problem_number) {
+                            currentProblemNumber = freshProblem.problem_number;
+                            document.getElementById('problem-select').value = currentProblemNumber;
+                            await loadSubjectiveSettings(currentProblemNumber);
+                            applyGradingModeUI();
+                        }
+                        displayCurrentProblem();
+                    }
                 }
             } catch (error) {
                 console.warn('Failed to refresh historical problem state, using cached snapshot:', error);
             }
         }
-
-        if (currentProblem && currentProblem.problem_number) {
-            currentProblemNumber = currentProblem.problem_number;
-            document.getElementById('problem-select').value = currentProblemNumber;
-            await loadSubjectiveSettings(currentProblemNumber);
-            applyGradingModeUI();
-        }
-        displayCurrentProblem();
     } else {
         alert('No more previous problems in history');
     }
@@ -4001,12 +4015,8 @@ function setupProblemImageResize() {
         console.warn('Problem scroll container or resize handle not found');
         return;
     }
-
-    // Load saved height from localStorage
-    const savedHeight = localStorage.getItem('problemScrollContainerHeight');
-    if (savedHeight) {
-        scrollContainer.style.height = savedHeight;
-    }
+    if (problemResizeHandlersBound) return;
+    problemResizeHandlersBound = true;
 
     let isResizing = false;
     let startY = 0;
@@ -4052,11 +4062,6 @@ function setupProblemImageResize() {
             isResizing = false;
             document.body.style.userSelect = '';
             document.body.style.cursor = '';
-
-            // Save the height to localStorage
-            const currentHeight = scrollContainer.style.height;
-            localStorage.setItem('problemScrollContainerHeight', currentHeight);
-            console.log('Saved problem container height:', currentHeight);
         }
     });
 }
