@@ -49,7 +49,7 @@ _DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "has_everything", "label": "Has everything", "color": "#2563eb"},
   {"id": "missing_little", "label": "Missing a little", "color": "#f59e0b"},
   {"id": "missing_lot", "label": "Missing a lot", "color": "#ef4444"},
-  {"id": "random", "label": "Random", "color": "#6b7280"},
+  {"id": "off_topic", "label": "Off topic", "color": "#6b7280"},
   {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
 TAG_SIGNATURE_DELIMITER = "|"

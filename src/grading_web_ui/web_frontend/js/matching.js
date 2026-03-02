@@ -5,6 +5,10 @@ let allStudents = [];
 let revealCanvasNames = true;
 let matchingImagePreviewBound = false;
 let matchingActionStatus = { message: '', type: 'info' };
+let matchingPreviewSessionId = null;
+const matchingPagePreviewCache = new Map();
+let matchingPagePreviewDialog = null;
+let matchingPagePreviewRequestId = 0;
 
 function setMatchingActionStatus(message = '', type = 'info') {
     matchingActionStatus = { message, type };
@@ -64,6 +68,11 @@ async function loadNameMatching() {
     if (!currentSession) return;
 
     try {
+        if (matchingPreviewSessionId !== currentSession.id) {
+            matchingPagePreviewCache.clear();
+            matchingPreviewSessionId = currentSession.id;
+        }
+
         // Fetch all submissions (unmatched first)
         const submissionsResp = await fetch(`${API_BASE}/matching/${currentSession.id}/submissions`);
         const submissionsData = await submissionsResp.json();
@@ -147,7 +156,7 @@ function renderMatchingList() {
                         ${submission.name_image_data ? `
                             <img src="data:image/png;base64,${submission.name_image_data}"
                                  alt="Name area"
-                                 title="Click to enlarge/shrink"
+                                 title="Click to view full page"
                                  class="matching-name-image">
                         ` : ''}
                         <div style="flex: 1;">
@@ -191,19 +200,148 @@ function bindMatchingImagePreview() {
     const container = document.getElementById('unmatched-list');
     if (!container) return;
 
-    container.addEventListener('click', (event) => {
+    container.addEventListener('click', async (event) => {
         const image = event.target.closest('.matching-name-image');
         if (!image) return;
-        const willExpand = !image.classList.contains('expanded');
-        container.querySelectorAll('.matching-name-image.expanded').forEach((img) => {
-            img.classList.remove('expanded');
-        });
-        if (willExpand) {
-            image.classList.add('expanded');
-        }
+        const matchingItem = image.closest('.matching-item');
+        if (!matchingItem) return;
+
+        const submissionId = parseInt(matchingItem.dataset.submissionId, 10);
+        if (!Number.isInteger(submissionId)) return;
+
+        await openMatchingPagePreview(submissionId);
     });
 
     matchingImagePreviewBound = true;
+}
+
+function ensureMatchingPagePreviewDialog() {
+    if (matchingPagePreviewDialog) {
+        return matchingPagePreviewDialog;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'matching-page-preview-dialog';
+    overlay.style.display = 'none';
+    overlay.style.position = 'fixed';
+    overlay.style.top = '0';
+    overlay.style.left = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.background = 'rgba(0,0,0,0.8)';
+    overlay.style.zIndex = '2200';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.innerHTML = `
+        <div style="background: white; border-radius: 8px; padding: 20px; max-width: 95vw; max-height: 95vh; overflow: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h3 id="matching-page-preview-title" style="margin: 0;">Full Page Preview</h3>
+                <button id="matching-page-preview-close" class="btn" style="padding: 5px 15px;">&times;</button>
+            </div>
+            <div id="matching-page-preview-status" style="margin-bottom: 12px; color: var(--gray-700);">Loading full page preview...</div>
+            <img id="matching-page-preview-image" alt="Full page preview" style="display: none; max-width: 100%; height: auto;">
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const closeButton = overlay.querySelector('#matching-page-preview-close');
+    closeButton.addEventListener('click', () => {
+        closeMatchingPagePreviewDialog();
+    });
+
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) {
+            closeMatchingPagePreviewDialog();
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && overlay.style.display === 'flex') {
+            closeMatchingPagePreviewDialog();
+        }
+    });
+
+    matchingPagePreviewDialog = {
+        overlay,
+        title: overlay.querySelector('#matching-page-preview-title'),
+        status: overlay.querySelector('#matching-page-preview-status'),
+        image: overlay.querySelector('#matching-page-preview-image')
+    };
+
+    return matchingPagePreviewDialog;
+}
+
+function closeMatchingPagePreviewDialog() {
+    if (!matchingPagePreviewDialog) return;
+    matchingPagePreviewDialog.overlay.style.display = 'none';
+}
+
+async function getPagePreviewErrorMessage(response) {
+    try {
+        const errorData = await response.json();
+        if (errorData && errorData.detail) {
+            return String(errorData.detail);
+        }
+    } catch {
+        // Fall back to a generic error message.
+    }
+    return `Request failed (${response.status})`;
+}
+
+async function openMatchingPagePreview(submissionId) {
+    if (!currentSession) return;
+
+    const submission = allSubmissions.find((s) => s.id === submissionId);
+    if (!submission) {
+        throw new Error('Submission not found');
+    }
+
+    const dialog = ensureMatchingPagePreviewDialog();
+    const requestId = ++matchingPagePreviewRequestId;
+
+    dialog.title.textContent = `Exam #${submission.document_id + 1} Full Page`;
+    dialog.status.style.display = 'block';
+    dialog.status.style.color = 'var(--gray-700)';
+    dialog.status.textContent = 'Loading full page preview...';
+    dialog.image.style.display = 'none';
+    dialog.overlay.style.display = 'flex';
+
+    try {
+        let pageImage = matchingPagePreviewCache.get(submissionId);
+
+        if (!pageImage) {
+            const response = await fetch(`${API_BASE}/matching/${currentSession.id}/submissions/${submissionId}/page-preview`);
+            if (!response.ok) {
+                throw new Error(await getPagePreviewErrorMessage(response));
+            }
+            const result = await response.json();
+            pageImage = result.page_image;
+            if (!pageImage) {
+                throw new Error('No preview image returned');
+            }
+            matchingPagePreviewCache.set(submissionId, pageImage);
+        }
+
+        // Avoid updating the dialog with stale responses if user clicked another image.
+        if (requestId !== matchingPagePreviewRequestId) {
+            return;
+        }
+
+        dialog.image.src = `data:image/png;base64,${pageImage}`;
+        dialog.image.style.display = 'block';
+        dialog.status.style.display = 'none';
+    } catch (error) {
+        if (requestId !== matchingPagePreviewRequestId) {
+            return;
+        }
+        dialog.image.removeAttribute('src');
+        dialog.image.style.display = 'none';
+        dialog.status.style.display = 'block';
+        dialog.status.style.color = 'var(--danger-color)';
+        dialog.status.textContent = `Unable to load full page preview: ${error.message}`;
+        console.error('Failed to load full page preview:', error);
+    }
 }
 
 async function toggleCanvasNameReveal() {

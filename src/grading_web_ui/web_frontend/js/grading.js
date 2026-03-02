@@ -33,7 +33,7 @@ const DEFAULT_SUBJECTIVE_BUCKETS = [
     { id: 'has_everything', label: 'Has everything', color: '#2563eb' },
     { id: 'missing_little', label: 'Missing a little', color: '#f59e0b' },
     { id: 'missing_lot', label: 'Missing a lot', color: '#ef4444' },
-    { id: 'random', label: 'Random', color: '#6b7280' },
+    { id: 'off_topic', label: 'Off topic', color: '#6b7280' },
     { id: 'blank', label: 'Blank', color: '#9ca3af' }
 ];
 const TAG_SIGNATURE_DELIMITER = '|';
@@ -838,6 +838,16 @@ function renderSubjectiveBucketEditor() {
     const isTag = isTagMode(settings.grading_mode);
     editor.innerHTML = '';
 
+    if (draftBuckets.length === 0) {
+        const emptyState = document.createElement('div');
+        emptyState.style.cssText = 'padding: 10px; border: 1px dashed var(--gray-300); border-radius: 6px; font-size: 13px; color: var(--gray-700);';
+        emptyState.textContent = isTag
+            ? 'No tags configured in this draft yet. Use "+ Add Tag" or "Reset to Defaults".'
+            : 'No buckets configured in this draft yet. Use "+ Add Bucket" or "Reset to Defaults".';
+        editor.appendChild(emptyState);
+        return;
+    }
+
     draftBuckets.forEach((bucket, index) => {
         const row = document.createElement('div');
         row.className = 'subjective-bucket-row';
@@ -930,6 +940,13 @@ function buildBucketDraftFromSettings(problemNumber = Number(currentProblemNumbe
     return draftBuckets;
 }
 
+function buildDefaultBucketDraft(problemNumber = Number(currentProblemNumber)) {
+    const draftBuckets = normalizeSubjectiveBuckets(cloneDefaultSubjectiveBuckets())
+        .map((bucket) => ({ ...bucket }));
+    subjectiveBucketDraftByProblem.set(problemNumber, draftBuckets);
+    return draftBuckets;
+}
+
 function openSubjectiveBucketDialog() {
     const settings = getCurrentSubjectiveSettings();
     if (!settings) return;
@@ -1009,14 +1026,16 @@ async function saveSubjectiveSettings() {
     const settings = getCurrentSubjectiveSettings();
     if (!settings || !currentSession || !currentProblemNumber) return;
 
+    const problemNumber = Number(currentProblemNumber);
+    const hasDraft = subjectiveBucketDraftByProblem.has(problemNumber);
     syncSubjectiveBucketsFromEditor();
     let buckets = collectBucketsFromEditor();
     // When switching into subjective mode, the editor may not be rendered yet.
     // Fall back to in-memory settings/defaults so mode toggle can persist cleanly.
     if (buckets.length === 0) {
-        if (Array.isArray(settings.buckets) && settings.buckets.length > 0) {
+        if (!hasDraft && Array.isArray(settings.buckets) && settings.buckets.length > 0) {
             buckets = normalizeSubjectiveBuckets(settings.buckets);
-        } else if (isGroupingMode(settings.grading_mode)) {
+        } else if (!hasDraft && isGroupingMode(settings.grading_mode)) {
             buckets = normalizeSubjectiveBuckets(cloneDefaultSubjectiveBuckets());
         }
     }
@@ -1078,6 +1097,9 @@ function applyGradingModeUI() {
     const subjectivePanel = document.getElementById('subjective-grading-panel');
     const subjectiveModeHelp = document.getElementById('subjective-mode-help');
     const manageBucketsBtn = document.getElementById('subjective-manage-buckets-btn');
+    const addBucketBtn = document.getElementById('subjective-add-bucket-btn');
+    const resetDefaultsBtn = document.getElementById('subjective-reset-default-buckets-btn');
+    const clearBucketsBtn = document.getElementById('subjective-clear-buckets-btn');
     const submitGradeBtn = document.getElementById('submit-grade-btn');
     const subjectiveAssignBtn = document.getElementById('subjective-assign-btn');
     const subjectiveClearBtn = document.getElementById('subjective-clear-btn');
@@ -1102,6 +1124,15 @@ function applyGradingModeUI() {
     }
     if (manageBucketsBtn) {
         manageBucketsBtn.textContent = tagMode ? 'Manage Tags' : 'Manage Buckets';
+    }
+    if (addBucketBtn) {
+        addBucketBtn.textContent = tagMode ? '+ Add Tag' : '+ Add Bucket';
+    }
+    if (resetDefaultsBtn) {
+        resetDefaultsBtn.textContent = tagMode ? 'Reset Tags to Defaults' : 'Reset Buckets to Defaults';
+    }
+    if (clearBucketsBtn) {
+        clearBucketsBtn.textContent = tagMode ? 'Clear Tags' : 'Clear Buckets';
     }
     if (submitGradeBtn) {
         submitGradeBtn.style.display = isGrouping ? 'none' : 'inline-block';
@@ -1503,6 +1534,30 @@ function setupGradingControls() {
             color: bucketColorFromSeed(newBucketId)
         });
         subjectiveBucketDraftByProblem.set(problemNumber, draft);
+        renderSubjectiveBucketEditor();
+    };
+    document.getElementById('subjective-reset-default-buckets-btn').onclick = () => {
+        const settings = getCurrentSubjectiveSettings();
+        if (!settings) return;
+        const noun = isTagMode(settings.grading_mode) ? 'tags' : 'buckets';
+        const confirmed = confirm(
+            `Reset ${noun} to defaults?\n\n` +
+            `This will replace your current unsaved ${noun} in this editor.`
+        );
+        if (!confirmed) return;
+        buildDefaultBucketDraft(Number(currentProblemNumber));
+        renderSubjectiveBucketEditor();
+    };
+    document.getElementById('subjective-clear-buckets-btn').onclick = () => {
+        const settings = getCurrentSubjectiveSettings();
+        if (!settings) return;
+        const noun = isTagMode(settings.grading_mode) ? 'tags' : 'buckets';
+        const confirmed = confirm(
+            `Clear all ${noun} from this draft?\n\n` +
+            `You can add new ones after clearing.`
+        );
+        if (!confirmed) return;
+        subjectiveBucketDraftByProblem.set(Number(currentProblemNumber), []);
         renderSubjectiveBucketEditor();
     };
 

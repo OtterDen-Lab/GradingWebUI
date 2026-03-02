@@ -916,14 +916,7 @@ header h1 {
     border: 1px solid #ccc;
     border-radius: 4px;
     height: auto;
-    cursor: zoom-in;
-    transition: width 0.2s ease;
-}
-
-.matching-name-image.expanded {
-    width: clamp(350px, calc(100vw - 420px), 1000px);
-    max-width: 100%;
-    cursor: zoom-out;
+    cursor: pointer;
 }
 
 .student-select {

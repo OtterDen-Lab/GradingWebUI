@@ -4,6 +4,9 @@ Name matching endpoints for unmatched submissions.
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List
 import json
+from pathlib import Path
+import base64
+import fitz  # PyMuPDF
 
 from ..models import NameMatchRequest
 from ..database import get_db_connection
@@ -12,6 +15,32 @@ from lms_interface.canvas_interface import CanvasInterface
 from ..auth import require_session_access
 
 router = APIRouter()
+
+
+def _resolve_submission_pdf_path(session_data: dict,
+                                 file_hash: str | None,
+                                 original_filename: str | None,
+                                 document_id: int | None = None) -> Path | None:
+  """Resolve submission PDF path from session metadata."""
+  file_metadata = session_data.get("file_metadata") if session_data else None
+
+  if isinstance(file_metadata, dict):
+    if file_hash:
+      for path_str, metadata in file_metadata.items():
+        if isinstance(metadata, dict) and metadata.get("hash") == file_hash:
+          return Path(path_str)
+
+    if original_filename:
+      for path_str, metadata in file_metadata.items():
+        if isinstance(metadata, dict) and metadata.get("original_filename") == original_filename:
+          return Path(path_str)
+
+  file_paths = session_data.get("file_paths") if session_data else None
+  if isinstance(file_paths, list) and document_id is not None:
+    if 0 <= document_id < len(file_paths):
+      return Path(file_paths[document_id])
+
+  return None
 
 
 @router.get("/{session_id}/submissions")
@@ -41,6 +70,80 @@ async def get_all_submissions(
     })
 
   return {"submissions": submissions}
+
+
+@router.get("/{session_id}/submissions/{submission_id}/page-preview")
+async def get_submission_page_preview(
+  session_id: int,
+  submission_id: int,
+  current_user: dict = Depends(require_session_access())
+):
+  """Get full first page preview for a submission."""
+  submission_repo = SubmissionRepository()
+  session_repo = SessionRepository()
+
+  submission = submission_repo.get_by_id(submission_id)
+  if not submission or submission.session_id != session_id:
+    raise HTTPException(status_code=404, detail="Submission not found")
+
+  page_image_base64 = None
+  page_number = 0
+
+  if submission.exam_pdf_data:
+    try:
+      pdf_bytes = base64.b64decode(submission.exam_pdf_data)
+      with fitz.open("pdf", pdf_bytes) as pdf_document:
+        if pdf_document.page_count == 0:
+          raise HTTPException(status_code=400, detail="Submission PDF has no pages")
+        pix = pdf_document[page_number].get_pixmap(dpi=150)
+        page_image_base64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+    except HTTPException:
+      raise
+    except Exception as exc:
+      raise HTTPException(
+        status_code=500,
+        detail=f"Failed to render stored submission PDF: {str(exc)}"
+      ) from exc
+
+  if not page_image_base64:
+    session_data = session_repo.get_metadata(session_id) or {}
+    pdf_path = _resolve_submission_pdf_path(
+      session_data=session_data,
+      file_hash=submission.file_hash,
+      original_filename=submission.original_filename,
+      document_id=submission.document_id
+    )
+
+    if not pdf_path:
+      raise HTTPException(
+        status_code=404,
+        detail="Original PDF path not found for submission"
+      )
+    if not pdf_path.exists():
+      raise HTTPException(
+        status_code=404,
+        detail=f"Original PDF file not found: {pdf_path}"
+      )
+
+    try:
+      with fitz.open(str(pdf_path)) as pdf_document:
+        if pdf_document.page_count == 0:
+          raise HTTPException(status_code=400, detail="Submission PDF has no pages")
+        pix = pdf_document[page_number].get_pixmap(dpi=150)
+        page_image_base64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+    except HTTPException:
+      raise
+    except Exception as exc:
+      raise HTTPException(
+        status_code=500,
+        detail=f"Failed to render submission PDF: {str(exc)}"
+      ) from exc
+
+  return {
+    "submission_id": submission_id,
+    "page_number": page_number,
+    "page_image": page_image_base64
+  }
 
 
 @router.get("/{session_id}/students")
