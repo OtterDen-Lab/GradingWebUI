@@ -32,6 +32,8 @@ jobs:
         run: |
           # Toolchain exceptions:
           # - pip/wheel advisories are tracked in the CI base image/tooling lifecycle.
+          # - lms-interface is intentionally pinned from GitHub (not published on PyPI),
+          #   so pip-audit cannot resolve advisories for that package name.
           max_attempts=3
           attempt=1
           while [ "$attempt" -le "$max_attempts" ]; do
@@ -48,6 +50,15 @@ jobs:
             echo "$audit_output"
 
             if [ "$audit_status" -eq 0 ]; then
+              exit 0
+            fi
+
+            if echo "$audit_output" | grep -Eiq "lms-interface.*Dependency not found on PyPI and could not be audited"; then
+              if echo "$audit_output" | grep -Eiq "Found [1-9][0-9]* known vulnerabilit"; then
+                echo "Known lms-interface exception detected, but unresolved vulnerabilities remain."
+                exit "$audit_status"
+              fi
+              echo "Ignoring known non-PyPI audit exception for lms-interface."
               exit 0
             fi
 

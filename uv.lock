@@ -606,7 +606,7 @@ requires-dist = [
     { name = "fastapi", specifier = "==0.127.1" },
     { name = "fuzzywuzzy", specifier = "==0.18.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = "==0.28.1" },
-    { name = "lms-interface", git = "https://github.com/OtterDen-Lab/LMSInterface.git?rev=v0.5.0" },
+    { name = "lms-interface", git = "https://github.com/OtterDen-Lab/LMSInterface.git?rev=v0.5.1" },
     { name = "ollama", specifier = "==0.6.1" },
     { name = "openai", specifier = "==2.14.0" },
     { name = "opencv-python", specifier = "==4.12.0.88" },
@@ -622,7 +622,7 @@ requires-dist = [
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "pyzbar", specifier = "==0.1.9" },
     { name = "quizgenerator", specifier = "==0.23.0" },
-    { name = "requests", specifier = "==2.32.2" },
+    { name = "requests", specifier = "==2.32.4" },
     { name = "scikit-learn", specifier = "==1.8.0" },
     { name = "urllib3", specifier = "==2.6.3" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.40.0" },
@@ -942,8 +942,8 @@ wheels = [
 
 [[package]]
 name = "lms-interface"
-version = "0.5.0"
-source = { git = "https://github.com/OtterDen-Lab/LMSInterface.git?rev=v0.5.0#18b3df29bb89fcc64f0d33ba3e111d0d55a668a2" }
+version = "0.5.1"
+source = { git = "https://github.com/OtterDen-Lab/LMSInterface.git?rev=v0.5.1#9914dcce3dbe0b29537806f1effc02b9a34e1402" }
 dependencies = [
     { name = "canvasapi" },
     { name = "pytest" },
@@ -1748,7 +1748,7 @@ wheels = [
 
 [[package]]
 name = "requests"
-version = "2.32.2"
+version = "2.32.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -1756,9 +1756,9 @@ dependencies = [
     { name = "idna" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/86/ec/535bf6f9bd280de6a4637526602a146a68fde757100ecf8c9333173392db/requests-2.32.2.tar.gz", hash = "sha256:dd951ff5ecf3e3b3aa26b40703ba77495dab41da839ae72ef3c8e5d8e2433289", size = 130327, upload-time = "2024-05-21T18:51:32.819Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/0a/929373653770d8a0d7ea76c37de6e41f11eb07559b103b1c02cafb3f7cf8/requests-2.32.4.tar.gz", hash = "sha256:27d0316682c8a29834d3264820024b62a36942083d52caf2f14c0591336d3422", size = 135258, upload-time = "2025-06-09T16:43:07.34Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c3/20/748e38b466e0819491f0ce6e90ebe4184966ee304fe483e2c414b0f4ef07/requests-2.32.2-py3-none-any.whl", hash = "sha256:fc06670dd0ed212426dfeb94fc1b983d917c4f9847c863f313c9dfaaffb7c23c", size = 63902, upload-time = "2024-05-21T18:51:29.562Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/e4/56027c4a6b4ae70ca9de302488c5ca95ad4a39e190093d6c1a8ace08341b/requests-2.32.4-py3-none-any.whl", hash = "sha256:27babd3cda2a6d50b30443204ee89830707d396671944c998b5975b031ac2b2c", size = 64847, upload-time = "2025-06-09T16:43:05.728Z" },
 ]
 
 [[package]]

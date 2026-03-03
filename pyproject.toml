@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
     "python-dotenv==1.0.1",
     "PyYAML==6.0.3",
-    "requests==2.32.2",
+    "requests==2.32.4",
     "urllib3==2.6.3",
     "pandas==2.3.3",
     "fuzzywuzzy==0.18.0",
@@ -44,7 +44,7 @@ dependencies = [
     "QuizGenerator==0.23.0",
     "bcrypt==5.0.0",
     "canvasapi==3.2.0",
-    "lms-interface @ git+https://github.com/OtterDen-Lab/LMSInterface.git@v0.5.0",
+    "lms-interface @ git+https://github.com/OtterDen-Lab/LMSInterface.git@v0.5.1",
 ]
 
 [project.optional-dependencies]
