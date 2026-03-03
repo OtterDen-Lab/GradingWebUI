@@ -13,7 +13,8 @@ RUN_IMAGE ?= autograder-web-grading:local
 RUN_ENV_FILE ?= .env
 DEPLOY_ENV_FILE ?= /etc/grading-web/web.env
 REGISTRY_IMAGE ?= samogden/webgraderui
-PUBLISH_VERSION ?= v0.8.1
+PROJECT_VERSION ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1)
+PUBLISH_VERSION ?= v$(PROJECT_VERSION)
 DEPLOY_TAG ?= latest
 PUBLISH_PLATFORMS ?= linux/amd64
 DOCKER_COMPOSE ?= docker compose -f docker/web-grading/docker-compose.prod.yml
