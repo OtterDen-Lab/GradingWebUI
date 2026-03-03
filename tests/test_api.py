@@ -193,6 +193,37 @@ def test_create_session(client):
   data = response.json()
   assert data["assignment_name"] == "Test Exam"
   assert data["status"] == "preprocessing"
+  assert data["qr_scan_enabled"] is False
+  assert data["qr_scan_max_dpi"] == 300
+
+
+def test_create_session_accepts_qr_scan_settings(client):
+  """Session creation should persist explicit QR scan settings."""
+  response = client.post("/api/sessions",
+                         json={
+                           "course_id": 12345,
+                           "assignment_id": 67890,
+                           "assignment_name": "Test Exam",
+                           "qr_scan_enabled": True,
+                           "qr_scan_max_dpi": 150
+                         })
+  assert response.status_code == 200
+  data = response.json()
+  assert data["qr_scan_enabled"] is True
+  assert data["qr_scan_max_dpi"] == 150
+
+
+def test_create_session_rejects_invalid_qr_scan_max_dpi(client):
+  """Session creation should reject unsupported QR DPI values."""
+  response = client.post("/api/sessions",
+                         json={
+                           "course_id": 12345,
+                           "assignment_id": 67890,
+                           "assignment_name": "Test Exam",
+                           "qr_scan_max_dpi": 900
+                         })
+  assert response.status_code == 400
+  assert "qr_scan_max_dpi must be one of" in response.json()["detail"]
 
 
 def test_get_nonexistent_session(client):
@@ -217,6 +248,62 @@ def test_list_sessions(client):
   data = response.json()
   assert isinstance(data, list)
   assert len(data) > 0
+
+
+def test_matching_students_uses_cached_roster_when_canvas_unavailable(client,
+                                                                       monkeypatch):
+  """Matching students endpoint should fall back to cached roster on Canvas errors."""
+  from grading_web_ui.web_api.routes import matching as matching_routes
+
+  session_id = create_test_session(client, "Matching Cached Roster")
+  SessionRepository().update_metadata(
+    session_id, {
+      "cached_canvas_students": [{
+        "user_id": 101,
+        "name": "Student One"
+      }]
+    })
+
+  class FakeCanvasInterface:
+
+    def __init__(self, prod=False, privacy_mode="none"):
+      pass
+
+    def get_course(self, course_id):
+      raise RuntimeError("simulated canvas network outage")
+
+  monkeypatch.setattr(matching_routes, "CanvasInterface", FakeCanvasInterface)
+
+  response = client.get(f"/api/matching/{session_id}/students")
+  assert response.status_code == 200
+  payload = response.json()
+  assert payload["students"] == [{
+    "user_id": 101,
+    "name": "Student One",
+    "is_matched": False
+  }]
+
+
+def test_matching_students_returns_503_when_canvas_and_cache_unavailable(
+    client, monkeypatch):
+  """Matching students endpoint should return 503 if no Canvas roster is available."""
+  from grading_web_ui.web_api.routes import matching as matching_routes
+
+  session_id = create_test_session(client, "Matching No Roster")
+
+  class FakeCanvasInterface:
+
+    def __init__(self, prod=False, privacy_mode="none"):
+      pass
+
+    def get_course(self, course_id):
+      raise RuntimeError("simulated canvas network outage")
+
+  monkeypatch.setattr(matching_routes, "CanvasInterface", FakeCanvasInterface)
+
+  response = client.get(f"/api/matching/{session_id}/students")
+  assert response.status_code == 503
+  assert "no cached roster" in response.json()["detail"].lower()
 
 
 def test_update_problem_max_points_accepts_zero_to_hundred(client):

@@ -48,6 +48,10 @@ QUIZ_YAML_IDS_KEY = "quiz_yaml_ids"
 QUIZ_YAML_DOC_COUNT_KEY = "quiz_yaml_doc_count"
 QUIZ_YAML_UPLOADED_AT_KEY = "quiz_yaml_uploaded_at"
 NAME_RECT_KEY = "name_rect"
+QR_SCAN_ENABLED_KEY = "qr_scan_enabled"
+QR_SCAN_MAX_DPI_KEY = "qr_scan_max_dpi"
+DEFAULT_QR_SCAN_MAX_DPI = 300
+DEFAULT_QR_SCAN_ENABLED = False
 
 
 class SplitPointsSubmission(BaseModel):
@@ -107,6 +111,63 @@ def _session_requires_manual_name_box(session_data: Optional[dict]) -> bool:
 
   mock_roster = bool(session_data.get("mock_roster", False))
   return not mock_roster
+
+
+def _normalize_qr_scan_max_dpi(raw_value: Any) -> int:
+  try:
+    parsed = int(raw_value)
+  except (TypeError, ValueError):
+    parsed = DEFAULT_QR_SCAN_MAX_DPI
+
+  if parsed in PRESCAN_DPI_STEPS:
+    return parsed
+
+  if parsed <= PRESCAN_DPI_STEPS[0]:
+    return PRESCAN_DPI_STEPS[0]
+
+  supported = [dpi for dpi in PRESCAN_DPI_STEPS if dpi <= parsed]
+  if supported:
+    return supported[-1]
+  return DEFAULT_QR_SCAN_MAX_DPI
+
+
+def _parse_bool_value(raw_value: Any, *, default: bool) -> bool:
+  if raw_value is None:
+    return default
+
+  if isinstance(raw_value, bool):
+    return raw_value
+
+  if isinstance(raw_value, (int, float)):
+    return raw_value != 0
+
+  if isinstance(raw_value, str):
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+      return True
+    if normalized in {"0", "false", "f", "no", "n", "off", ""}:
+      return False
+    return default
+
+  return bool(raw_value)
+
+
+def _resolve_qr_scan_settings(session_data: Optional[dict]) -> tuple[bool, int, List[int]]:
+  metadata = session_data or {}
+  enabled = _parse_bool_value(
+    metadata.get(QR_SCAN_ENABLED_KEY), default=DEFAULT_QR_SCAN_ENABLED
+  )
+  max_dpi = _normalize_qr_scan_max_dpi(
+    metadata.get(QR_SCAN_MAX_DPI_KEY, DEFAULT_QR_SCAN_MAX_DPI)
+  )
+
+  if not enabled:
+    return False, max_dpi, []
+
+  dpi_steps = [dpi for dpi in PRESCAN_DPI_STEPS if dpi <= max_dpi]
+  if not dpi_steps:
+    dpi_steps = [PRESCAN_DPI_STEPS[0]]
+  return True, max_dpi, dpi_steps
 
 
 def _create_merged_first_page_preview(file_paths: List[Path],
@@ -445,6 +506,18 @@ async def upload_exams(
                                and "split_points" in existing_data
                                and existing_data["split_points"])
 
+  resolved_qr_scan_enabled = _parse_bool_value(
+    existing_data.get(QR_SCAN_ENABLED_KEY), default=DEFAULT_QR_SCAN_ENABLED
+  )
+  resolved_qr_scan_max_dpi = _normalize_qr_scan_max_dpi(
+    existing_data.get(QR_SCAN_MAX_DPI_KEY, DEFAULT_QR_SCAN_MAX_DPI)
+  )
+  log.info(
+    "Upload QR settings resolved: enabled=%s, max_dpi=%s",
+    resolved_qr_scan_enabled,
+    resolved_qr_scan_max_dpi
+  )
+
   if has_existing_split_points:
     log.info(f"Found existing split points - will auto-process new uploads")
   else:
@@ -546,6 +619,9 @@ async def upload_exams(
     if NAME_RECT_KEY in existing_data:
       session_data[NAME_RECT_KEY] = existing_data[NAME_RECT_KEY]
     total_files = len(saved_files)
+
+  session_data[QR_SCAN_ENABLED_KEY] = resolved_qr_scan_enabled
+  session_data[QR_SCAN_MAX_DPI_KEY] = resolved_qr_scan_max_dpi
 
   # Update session with file metadata and status
   session_repo.update_metadata(session_id, session_data)
@@ -860,6 +936,9 @@ async def prepare_alignment(
 
   qr_positions_by_file = None
   qr_scanner = QRScanner()
+  qr_scan_enabled, qr_scan_max_dpi, qr_scan_dpi_steps = _resolve_qr_scan_settings(
+    session_data
+  )
   stream_id = sse.make_stream_id("upload", session_id)
   if not sse.get_stream(stream_id):
     sse.create_stream(stream_id)
@@ -884,7 +963,7 @@ async def prepare_alignment(
     total_qr_steps = 0
     max_pages = 0
     page_counts = []
-    if qr_scanner.available:
+    if qr_scan_enabled and qr_scanner.available:
       import fitz
       for pdf_path in file_paths:
         try:
@@ -919,6 +998,7 @@ async def prepare_alignment(
 
           positions = qr_scanner.scan_qr_positions_from_pdf(
             pdf_path,
+            dpi_steps=qr_scan_dpi_steps,
             progress_callback=page_progress,
             max_workers=per_file_workers
           )
@@ -936,7 +1016,14 @@ async def prepare_alignment(
     else:
       max_pages = 1
       total_qr_steps = 0
-      send_progress("Preparing alignment images...", 0, max_pages)
+      if not qr_scan_enabled:
+        send_progress(
+          f"Skipping QR scan (disabled, max DPI setting {qr_scan_max_dpi}). Preparing alignment images...",
+          0,
+          max_pages
+        )
+      else:
+        send_progress("Preparing alignment images...", 0, max_pages)
 
     alignment_service = ManualAlignmentService()
     def composite_progress(page_index: int, page_total: int, message: str) -> None:
@@ -1123,15 +1210,57 @@ async def process_exam_names(
       ai_name_extraction = bool(session.metadata.get("ai_name_extraction"))
 
     canvas_students = []
+    roster_source = "none"
     if not mock_roster:
-      canvas_interface = CanvasInterface(
-        prod=session.use_prod_canvas,
-        privacy_mode="none"
-      )
-      course = canvas_interface.get_course(session.course_id)
-      assignment = course.get_assignment(session.assignment_id)
-      students = assignment.get_students(include_names=True)
-      canvas_students = [{"name": s.name, "user_id": s.user_id} for s in students]
+      cached_students_raw = session_data.get("cached_canvas_students")
+      cached_students = []
+      if isinstance(cached_students_raw, list):
+        for entry in cached_students_raw:
+          if not isinstance(entry, dict):
+            continue
+          name = str(entry.get("name") or "").strip()
+          try:
+            user_id = int(entry.get("user_id"))
+          except (TypeError, ValueError):
+            continue
+          if not name:
+            continue
+          cached_students.append({"name": name, "user_id": user_id})
+
+      try:
+        canvas_interface = CanvasInterface(
+          prod=session.use_prod_canvas,
+          privacy_mode="none"
+        )
+        course = canvas_interface.get_course(session.course_id)
+        assignment = course.get_assignment(session.assignment_id)
+        students = assignment.get_students(include_names=True)
+        canvas_students = [{"name": s.name, "user_id": s.user_id} for s in students]
+        roster_source = "canvas"
+        session_data["cached_canvas_students"] = canvas_students
+        session_data.pop("canvas_roster_error", None)
+        session_repo.update_metadata(session_id, session_data)
+      except Exception as roster_exc:
+        if cached_students:
+          canvas_students = cached_students
+          roster_source = "cached"
+          log.warning(
+            "Canvas roster lookup failed for session %s; using cached roster (%s students). Error: %s",
+            session_id,
+            len(cached_students),
+            roster_exc
+          )
+        else:
+          canvas_students = []
+          roster_source = "unavailable"
+          log.warning(
+            "Canvas roster lookup failed for session %s with no cached roster. "
+            "Continuing name extraction without roster guidance. Error: %s",
+            session_id,
+            roster_exc
+          )
+        session_data["canvas_roster_error"] = str(roster_exc)
+        session_repo.update_metadata(session_id, session_data)
 
     submission_repo = SubmissionRepository()
     existing_hashes = submission_repo.get_existing_hashes(session_id)
@@ -1278,14 +1407,23 @@ async def process_exam_names(
     next_status = SessionStatus.NAME_MATCHING_NEEDED
     if mock_roster:
       next_status = SessionStatus.AWAITING_ALIGNMENT
-    session_repo.update_status(session_id, next_status, "Name extraction complete")
+    completion_message = "Name extraction complete"
+    if not mock_roster and roster_source == "cached":
+      completion_message = (
+        "Name extraction complete (Canvas roster unreachable; using cached roster)"
+      )
+    elif not mock_roster and roster_source == "unavailable":
+      completion_message = (
+        "Name extraction complete (Canvas roster unavailable; retry Canvas connection before matching)"
+      )
+    session_repo.update_status(session_id, next_status, completion_message)
 
     await sse.send_event(
       stream_id, "complete", {
         "total": len(file_paths),
         "matched": matched_count,
         "unmatched": len(file_paths) - matched_count,
-        "message": f"Name extraction complete: {len(file_paths)} exams processed"
+        "message": f"{completion_message}: {len(file_paths)} exams processed"
       })
 
   except Exception as e:
@@ -1400,7 +1538,18 @@ async def process_exam_splits(
 
     main_loop = asyncio.get_event_loop()
     regions_per_exam = estimate_regions_per_exam(file_paths_to_process[0])
-    total_steps = len(file_paths_to_process) * (1 + regions_per_exam * len(PRESCAN_DPI_STEPS))
+    _, _, qr_prescan_dpi_steps = _resolve_qr_scan_settings(session_data)
+    log.info(
+      "QR pre-scan settings for session %s: enabled=%s, dpi_steps=%s",
+      session_id,
+      bool(qr_prescan_dpi_steps),
+      qr_prescan_dpi_steps
+    )
+    qr_prescan_steps_per_region = len(qr_prescan_dpi_steps)
+    total_steps = len(file_paths_to_process) * (
+      1 + regions_per_exam * qr_prescan_steps_per_region
+    )
+    total_steps = max(1, total_steps)
     current_step = {"count": 0}
 
     def update_progress(processed, matched, message, step_increment: int = 1):
@@ -1436,7 +1585,11 @@ async def process_exam_splits(
         log.error(f"Failed to send SSE event: {e}")
 
     name_rect = _get_name_rect_from_session_data(session_data)
-    processor = ExamProcessor(name_rect=name_rect, ai_provider=ai_provider)
+    processor = ExamProcessor(
+      name_rect=name_rect,
+      ai_provider=ai_provider,
+      qr_prescan_dpi_steps=qr_prescan_dpi_steps
+    )
     loop = asyncio.get_event_loop()
     matched, unmatched = await loop.run_in_executor(
       None,

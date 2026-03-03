@@ -13,7 +13,7 @@ import logging
 import base64
 import fitz
 from ..services.qr_scanner import QRScanner
-from ..services.exam_processor import ExamProcessor
+from ..services.exam_processor import ExamProcessor, PRESCAN_DPI_STEPS
 from ..services.quiz_encryption import set_runtime_encryption_key
 from ..services.feedback_text import merge_general_feedback
 
@@ -49,6 +49,10 @@ QUIZ_YAML_FILENAME_KEY = "quiz_yaml_filename"
 QUIZ_YAML_IDS_KEY = "quiz_yaml_ids"
 QUIZ_YAML_DOC_COUNT_KEY = "quiz_yaml_doc_count"
 QUIZ_YAML_UPLOADED_AT_KEY = "quiz_yaml_uploaded_at"
+QR_SCAN_ENABLED_KEY = "qr_scan_enabled"
+QR_SCAN_MAX_DPI_KEY = "qr_scan_max_dpi"
+DEFAULT_QR_SCAN_ENABLED = False
+DEFAULT_QR_SCAN_MAX_DPI = 300
 
 DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "above_beyond", "label": "Above and beyond", "color": "#16a34a"},
@@ -142,19 +146,47 @@ def _signature_tag_ids(signature: str) -> set[str]:
   }
 
 
+def _parse_bool_metadata_value(raw_value: object, *, default: bool) -> bool:
+  if raw_value is None:
+    return default
+  if isinstance(raw_value, bool):
+    return raw_value
+  if isinstance(raw_value, str):
+    normalized = raw_value.strip().lower()
+    if normalized in ("1", "true", "t", "yes", "y", "on"):
+      return True
+    if normalized in ("0", "false", "f", "no", "n", "off", ""):
+      return False
+    return default
+  return bool(raw_value)
+
+
 def session_to_response(session: GradingSession) -> SessionResponse:
   response = SessionResponse.model_validate(session)
   is_mock = bool(session.metadata and session.metadata.get("mock_roster"))
   ai_enabled = True
   if session.metadata and "ai_name_extraction" in session.metadata:
     ai_enabled = bool(session.metadata.get("ai_name_extraction"))
+  qr_scan_enabled = DEFAULT_QR_SCAN_ENABLED
+  qr_scan_max_dpi = DEFAULT_QR_SCAN_MAX_DPI
+  if session.metadata:
+    if QR_SCAN_ENABLED_KEY in session.metadata:
+      qr_scan_enabled = _parse_bool_metadata_value(
+        session.metadata.get(QR_SCAN_ENABLED_KEY),
+        default=DEFAULT_QR_SCAN_ENABLED
+      )
+    raw_qr_scan_max_dpi = session.metadata.get(QR_SCAN_MAX_DPI_KEY)
+    if isinstance(raw_qr_scan_max_dpi, int):
+      qr_scan_max_dpi = raw_qr_scan_max_dpi
   session_name = None
   if session.metadata and session.metadata.get("session_name"):
     session_name = session.metadata.get("session_name")
   return response.model_copy(update={
     "mock_roster": is_mock,
     "ai_name_extraction": ai_enabled,
-    "session_name": session_name
+    "session_name": session_name,
+    "qr_scan_enabled": qr_scan_enabled,
+    "qr_scan_max_dpi": qr_scan_max_dpi
   })
 
 
@@ -178,16 +210,23 @@ async def create_session(
       status_code=400,
       detail=f"Mock roster sessions are disabled. Set {MOCK_ROSTER_ENV}=true to enable."
     )
+  if session.qr_scan_max_dpi not in PRESCAN_DPI_STEPS:
+    valid = ", ".join(str(dpi) for dpi in PRESCAN_DPI_STEPS)
+    raise HTTPException(
+      status_code=400,
+      detail=f"qr_scan_max_dpi must be one of: {valid}"
+    )
 
   # Create domain object
-  metadata = {}
+  metadata = {
+    QR_SCAN_ENABLED_KEY: bool(session.qr_scan_enabled),
+    QR_SCAN_MAX_DPI_KEY: int(session.qr_scan_max_dpi),
+  }
   if session.use_mock_roster or not session.use_ai_name_extraction:
     metadata["mock_roster"] = bool(session.use_mock_roster)
     metadata["ai_name_extraction"] = bool(session.use_ai_name_extraction)
   if session.session_name:
     metadata["session_name"] = session.session_name
-  if not metadata:
-    metadata = None
   new_session = GradingSession(
     id=0,  # Will be set by DB
     assignment_id=session.assignment_id,

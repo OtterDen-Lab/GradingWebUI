@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import base64
 import fitz  # PyMuPDF
+import logging
 
 from ..models import NameMatchRequest
 from ..database import get_db_connection
@@ -15,6 +16,7 @@ from lms_interface.canvas_interface import CanvasInterface
 from ..auth import require_session_access
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 def _resolve_submission_pdf_path(session_data: dict,
@@ -41,6 +43,82 @@ def _resolve_submission_pdf_path(session_data: dict,
       return Path(file_paths[document_id])
 
   return None
+
+
+def _normalize_cached_students(raw_students) -> list[dict]:
+  if not isinstance(raw_students, list):
+    return []
+
+  students = []
+  for entry in raw_students:
+    if not isinstance(entry, dict):
+      continue
+    name = str(entry.get("name") or "").strip()
+    try:
+      user_id = int(entry.get("user_id"))
+    except (TypeError, ValueError):
+      continue
+    if not name:
+      continue
+    students.append({
+      "user_id": user_id,
+      "name": name,
+    })
+  return students
+
+
+def _load_canvas_students_with_fallback(session_id: int,
+                                        session,
+                                        reveal_names: bool) -> list[dict]:
+  session_repo = SessionRepository()
+  privacy_mode = "none" if reveal_names else "id_only"
+
+  try:
+    canvas_interface = CanvasInterface(
+      prod=session.use_prod_canvas,
+      privacy_mode=privacy_mode
+    )
+    course = canvas_interface.get_course(session.course_id)
+    assignment = course.get_assignment(session.assignment_id)
+    students = assignment.get_students(include_names=True)
+    normalized = [{
+      "user_id": s.user_id,
+      "name": s.name
+    } for s in students]
+
+    # Cache the real roster when available so matching can survive transient
+    # Canvas outages during the same session.
+    metadata = session_repo.get_metadata(session_id) or {}
+    metadata["cached_canvas_students"] = [{
+      "user_id": s.user_id,
+      "name": s.name
+    } for s in students]
+    metadata.pop("canvas_roster_error", None)
+    session_repo.update_metadata(session_id, metadata)
+    return normalized
+  except Exception as exc:
+    metadata = session_repo.get_metadata(session_id) or {}
+    cached_students = _normalize_cached_students(metadata.get("cached_canvas_students"))
+    if cached_students:
+      log.warning(
+        "Canvas roster lookup failed for session %s; using cached roster (%s students). Error: %s",
+        session_id,
+        len(cached_students),
+        exc
+      )
+      if reveal_names:
+        return cached_students
+      return [{
+        "user_id": s["user_id"],
+        "name": f"Student {s['user_id']}"
+      } for s in cached_students]
+    raise HTTPException(
+      status_code=503,
+      detail=(
+        "Canvas roster is unavailable right now and no cached roster is available. "
+        "Check Canvas connectivity and retry."
+      )
+    ) from exc
 
 
 @router.get("/{session_id}/submissions")
@@ -161,24 +239,20 @@ async def get_all_students(
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")
 
-  # Get Canvas students (optionally reveal real names for explicit matching flow).
-  privacy_mode = "none" if reveal_names else "id_only"
-  canvas_interface = CanvasInterface(
-    prod=session.use_prod_canvas,
-    privacy_mode=privacy_mode
+  all_students = _load_canvas_students_with_fallback(
+    session_id=session_id,
+    session=session,
+    reveal_names=reveal_names
   )
-  course = canvas_interface.get_course(session.course_id)
-  assignment = course.get_assignment(session.assignment_id)
-  all_students = assignment.get_students(include_names=True)
 
   # Get already matched user IDs
   matched_ids = submission_repo.get_existing_canvas_users(session_id)
 
   # Create list with all students, marked as matched or not
   students = [{
-    "user_id": s.user_id,
-    "name": s.name,
-    "is_matched": s.user_id in matched_ids
+    "user_id": s["user_id"],
+    "name": s["name"],
+    "is_matched": s["user_id"] in matched_ids
   } for s in all_students]
 
   # Sort: unmatched first, then alphabetically within each group
@@ -208,17 +282,14 @@ async def match_submission(
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")
 
-  # Get student name from Canvas. When reveal_names=true, store the real name.
-  privacy_mode = "none" if reveal_names else "id_only"
-  canvas_interface = CanvasInterface(
-    prod=session.use_prod_canvas,
-    privacy_mode=privacy_mode
+  # Get student list from Canvas, with cached fallback.
+  students = _load_canvas_students_with_fallback(
+    session_id=session_id,
+    session=session,
+    reveal_names=reveal_names
   )
-  course = canvas_interface.get_course(session.course_id)
-  assignment = course.get_assignment(session.assignment_id)
-  students = assignment.get_students(include_names=True)
 
-  student = next((s for s in students if s.user_id == match.canvas_user_id), None)
+  student = next((s for s in students if s["user_id"] == match.canvas_user_id), None)
   if not student:
     raise HTTPException(status_code=404, detail="Student not found in Canvas")
 
@@ -232,7 +303,7 @@ async def match_submission(
     submission_repo.clear_match(previous_submission_id)
 
   # Update submission with new match
-  submission_repo.update_match(match.submission_id, match.canvas_user_id, student.name)
+  submission_repo.update_match(match.submission_id, match.canvas_user_id, student["name"])
 
   # Check if all submissions are now matched
   unmatched_count = submission_repo.count_unmatched(session_id)
@@ -242,7 +313,7 @@ async def match_submission(
 
   return {
     "status": "matched",
-    "student_name": student.name,
+    "student_name": student["name"],
     "remaining_unmatched": unmatched_count,
     "reassigned_from": previous_submission_id
   }

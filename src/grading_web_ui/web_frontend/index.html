@@ -155,6 +155,27 @@
           </div>
         </div>
 
+        <div style="margin: 20px 0;">
+          <strong>3. QR settings</strong>
+          <div style="display: flex; align-items: center; gap: 16px; margin-top: 10px; flex-wrap: wrap;">
+            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
+              <input type="checkbox" id="session-qr-scan-enabled">
+              Scan QR codes during processing
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
+              Max QR DPI:
+              <select id="session-qr-scan-max-dpi" style="width: 100px;">
+                <option value="150">150 (fast)</option>
+                <option value="300" selected>300 (recommended)</option>
+                <option value="600">600 (slow)</option>
+              </select>
+            </label>
+          </div>
+          <small style="display: block; margin-top: 8px; color: var(--gray-600);">
+            Applies to all uploads in this session. Keep disabled for exams without QR codes.
+          </small>
+        </div>
+
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">Create Session</button>
           <button type="button" id="cancel-session-btn" class="btn">Cancel</button>
@@ -511,6 +532,7 @@
                     <p>Drag and drop exam files here, or click to select (.pdf/.zip, optional .yaml/.yml)</p>
                     <input type="file" id="file-input" multiple accept=".pdf,.zip,.yaml,.yml">
                 </div>
+                <small id="upload-qr-settings-summary" style="display: block; margin-top: 12px; color: var(--gray-600);"></small>
                 <div id="upload-progress-container" style="display: none; margin: 20px 0;">
                     <div id="upload-status" style="margin-bottom: 10px; font-weight: 500; color: var(--gray-700);"></div>
                     <div id="upload-progress" class="progress-bar" style="height: 24px;">

@@ -276,6 +276,15 @@ function openNewSessionModal() {
   const defaultSource = mockRosterEnabled ? 'manual' : 'canvas';
   document.querySelector(`input[name="session-source"][value="${defaultSource}"]`).checked = true;
   document.querySelector('input[name="name-handling"][value="ai"]').checked = true;
+  const sessionQrScanEnabled = document.getElementById('session-qr-scan-enabled');
+  const sessionQrScanMaxDpi = document.getElementById('session-qr-scan-max-dpi');
+  if (sessionQrScanEnabled) {
+    sessionQrScanEnabled.checked = false;
+  }
+  if (sessionQrScanMaxDpi) {
+    sessionQrScanMaxDpi.value = '300';
+  }
+  refreshSessionQrScanControls();
   applySessionSourceMode(defaultSource);
   if (defaultSource === 'manual') {
     maybeSuggestManualSessionName();
@@ -309,6 +318,42 @@ function initializeAIProvider() {
 // Get current AI provider selection
 function getAIProvider() {
     return localStorage.getItem('ai_provider') || 'anthropic';
+}
+
+function getSessionQrScanSettings() {
+    const enabledInput = document.getElementById('session-qr-scan-enabled');
+    const maxDpiInput = document.getElementById('session-qr-scan-max-dpi');
+    const enabled = enabledInput ? enabledInput.checked : false;
+    const maxDpi = maxDpiInput ? parseInt(maxDpiInput.value, 10) : 300;
+    return {
+        enabled,
+        maxDpi: Number.isInteger(maxDpi) ? maxDpi : 300
+    };
+}
+
+function refreshSessionQrScanControls() {
+    const enabledInput = document.getElementById('session-qr-scan-enabled');
+    const maxDpiInput = document.getElementById('session-qr-scan-max-dpi');
+    if (!enabledInput || !maxDpiInput) return;
+    maxDpiInput.disabled = !enabledInput.checked;
+}
+
+function refreshUploadQrSettingsSummary() {
+    const summaryEl = document.getElementById('upload-qr-settings-summary');
+    if (!summaryEl) return;
+    if (!currentSession) {
+        summaryEl.textContent = '';
+        return;
+    }
+    const enabled = currentSession.qr_scan_enabled === true;
+    const maxDpi = Number.isInteger(currentSession.qr_scan_max_dpi)
+        ? currentSession.qr_scan_max_dpi
+        : 300;
+    if (!enabled) {
+        summaryEl.textContent = 'QR scanning is disabled for this session.';
+        return;
+    }
+    summaryEl.textContent = `QR scanning is enabled for this session (max DPI: ${maxDpi}).`;
 }
 
 // Get status badge HTML with color coding
@@ -642,6 +687,7 @@ function updateSessionInfo() {
     info.innerHTML = '';
     homeBtn.style.display = 'none';
   }
+  refreshUploadQrSettingsSummary();
 }
 
 // Navigate to appropriate section based on status
@@ -818,8 +864,13 @@ function setupEventListeners() {
     // Upload area
     const uploadArea = document.getElementById('upload-area');
     const fileInput = document.getElementById('file-input');
+    const sessionQrScanEnabledInput = document.getElementById('session-qr-scan-enabled');
 
     uploadArea.onclick = () => fileInput.click();
+    if (sessionQrScanEnabledInput) {
+        sessionQrScanEnabledInput.onchange = refreshSessionQrScanControls;
+        refreshSessionQrScanControls();
+    }
 
     uploadArea.ondragover = (e) => {
         e.preventDefault();
@@ -1186,6 +1237,7 @@ async function createNewSession(e) {
   // Get environment setting
   const useProdCanvas = document.getElementById('canvas-env-new').value === 'true';
   const useAiNameExtraction = getNameHandling() === 'ai';
+  const qrScanSettings = getSessionQrScanSettings();
 
   try {
     const response = await fetch(`${API_BASE}/sessions`, {
@@ -1200,7 +1252,9 @@ async function createNewSession(e) {
         canvas_points: canvasPoints,
         use_prod_canvas: useProdCanvas,
         use_mock_roster: useMockRoster,
-        use_ai_name_extraction: useAiNameExtraction
+        use_ai_name_extraction: useAiNameExtraction,
+        qr_scan_enabled: qrScanSettings.enabled,
+        qr_scan_max_dpi: qrScanSettings.maxDpi
       })
     });
 

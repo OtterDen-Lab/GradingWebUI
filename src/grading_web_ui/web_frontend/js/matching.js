@@ -10,6 +10,18 @@ const matchingPagePreviewCache = new Map();
 let matchingPagePreviewDialog = null;
 let matchingPagePreviewRequestId = 0;
 
+async function getMatchingApiError(response, fallbackMessage) {
+    try {
+        const errorData = await response.json();
+        if (errorData && errorData.detail) {
+            return String(errorData.detail);
+        }
+    } catch {
+        // Ignore parse errors and fall back to generic text.
+    }
+    return fallbackMessage;
+}
+
 function setMatchingActionStatus(message = '', type = 'info') {
     matchingActionStatus = { message, type };
     const statusEl = document.getElementById('matching-action-status');
@@ -75,12 +87,18 @@ async function loadNameMatching() {
 
         // Fetch all submissions (unmatched first)
         const submissionsResp = await fetch(`${API_BASE}/matching/${currentSession.id}/submissions`);
+        if (!submissionsResp.ok) {
+            throw new Error(await getMatchingApiError(submissionsResp, 'Failed to load submissions'));
+        }
         const submissionsData = await submissionsResp.json();
         allSubmissions = submissionsData.submissions;
 
         // Fetch all students (unmatched first)
         const revealQuery = revealCanvasNames ? '?reveal_names=true' : '';
         const studentsResp = await fetch(`${API_BASE}/matching/${currentSession.id}/students${revealQuery}`);
+        if (!studentsResp.ok) {
+            throw new Error(await getMatchingApiError(studentsResp, 'Failed to load Canvas roster'));
+        }
         const studentsData = await studentsResp.json();
         allStudents = studentsData.students;
 
@@ -111,6 +129,10 @@ async function loadNameMatching() {
 
     } catch (error) {
         console.error('Failed to load matching data:', error);
+        const container = document.getElementById('unmatched-list');
+        if (container) {
+            container.innerHTML = `<div class="info-box error" style="margin-top: 10px;">${error.message}</div>`;
+        }
     }
 }
 

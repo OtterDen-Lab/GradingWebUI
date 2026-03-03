@@ -31,6 +31,8 @@ class SessionCreate(BaseModel):
   use_prod_canvas: bool = False
   use_mock_roster: bool = False
   use_ai_name_extraction: bool = True
+  qr_scan_enabled: bool = False
+  qr_scan_max_dpi: int = 300
 
 
 class SessionResponse(BaseModel):
@@ -51,6 +53,8 @@ class SessionResponse(BaseModel):
   processing_message: Optional[str] = None
   mock_roster: bool = False
   ai_name_extraction: bool = True
+  qr_scan_enabled: bool = False
+  qr_scan_max_dpi: int = 300
 
   model_config = ConfigDict(from_attributes=True)
 

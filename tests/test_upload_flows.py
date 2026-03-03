@@ -183,6 +183,81 @@ def test_prepare_alignment_with_saved_splits_starts_split_processing(
   assert session.status.value == "preprocessing"
 
 
+def test_prepare_alignment_skips_qr_scan_when_disabled(client, tmp_path,
+                                                       monkeypatch):
+  """prepare-alignment should skip QR scanning when session QR scan is disabled."""
+  from grading_web_ui.web_api.routes import uploads as uploads_routes
+  from grading_web_ui.web_api.services import manual_alignment
+
+  session_id = create_test_session(client, "Prepare Alignment QR Disabled")
+  pdf_path = tmp_path / "qr-disabled.pdf"
+  pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+  session_repo = SessionRepository()
+  session_repo.update_metadata(
+    session_id, {
+      "file_paths": [str(pdf_path)],
+      "file_metadata": {
+        str(pdf_path): {
+          "hash": "align-hash-qr-disabled",
+          "original_filename": "qr-disabled.pdf"
+        }
+      },
+      "qr_scan_enabled": False,
+      "qr_scan_max_dpi": 300,
+    })
+
+  class FakeQRScanner:
+    available = True
+
+    def __init__(self):
+      self.scan_called = False
+
+    def scan_qr_positions_from_pdf(self, *args, **kwargs):
+      self.scan_called = True
+      raise AssertionError("QR scan should not run when qr_scan_enabled is false")
+
+  class FakeAlignmentService:
+
+    def create_composite_images(self, *args, **kwargs):
+      transforms = {
+        pdf_path: {
+          0: {
+            "target_width": 100,
+            "target_height": 200
+          }
+        }
+      }
+      return ({0: "ZmFrZQ=="}, {0: (100, 200)}, transforms)
+
+    def suggest_split_points_from_composites(self, *args, **kwargs):
+      return {0: [40]}
+
+  monkeypatch.setattr(uploads_routes, "QRScanner", FakeQRScanner)
+  monkeypatch.setattr(manual_alignment, "ManualAlignmentService",
+                      FakeAlignmentService)
+
+  response = client.post(f"/api/uploads/{session_id}/prepare-alignment")
+  assert response.status_code == 200
+  data = response.json()
+  assert data["status"] == "awaiting_alignment"
+  assert data["suggested_split_points"] == {"0": [40]}
+
+
+def test_resolve_qr_scan_settings_treats_false_string_as_disabled():
+  """QR setting parser should treat string false values as disabled."""
+  from grading_web_ui.web_api.routes.uploads import _resolve_qr_scan_settings
+
+  enabled, max_dpi, steps = _resolve_qr_scan_settings({
+    "qr_scan_enabled": "false",
+    "qr_scan_max_dpi": "300",
+  })
+
+  assert enabled is False
+  assert max_dpi == 300
+  assert steps == []
+
+
 def test_submit_alignment_converts_pixel_splits_to_percentages(client, tmp_path,
                                                                monkeypatch):
   """submit-alignment should store percentage split points and dispatch split worker."""
@@ -316,6 +391,67 @@ def test_upload_ai_name_mode_also_waits_for_name_box_selection(
   assert "name_rect" not in metadata
 
 
+def test_upload_preserves_existing_session_qr_scan_settings(client, monkeypatch):
+  """Upload endpoint should preserve session-level QR scan settings."""
+  from grading_web_ui.web_api.routes import uploads as uploads_routes
+
+  session_id = create_test_session(client, "Upload QR Settings")
+  SessionRepository().update_metadata(
+    session_id, {
+      "qr_scan_enabled": True,
+      "qr_scan_max_dpi": 150
+    })
+  worker_called = {"value": False}
+
+  async def fake_process_exam_names(*args, **kwargs):
+    worker_called["value"] = True
+
+  monkeypatch.setattr(uploads_routes, "process_exam_names", fake_process_exam_names)
+
+  pdf_bytes = create_test_pdf_bytes()
+  upload_response = client.post(
+    f"/api/uploads/{session_id}/upload",
+    files=[("files", ("no-qr.pdf", pdf_bytes, "application/pdf"))]
+  )
+
+  assert upload_response.status_code == 200
+  payload = upload_response.json()
+  assert payload["status"] == "awaiting_name_box"
+  assert worker_called["value"] is False
+
+  metadata = SessionRepository().get_metadata(session_id) or {}
+  assert metadata["qr_scan_enabled"] is True
+  assert metadata["qr_scan_max_dpi"] == 150
+
+
+def test_upload_defaults_qr_scan_disabled_when_flag_omitted(client, monkeypatch):
+  """Upload endpoint should preserve default session-level QR settings."""
+  from grading_web_ui.web_api.routes import uploads as uploads_routes
+
+  session_id = create_test_session(client, "Upload QR Default Disabled")
+  worker_called = {"value": False}
+
+  async def fake_process_exam_names(*args, **kwargs):
+    worker_called["value"] = True
+
+  monkeypatch.setattr(uploads_routes, "process_exam_names", fake_process_exam_names)
+
+  pdf_bytes = create_test_pdf_bytes()
+  upload_response = client.post(
+    f"/api/uploads/{session_id}/upload",
+    files=[("files", ("default-no-qr.pdf", pdf_bytes, "application/pdf"))]
+  )
+
+  assert upload_response.status_code == 200
+  payload = upload_response.json()
+  assert payload["status"] == "awaiting_name_box"
+  assert worker_called["value"] is False
+
+  metadata = SessionRepository().get_metadata(session_id) or {}
+  assert metadata["qr_scan_enabled"] is False
+  assert metadata["qr_scan_max_dpi"] == 300
+
+
 def test_name_box_preview_and_submit_starts_name_processing(client, tmp_path,
                                                             monkeypatch):
   """Preview + submit-name-box should persist rect and dispatch name extraction."""
@@ -400,7 +536,7 @@ def test_process_exam_names_mock_roster_sets_awaiting_alignment(
 
   class FakeProcessor:
 
-    def __init__(self, name_rect=None, ai_provider="anthropic"):
+    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
       pass
 
     def extract_name_image(self, pdf_path):
@@ -445,7 +581,7 @@ def test_process_exam_names_auto_matches_high_confidence_names(
 
   class FakeProcessor:
 
-    def __init__(self, name_rect=None, ai_provider="anthropic"):
+    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
       pass
 
     def extract_name(self, pdf_path, student_names=None):
@@ -501,6 +637,71 @@ def test_process_exam_names_auto_matches_high_confidence_names(
   assert session.status.value == "name_matching_needed"
 
 
+def test_process_exam_names_continues_when_canvas_roster_lookup_fails(
+    client, tmp_path, monkeypatch):
+  """Name extraction should not fail hard if Canvas roster fetch is unavailable."""
+  from grading_web_ui.web_api.routes import uploads as uploads_routes
+
+  session_id = create_test_session(client, "Name Extraction Canvas Failure")
+  session_repo = SessionRepository()
+
+  pdf_path = tmp_path / "roster-failure.pdf"
+  pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+  file_metadata = {
+    pdf_path: {
+      "hash": "name-roster-failure-hash-1",
+      "original_filename": "roster-failure.pdf"
+    }
+  }
+
+  class FakeProcessor:
+
+    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
+      pass
+
+    def extract_name(self, pdf_path, student_names=None):
+      return "Unreadable Name", "name-image-base64"
+
+    def _find_suggested_match(self, approximate_name, unmatched_students):
+      return None, 0
+
+  class FakeCanvasInterface:
+
+    def __init__(self, prod=False, privacy_mode="none"):
+      pass
+
+    def get_course(self, course_id):
+      raise RuntimeError("simulated canvas DNS failure")
+
+  async def noop_event(stream_id: str, event_type: str, data: dict):
+    return None
+
+  monkeypatch.setattr(uploads_routes, "ExamProcessor", FakeProcessor)
+  monkeypatch.setattr(uploads_routes, "CanvasInterface", FakeCanvasInterface)
+  monkeypatch.setattr(uploads_routes.sse, "send_event", noop_event)
+
+  asyncio.run(
+    uploads_routes.process_exam_names(
+      session_id,
+      [pdf_path],
+      file_metadata,
+      "name_stream"
+    ))
+
+  submissions = SubmissionRepository().get_by_session(session_id)
+  assert len(submissions) == 1
+  assert submissions[0].canvas_user_id is None
+  assert submissions[0].student_name is None
+  assert submissions[0].name_image_data == "name-image-base64"
+
+  session = session_repo.get_by_id(session_id)
+  assert session is not None
+  assert session.status.value == "name_matching_needed"
+
+  metadata = session_repo.get_metadata(session_id) or {}
+  assert "canvas_roster_error" in metadata
+
+
 def test_process_exam_names_auto_match_does_not_reuse_student(
     client, tmp_path, monkeypatch):
   """Auto-matching should not assign one student to multiple new exams."""
@@ -525,7 +726,7 @@ def test_process_exam_names_auto_match_does_not_reuse_student(
 
   class FakeProcessor:
 
-    def __init__(self, name_rect=None, ai_provider="anthropic"):
+    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
       pass
 
     def extract_name(self, pdf_path, student_names=None):
@@ -619,7 +820,7 @@ def test_process_exam_splits_creates_problems_and_marks_session_ready(
 
   class FakeProcessor:
 
-    def __init__(self, name_rect=None, ai_provider="anthropic"):
+    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
       pass
 
     def process_exams(self, **kwargs):

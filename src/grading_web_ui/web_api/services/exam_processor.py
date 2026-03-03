@@ -47,7 +47,8 @@ class ExamProcessor:
   def __init__(
       self,
       name_rect: Optional[dict] = None,
-      ai_provider: str = "anthropic"
+      ai_provider: str = "anthropic",
+      qr_prescan_dpi_steps: Optional[List[int]] = None
   ):
     """
         Initialize exam processor.
@@ -70,6 +71,21 @@ class ExamProcessor:
       self.name_rect["y"] + self.name_rect["height"],
     ])
     self.qr_scanner = QRScanner()
+    if qr_prescan_dpi_steps is None:
+      self.qr_prescan_dpi_steps = list(PRESCAN_DPI_STEPS)
+    else:
+      normalized_steps = []
+      seen = set()
+      for raw_dpi in qr_prescan_dpi_steps:
+        try:
+          dpi = int(raw_dpi)
+        except (TypeError, ValueError):
+          continue
+        if dpi <= 0 or dpi in seen:
+          continue
+        seen.add(dpi)
+        normalized_steps.append(dpi)
+      self.qr_prescan_dpi_steps = normalized_steps
 
     # Select AI provider
     self.ai_provider = ai_provider.lower()
@@ -936,7 +952,7 @@ class ExamProcessor:
 
     # NOW scan QR codes from the linearized problem regions (BEFORE redaction)
     # This must happen after linear_splits is calculated but before problems are created
-    if self.qr_scanner.available:
+    if self.qr_scanner.available and self.qr_prescan_dpi_steps:
       log.info(
         f"Pre-scanning {len(linear_splits) - 1 - start_index} problem regions for QR codes from unredacted PDF..."
       )
@@ -968,7 +984,7 @@ class ExamProcessor:
         qr_data = None
         try:
           local_doc = fitz.open(str(pdf_path))
-          for dpi_index, dpi in enumerate(PRESCAN_DPI_STEPS):
+          for dpi_index, dpi in enumerate(self.qr_prescan_dpi_steps):
             log.info(
               f"Pre-scan problem {problem_num}/{total_prescan} at {dpi} DPI"
             )
@@ -982,7 +998,7 @@ class ExamProcessor:
 
             qr_data = self.qr_scanner.scan_qr_from_image(problem_image_base64)
             step_increment = 1
-            remaining_steps = len(PRESCAN_DPI_STEPS) - dpi_index - 1
+            remaining_steps = len(self.qr_prescan_dpi_steps) - dpi_index - 1
             if qr_data and remaining_steps > 0:
               step_increment += remaining_steps
             safe_message(
