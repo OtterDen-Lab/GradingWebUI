@@ -542,19 +542,14 @@
                         </label>
                         <label style="display: flex; gap: 5px; align-items: center; margin: 0;">
                             Max Points:
-                            <select id="max-points-input" style="width: 60px;" title="Max points for this problem">
-                                <option value="">-</option>
-                                <option value="1">1</option>
-                                <option value="2">2</option>
-                                <option value="3">3</option>
-                                <option value="4">4</option>
-                                <option value="5">5</option>
-                                <option value="6">6</option>
-                                <option value="7">7</option>
-                                <option value="8">8</option>
-                                <option value="9">9</option>
-                                <option value="10">10</option>
-                            </select>
+                            <input
+                                type="number"
+                                id="max-points-input"
+                                min="0"
+                                max="100"
+                                step="0.1"
+                                style="width: 80px;"
+                                title="Max points for this problem (0 to 100)">
                         </label>
                         <label style="display: flex; gap: 5px; align-items: center; margin: 0;">
                             Mode:
@@ -818,7 +813,7 @@
 
                     <label style="margin-bottom: 15px;">
                         Score:
-                        <input type="number" id="review-score-input" min="0" max="8" step="1" placeholder="Score" style="width: 80px; margin-top: 5px; padding: 8px; border: 1px solid var(--gray-300); border-radius: 4px;">
+                        <input type="number" id="review-score-input" min="0" max="100" step="1" placeholder="Score" style="width: 80px; margin-top: 5px; padding: 8px; border: 1px solid var(--gray-300); border-radius: 4px;">
                     </label>
 
                     <label style="margin-bottom: 15px;">

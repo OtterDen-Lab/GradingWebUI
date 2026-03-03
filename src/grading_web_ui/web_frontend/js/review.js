@@ -8,7 +8,7 @@ let reviewProblemNumber = null;
 // Helper function to open review for a specific problem number
 async function openReviewForProblem(problemNumber) {
     reviewProblemNumber = problemNumber;
-    const maxPoints = problemMaxPoints[problemNumber] || 8;
+    const maxPoints = problemMaxPoints[problemNumber] ?? 8;
 
     // Update modal title and max points
     document.getElementById('review-problem-number').textContent = reviewProblemNumber;
@@ -173,7 +173,8 @@ async function loadReviewProblem(index) {
     }
 
     // Display score with max points (fallback to global problemMaxPoints)
-    const maxPoints = problemMeta.max_points || problemMaxPoints[reviewProblemNumber] || 8;
+    const maxPoints = problemMeta.max_points ?? (problemMaxPoints[reviewProblemNumber] ?? 8);
+    document.getElementById('review-score-input').max = maxPoints;
     document.getElementById('review-current-score').textContent = problemMeta.score;
     document.getElementById('review-current-max').textContent = maxPoints;
 

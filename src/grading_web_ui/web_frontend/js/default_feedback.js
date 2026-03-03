@@ -228,7 +228,10 @@ function shouldApplyDefaultFeedback(score, isBlank) {
 
     if (currentDefaultFeedback.applyOnThreshold) {
         // Calculate percentage based on max_points
-        const maxPoints = currentProblem?.max_points || 8.0;
+        const maxPoints = currentProblem?.max_points ?? 8.0;
+        if (maxPoints <= 0) {
+            return false;
+        }
         const percentage = (score / maxPoints) * 100;
         if (percentage <= currentDefaultFeedback.threshold) {
             return true;

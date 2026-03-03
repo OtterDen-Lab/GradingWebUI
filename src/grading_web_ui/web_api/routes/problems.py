@@ -158,18 +158,15 @@ def _parse_manual_qr_payload(payload_text: str) -> dict:
   if not isinstance(payload, dict):
     raise ValueError("QR payload must decode to a JSON object")
 
-  question_number = (
-    payload.get("q") or payload.get("question_number") or
-    payload.get("questionNumber")
-  )
-  max_points = (
-    payload.get("pts") or payload.get("p") or payload.get("points") or
-    payload.get("max_points") or payload.get("maxPoints")
-  )
-  encrypted_data = (
-    payload.get("s") or payload.get("encrypted_data") or
-    payload.get("encryptedData")
-  )
+  def _first_present(*keys: str):
+    for key in keys:
+      if key in payload and payload[key] is not None:
+        return payload[key]
+    return None
+
+  question_number = _first_present("q", "question_number", "questionNumber")
+  max_points = _first_present("pts", "p", "points", "max_points", "maxPoints")
+  encrypted_data = _first_present("s", "encrypted_data", "encryptedData")
 
   if question_number is None:
     raise ValueError("QR payload is missing question number ('q')")
@@ -186,8 +183,8 @@ def _parse_manual_qr_payload(payload_text: str) -> dict:
   except (ValueError, TypeError) as exc:
     raise ValueError(f"Invalid max points '{max_points}'") from exc
 
-  if parsed_max_points <= 0:
-    raise ValueError("max_points must be greater than 0")
+  if parsed_max_points < 0 or parsed_max_points > 100:
+    raise ValueError("max_points must be between 0 and 100")
 
   if encrypted_data is not None and not isinstance(encrypted_data, str):
     encrypted_data = str(encrypted_data)

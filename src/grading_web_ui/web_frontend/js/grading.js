@@ -326,10 +326,11 @@ function showNotification(message, callback) {
 function updateMaxPointsDropdown() {
     const maxPointsInput = document.getElementById('max-points-input');
     const scoreInput = document.getElementById('score-input');
-    const cachedMax = problemMaxPoints[currentProblemNumber];
+    const cachedMaxRaw = problemMaxPoints[currentProblemNumber];
+    const cachedMax = Number(cachedMaxRaw);
 
     // Default to 8 if not set
-    const maxPoints = cachedMax || 8;
+    const maxPoints = Number.isNaN(cachedMax) ? 8 : cachedMax;
 
     maxPointsInput.value = maxPoints;
     scoreInput.max = maxPoints;
@@ -434,11 +435,11 @@ function formatTagSignatureLabel(signature, settings) {
 function getCurrentProblemMaxPoints() {
     const maxPointsInput = document.getElementById('max-points-input');
     const fromInput = parseFloat(maxPointsInput?.value || '');
-    if (!Number.isNaN(fromInput) && fromInput > 0) {
+    if (!Number.isNaN(fromInput) && fromInput >= 0 && fromInput <= 100) {
         return fromInput;
     }
     const fromCache = parseFloat(problemMaxPoints[currentProblemNumber]);
-    if (!Number.isNaN(fromCache) && fromCache > 0) {
+    if (!Number.isNaN(fromCache) && fromCache >= 0 && fromCache <= 100) {
         return fromCache;
     }
     return 8;
@@ -1445,31 +1446,38 @@ function setupGradingControls() {
     const maxPointsInput = document.getElementById('max-points-input');
     maxPointsInput.onchange = async (e) => {
         const maxPoints = parseFloat(e.target.value);
-        if (!isNaN(maxPoints) && maxPoints > 0 && currentProblemNumber) {
-            // Update input max
-            document.getElementById('score-input').max = maxPoints;
+        if (Number.isNaN(maxPoints) || !currentProblemNumber) {
+            return;
+        }
+        if (maxPoints < 0 || maxPoints > 100) {
+            showNotification('Max points must be between 0 and 100.');
+            updateMaxPointsDropdown();
+            return;
+        }
 
-            // Save to cache
-            problemMaxPoints[currentProblemNumber] = maxPoints;
+        // Update input max
+        document.getElementById('score-input').max = maxPoints;
 
-            // Save to backend
-            try {
-                const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/problem-max-points?problem_number=${currentProblemNumber}&max_points=${maxPoints}`, {
-                    method: 'PUT'
-                });
+        // Save to cache
+        problemMaxPoints[currentProblemNumber] = maxPoints;
 
-                if (!response.ok) {
-                    throw new Error('Failed to save max points');
-                }
+        // Save to backend
+        try {
+            const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/problem-max-points?problem_number=${currentProblemNumber}&max_points=${maxPoints}`, {
+                method: 'PUT'
+            });
 
-                // Update current problem object
-                if (currentProblem) {
-                    currentProblem.max_points = maxPoints;
-                }
-            } catch (error) {
-                console.error('Failed to save max points:', error);
-                alert('Failed to save max points: ' + error.message);
+            if (!response.ok) {
+                throw new Error('Failed to save max points');
             }
+
+            // Update current problem object
+            if (currentProblem) {
+                currentProblem.max_points = maxPoints;
+            }
+        } catch (error) {
+            console.error('Failed to save max points:', error);
+            alert('Failed to save max points: ' + error.message);
         }
     };
 
@@ -2830,7 +2838,7 @@ async function loadStatistics() {
                 let maxPossibleForStudent = 0;
                 const gradedProblemStats = stats.problem_stats.slice(0, problemsGraded);
                 gradedProblemStats.forEach(ps => {
-                    maxPossibleForStudent += (ps.max_points || 8);
+                    maxPossibleForStudent += (ps.max_points ?? 8);
                 });
 
                 // Return normalized score as percentage
@@ -2845,7 +2853,7 @@ async function loadStatistics() {
 
             // Calculate total possible points across all problems
             const totalPossible = stats.problem_stats.reduce((sum, ps) => {
-                return sum + (ps.max_points || 8);
+                return sum + (ps.max_points ?? 8);
             }, 0);
 
             // Calculate Canvas grade (raw score out of 100)

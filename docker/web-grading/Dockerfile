@@ -18,11 +18,10 @@ RUN apt-get update && apt-get install -y \
 # Create app directory
 WORKDIR /app
 
-# Copy grading_web_ui package (includes vendorized lms_interface)
+# Copy grading_web_ui package source
 
 # Copy package source
 COPY src /app/src
-COPY lms_interface /app/lms_interface
 
 # Copy pyproject.toml, LICENSE, and README
 COPY pyproject.toml /app/

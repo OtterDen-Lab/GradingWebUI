@@ -219,6 +219,44 @@ def test_list_sessions(client):
   assert len(data) > 0
 
 
+def test_update_problem_max_points_accepts_zero_to_hundred(client):
+  """Max points endpoint should accept values in [0, 100]."""
+  session_id = create_test_session(client, "Max Points Range Test")
+
+  response_zero = client.put(
+    f"/api/sessions/{session_id}/problem-max-points",
+    params={"problem_number": 1, "max_points": 0},
+  )
+  assert response_zero.status_code == 200
+  assert response_zero.json()["max_points"] == 0
+
+  response_hundred = client.put(
+    f"/api/sessions/{session_id}/problem-max-points",
+    params={"problem_number": 1, "max_points": 100},
+  )
+  assert response_hundred.status_code == 200
+  assert response_hundred.json()["max_points"] == 100
+
+
+def test_update_problem_max_points_rejects_values_outside_zero_to_hundred(client):
+  """Max points endpoint should reject values outside [0, 100]."""
+  session_id = create_test_session(client, "Max Points Invalid Range Test")
+
+  response_negative = client.put(
+    f"/api/sessions/{session_id}/problem-max-points",
+    params={"problem_number": 1, "max_points": -0.1},
+  )
+  assert response_negative.status_code == 400
+  assert "between 0 and 100" in response_negative.json()["detail"]
+
+  response_over = client.put(
+    f"/api/sessions/{session_id}/problem-max-points",
+    params={"problem_number": 1, "max_points": 100.1},
+  )
+  assert response_over.status_code == 400
+  assert "between 0 and 100" in response_over.json()["detail"]
+
+
 def test_upload_quiz_yaml_for_session(client):
   """Test uploading quiz YAML directly to session metadata"""
   session_response = client.post("/api/sessions",
@@ -574,6 +612,32 @@ def test_manual_qr_payload_rejects_question_number_mismatch(client):
   )
   assert response.status_code == 400
   assert "does not match current problem number" in response.json()["detail"]
+
+
+def test_manual_qr_payload_accepts_zero_max_points(client):
+  """Manual QR payload should accept max_points = 0."""
+  session_id = create_test_session(client, "Manual QR Zero Max Points")
+  _, problem_id = seed_submission_with_problem(session_id, problem_number=2)
+
+  response = client.post(
+    f"/api/problems/{problem_id}/manual-qr",
+    json={"payload_text": '{"q": 2, "pts": 0, "s": "zero-points"}'}
+  )
+  assert response.status_code == 200
+  assert response.json()["max_points"] == 0.0
+
+
+def test_manual_qr_payload_rejects_max_points_above_hundred(client):
+  """Manual QR payload should reject max_points above 100."""
+  session_id = create_test_session(client, "Manual QR Invalid Max Points")
+  _, problem_id = seed_submission_with_problem(session_id, problem_number=2)
+
+  response = client.post(
+    f"/api/problems/{problem_id}/manual-qr",
+    json={"payload_text": '{"q": 2, "pts": 101, "s": "too-many"}'}
+  )
+  assert response.status_code == 400
+  assert "between 0 and 100" in response.json()["detail"]
 
 
 def test_subjective_settings_and_triage_flow(client, monkeypatch):

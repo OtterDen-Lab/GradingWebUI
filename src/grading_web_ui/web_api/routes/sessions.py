@@ -741,6 +741,9 @@ async def update_problem_max_points(
   session_repo = SessionRepository()
   if not session_repo.exists(session_id):
     raise HTTPException(status_code=404, detail="Session not found")
+  if max_points < 0 or max_points > 100:
+    raise HTTPException(status_code=400,
+                        detail="max_points must be between 0 and 100")
 
   # Update metadata
   metadata_repo = ProblemMetadataRepository()
