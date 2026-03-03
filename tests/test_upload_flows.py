@@ -286,6 +286,36 @@ def test_upload_manual_name_mode_waits_for_name_box_selection(
   assert "name_rect" not in metadata
 
 
+def test_upload_ai_name_mode_also_waits_for_name_box_selection(
+    client, monkeypatch):
+  """AI name mode should still pause after upload until a name box is selected."""
+  from grading_web_ui.web_api.routes import uploads as uploads_routes
+
+  session_id = create_test_session(client, "AI Name Box Session")
+
+  worker_called = {"value": False}
+
+  async def fake_process_exam_names(*args, **kwargs):
+    worker_called["value"] = True
+
+  monkeypatch.setattr(uploads_routes, "process_exam_names", fake_process_exam_names)
+
+  pdf_bytes = create_test_pdf_bytes()
+  upload_response = client.post(
+    f"/api/uploads/{session_id}/upload",
+    files=[("files", ("ai-name.pdf", pdf_bytes, "application/pdf"))])
+
+  assert upload_response.status_code == 200
+  payload = upload_response.json()
+  assert payload["status"] == "awaiting_name_box"
+  assert worker_called["value"] is False
+
+  session_repo = SessionRepository()
+  metadata = session_repo.get_metadata(session_id) or {}
+  assert metadata["ai_name_extraction"] is True
+  assert "name_rect" not in metadata
+
+
 def test_name_box_preview_and_submit_starts_name_processing(client, tmp_path,
                                                             monkeypatch):
   """Preview + submit-name-box should persist rect and dispatch name extraction."""

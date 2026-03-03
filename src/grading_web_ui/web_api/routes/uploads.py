@@ -101,14 +101,12 @@ def _get_name_rect_from_session_data(
 
 
 def _session_requires_manual_name_box(session_data: Optional[dict]) -> bool:
-  """True when this upload session should pause for manual name-box selection."""
+  """True when this upload session should pause for name-box selection."""
   if not session_data:
     return False
 
-  ai_name_extraction = bool(session_data.get("ai_name_extraction", True))
   mock_roster = bool(session_data.get("mock_roster", False))
-  has_name_rect = _get_name_rect_from_session_data(session_data) is not None
-  return (not ai_name_extraction) and (not mock_roster) and (not has_name_rect)
+  return not mock_roster
 
 
 def _create_merged_first_page_preview(file_paths: List[Path],
