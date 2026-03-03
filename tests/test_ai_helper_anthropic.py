@@ -97,3 +97,14 @@ def test_anthropic_query_reports_clear_error_when_all_candidates_missing(monkeyp
 
   with pytest.raises(RuntimeError, match="No available Anthropic model"):
     AI_Helper__Anthropic.query_ai("hello", attachments=[])
+
+
+def test_anthropic_explicit_candidates_ignore_env_fallbacks(monkeypatch):
+  monkeypatch.setenv("ANTHROPIC_MODEL", "old-primary")
+  monkeypatch.setenv("ANTHROPIC_FALLBACK_MODELS", "old-fallback,older-fallback")
+
+  candidates = AI_Helper__Anthropic._candidate_models(["claude-haiku-4-5"])
+  assert candidates[0] == "claude-haiku-4-5"
+  assert "old-primary" not in candidates
+  assert "old-fallback" not in candidates
+  assert "older-fallback" not in candidates

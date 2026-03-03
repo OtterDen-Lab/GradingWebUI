@@ -8,7 +8,7 @@ A web-based interface for grading exams with Canvas LMS integration and AI-assis
 pip install -e .
 ```
 
-## LMSInterface Vendoring Workflow
+## LMSInterface Dependency
 
 Install local hooks and the `git bump` alias:
 
@@ -16,13 +16,10 @@ Install local hooks and the `git bump` alias:
 bash scripts/install_git_hooks.sh
 ```
 
-Refresh vendored LMSInterface code manually:
+LMSInterface is consumed as a pinned dependency in `pyproject.toml`:
+`lms-interface @ git+https://github.com/OtterDen-Lab/LMSInterface.git@v0.5.0`
 
-```bash
-python scripts/vendor_lms_interface.py --quiet
-```
-
-Bump version + vendor + test + commit:
+Bump version + test + commit:
 
 ```bash
 git bump patch

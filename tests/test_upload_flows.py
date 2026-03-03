@@ -54,6 +54,15 @@ def create_test_session(client, assignment_name: str = "Upload Flow Test") -> in
   return response.json()["id"]
 
 
+def create_test_pdf_bytes(width: int = 300, height: int = 400) -> bytes:
+  """Create a single-page PDF payload for upload tests."""
+  doc = fitz.open()
+  doc.new_page(width=width, height=height)
+  pdf_bytes = doc.tobytes()
+  doc.close()
+  return pdf_bytes
+
+
 def test_prepare_alignment_without_saved_splits_sets_awaiting_alignment(
     client, tmp_path, monkeypatch):
   """prepare-alignment should build composites and move session to awaiting_alignment."""
@@ -235,6 +244,117 @@ def test_submit_alignment_converts_pixel_splits_to_percentages(client, tmp_path,
   assert metadata["ai_provider"] == "openai"
 
 
+def test_upload_manual_name_mode_waits_for_name_box_selection(
+    client, monkeypatch):
+  """Manual name mode should pause after upload until a name box is selected."""
+  from grading_web_ui.web_api.routes import uploads as uploads_routes
+
+  response = client.post("/api/sessions",
+                         json={
+                           "course_id": 12345,
+                           "assignment_id": 67890,
+                           "assignment_name": "Manual Name Box Session",
+                           "use_ai_name_extraction": False
+                         })
+  assert response.status_code == 200
+  session_id = response.json()["id"]
+
+  worker_called = {"value": False}
+
+  async def fake_process_exam_names(*args, **kwargs):
+    worker_called["value"] = True
+
+  monkeypatch.setattr(uploads_routes, "process_exam_names", fake_process_exam_names)
+
+  pdf_bytes = create_test_pdf_bytes()
+  upload_response = client.post(
+    f"/api/uploads/{session_id}/upload",
+    files=[("files", ("manual-name.pdf", pdf_bytes, "application/pdf"))])
+
+  assert upload_response.status_code == 200
+  payload = upload_response.json()
+  assert payload["status"] == "awaiting_name_box"
+  assert worker_called["value"] is False
+
+  session_repo = SessionRepository()
+  session = session_repo.get_by_id(session_id)
+  assert session is not None
+  assert session.status.value == "preprocessing"
+  metadata = session_repo.get_metadata(session_id) or {}
+  assert metadata["ai_name_extraction"] is False
+  assert "file_paths" in metadata and len(metadata["file_paths"]) == 1
+  assert "name_rect" not in metadata
+
+
+def test_name_box_preview_and_submit_starts_name_processing(client, tmp_path,
+                                                            monkeypatch):
+  """Preview + submit-name-box should persist rect and dispatch name extraction."""
+  from grading_web_ui.web_api.routes import uploads as uploads_routes
+
+  session_id = create_test_session(client, "Manual Name Box Submit")
+  pdf_path = tmp_path / "manual-name-preview.pdf"
+  pdf_path.write_bytes(create_test_pdf_bytes(width=400, height=500))
+
+  session_repo = SessionRepository()
+  session_repo.update_metadata(
+    session_id, {
+      "file_paths": [str(pdf_path)],
+      "file_metadata": {
+        str(pdf_path): {
+          "hash": "name-box-hash-1",
+          "original_filename": "manual-name-preview.pdf"
+        }
+      },
+      "ai_name_extraction": False
+    })
+
+  preview_response = client.get(f"/api/uploads/{session_id}/name-box-preview")
+  assert preview_response.status_code == 200
+  preview_payload = preview_response.json()
+  assert preview_payload["page_image"]
+  assert preview_payload["image_dimensions"]["width"] > 0
+  assert preview_payload["image_dimensions"]["height"] > 0
+  assert preview_payload["pdf_dimensions"]["width"] > 0
+  assert preview_payload["pdf_dimensions"]["height"] > 0
+
+  captured = {}
+
+  async def fake_process_exam_names(session_id, file_paths, file_metadata,
+                                    stream_id, ai_provider):
+    captured["session_id"] = session_id
+    captured["file_paths"] = file_paths
+    captured["file_metadata"] = file_metadata
+    captured["stream_id"] = stream_id
+    captured["ai_provider"] = ai_provider
+
+  monkeypatch.setattr(uploads_routes, "process_exam_names", fake_process_exam_names)
+
+  submit_response = client.post(
+    f"/api/uploads/{session_id}/submit-name-box",
+    json={
+      "x": 0.15,
+      "y": 0.05,
+      "width": 0.35,
+      "height": 0.2,
+      "ai_provider": "openai"
+    })
+  assert submit_response.status_code == 200
+  submit_payload = submit_response.json()
+  assert submit_payload["status"] == "processing"
+
+  metadata = session_repo.get_metadata(session_id) or {}
+  assert "name_rect" in metadata
+  assert metadata["name_rect"]["x"] > 0
+  assert metadata["name_rect"]["y"] >= 0
+  assert metadata["name_rect"]["width"] > 0
+  assert metadata["name_rect"]["height"] > 0
+
+  assert captured["session_id"] == session_id
+  assert captured["ai_provider"] == "openai"
+  assert len(captured["file_paths"]) == 1
+  assert captured["file_paths"][0] == pdf_path
+
+
 def test_process_exam_names_mock_roster_sets_awaiting_alignment(
     client, tmp_path, monkeypatch):
   """Name extraction worker should create submissions and move mock-roster sessions to alignment."""
@@ -250,7 +370,7 @@ def test_process_exam_names_mock_roster_sets_awaiting_alignment(
 
   class FakeProcessor:
 
-    def __init__(self, ai_provider):
+    def __init__(self, name_rect=None, ai_provider="anthropic"):
       pass
 
     def extract_name_image(self, pdf_path):
@@ -295,7 +415,7 @@ def test_process_exam_names_auto_matches_high_confidence_names(
 
   class FakeProcessor:
 
-    def __init__(self, ai_provider):
+    def __init__(self, name_rect=None, ai_provider="anthropic"):
       pass
 
     def extract_name(self, pdf_path, student_names=None):
@@ -375,7 +495,7 @@ def test_process_exam_names_auto_match_does_not_reuse_student(
 
   class FakeProcessor:
 
-    def __init__(self, ai_provider):
+    def __init__(self, name_rect=None, ai_provider="anthropic"):
       pass
 
     def extract_name(self, pdf_path, student_names=None):
@@ -469,7 +589,7 @@ def test_process_exam_splits_creates_problems_and_marks_session_ready(
 
   class FakeProcessor:
 
-    def __init__(self, ai_provider):
+    def __init__(self, name_rect=None, ai_provider="anthropic"):
       pass
 
     def process_exams(self, **kwargs):

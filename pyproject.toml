@@ -23,8 +23,8 @@ classifiers = [
 ]
 dependencies = [
     "python-dotenv==1.0.1",
-    "PyYAML==6.0.1",
-    "requests==2.32.4",
+    "PyYAML==6.0.3",
+    "requests==2.32.2",
     "urllib3==2.6.3",
     "pandas==2.3.3",
     "fuzzywuzzy==0.18.0",
@@ -44,6 +44,7 @@ dependencies = [
     "QuizGenerator==0.23.0",
     "bcrypt==5.0.0",
     "canvasapi==3.2.0",
+    "lms-interface @ git+https://github.com/OtterDen-Lab/LMSInterface.git@v0.5.0",
 ]
 
 [project.optional-dependencies]
@@ -64,10 +65,10 @@ Repository = "https://github.com/OtterDen-Lab/GradingWebUI"
 
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/grading_web_ui", "lms_interface"]
+packages = ["src/grading_web_ui"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/grading_web_ui/**", "lms_interface/**", "pyproject.toml", "README.md", "LICENSE"]
+include = ["src/grading_web_ui/**", "pyproject.toml", "README.md", "LICENSE"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

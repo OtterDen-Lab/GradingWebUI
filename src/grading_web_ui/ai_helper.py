@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 DEFAULT_MAX_TOKENS = 1000  # Default token limit for AI responses
 DEFAULT_MAX_RETRIES = 3  # Default number of retries for failed requests
 DEFAULT_ANTHROPIC_ENV_FALLBACKS = (
-  "claude-3-7-sonnet-latest,claude-3-5-sonnet-latest,claude-haiku-4-5,claude-3-5-haiku-latest"
+  "claude-haiku-4-5,claude-sonnet-4-5,claude-opus-4-5"
 )
 
 # Provider model defaults (can be overridden via environment variables):
@@ -105,11 +105,16 @@ class AI_Helper__Anthropic(AI_Helper):
     if not primary:
       primary = get_model_for_tier("anthropic", "medium")
 
-    fallback_csv = os.getenv("ANTHROPIC_FALLBACK_MODELS",
-                             DEFAULT_ANTHROPIC_ENV_FALLBACKS)
-    env_fallbacks = _parse_model_csv(fallback_csv)
-
-    seed_models = explicit_models if explicit_models else [primary]
+    if explicit_models:
+      # Explicit candidate lists should be deterministic and must not pull in
+      # stale environment fallbacks (for example deprecated model aliases).
+      seed_models = explicit_models
+      env_fallbacks = []
+    else:
+      fallback_csv = os.getenv("ANTHROPIC_FALLBACK_MODELS",
+                               DEFAULT_ANTHROPIC_ENV_FALLBACKS)
+      env_fallbacks = _parse_model_csv(fallback_csv)
+      seed_models = [primary]
 
     # Always append resilient built-in candidates so stale env overrides do not
     # hard-fail model selection.

@@ -7,18 +7,16 @@ Usage:
   git bump [patch|minor|major] [-m "commit message"] [--no-commit] [--dry-run] [--skip-tests] [--verbose] [--tag|--no-tag] [--push|--no-push] [--remote <name>]
 
 Behavior:
-  1. Vendor LMSInterface via `python scripts/vendor_lms_interface.py`
-  2. Run test command (unless --skip-tests)
-  3. Bump version via `uv version --bump <kind>`
-  4. Stage `pyproject.toml`, `uv.lock`, `lms_interface/`, and managed tooling scripts
-  5. Commit (unless --no-commit)
-  6. Create tag `v<version>` by default (disable with --no-tag)
-  7. Push branch and tag by default (disable with --no-push)
+  1. Run test command (unless --skip-tests)
+  2. Bump version via `uv version --bump <kind>`
+  3. Stage `pyproject.toml` and `uv.lock`
+  4. Commit (unless --no-commit)
+  5. Create tag `v<version>` by default (disable with --no-tag)
+  6. Push branch and tag by default (disable with --no-push)
 
 Notes:
   - Requires a clean index and working tree (tracked files).
   - Uses normal `git commit -m ...` (no pathspec commit).
-  - Uses quiet vendoring output by default; pass --verbose for full logs.
 EOF
 }
 
@@ -47,8 +45,7 @@ TAG_EXPLICIT="0"
 PUSH_EXPLICIT="0"
 REMOTE_NAME="origin"
 TEST_COMMAND='uv run pytest -q'
-
-# Run from a temporary copy so vendoring can safely rewrite scripts/git_bump.sh.
+# Run from a temporary copy so script updates cannot affect the active run.
 if [[ "${LMS_GIT_BUMP_STAGE2:-0}" != "1" ]]; then
   script_tmp="$(mktemp "${TMPDIR:-/tmp}/lms_git_bump.XXXXXX.sh")"
   cp "$0" "$script_tmp"
@@ -131,12 +128,6 @@ if [[ -n "$(git diff --name-only)" ]] || [[ -n "$(git diff --cached --name-only)
   die "Working tree has tracked changes. Commit or stash them before running git bump."
 fi
 
-if [[ "$VERBOSE" == "1" ]]; then
-  run python scripts/vendor_lms_interface.py
-else
-  run python scripts/vendor_lms_interface.py --quiet
-fi
-
 if [[ "$SKIP_TESTS" != "1" ]] && [[ -n "$TEST_COMMAND" ]]; then
   echo "Running tests: $TEST_COMMAND"
   run bash -lc "$TEST_COMMAND"
@@ -144,26 +135,21 @@ fi
 
 run uv version --bump "$BUMP_KIND"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1)"
-run git add pyproject.toml uv.lock lms_interface \
-  scripts/check_version_bump_vendoring.sh \
-  scripts/git_bump.sh \
-  scripts/install_git_hooks.sh \
-  scripts/lms_vendor_tooling.toml \
-  .githooks/pre-commit
+run git add pyproject.toml uv.lock
 
 if [[ "$NO_COMMIT" == "1" ]]; then
   if [[ ("$TAG_EXPLICIT" == "1" && "$CREATE_TAG" == "1") || ("$PUSH_EXPLICIT" == "1" && "$PUSH_CHANGES" == "1") ]]; then
     die "--tag and --push require a commit. Remove --no-commit."
   fi
-  echo "Staged version bump and vendored LMSInterface updates (no commit created)."
+  echo "Staged version bump updates (no commit created)."
   exit 0
 fi
 
 if [[ -z "$COMMIT_MESSAGE" ]]; then
   COMMIT_MESSAGE="Bump to version ${version}"
-  run env LMS_SKIP_PRECOMMIT_VENDOR=1 git commit -e -m "$COMMIT_MESSAGE"
+  run git commit -e -m "$COMMIT_MESSAGE"
 else
-  run env LMS_SKIP_PRECOMMIT_VENDOR=1 git commit -m "$COMMIT_MESSAGE"
+  run git commit -m "$COMMIT_MESSAGE"
 fi
 
 if [[ "$CREATE_TAG" == "1" ]]; then

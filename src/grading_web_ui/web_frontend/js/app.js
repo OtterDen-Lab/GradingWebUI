@@ -1317,6 +1317,31 @@ async function uploadFiles() {
 
         const result = await response.json();
         console.log('Upload response:', result);
+        if (!response.ok) {
+            throw new Error(result.detail || 'Upload failed');
+        }
+
+        // Refresh session status immediately (before processing/selection starts)
+        const sessionResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}`);
+        if (sessionResponse.ok) {
+            currentSession = await sessionResponse.json();
+            updateSessionInfo();
+        }
+
+        if (result.status === 'awaiting_name_box') {
+            if (uploadEventSource) {
+                uploadEventSource.close();
+                uploadEventSource = null;
+            }
+            await startNameBoxSelection();
+            return;
+        }
+
+        if (result.status !== 'processing') {
+            document.getElementById('upload-progress-container').style.display = 'block';
+            document.getElementById('upload-status').textContent = result.message;
+            return;
+        }
 
         // Connect to SSE stream for processing updates
         listenForStatusUpdates();
@@ -1330,6 +1355,241 @@ async function uploadFiles() {
             uploadEventSource.close();
             uploadEventSource = null;
         }
+    }
+}
+
+let nameBoxSelectionState = null;
+const NAME_BOX_SELECTION_CONTAINER_ID = 'name-box-selection-container';
+
+function removeNameBoxSelectionContainer() {
+    const existing = document.getElementById(NAME_BOX_SELECTION_CONTAINER_ID);
+    if (existing) {
+        existing.remove();
+    }
+}
+
+async function startNameBoxSelection() {
+    if (!currentSession) return;
+
+    navigateToSection('upload-section');
+    document.getElementById('upload-progress-container').style.display = 'block';
+    document.getElementById('upload-status').textContent = 'Loading page preview for name-box selection...';
+
+    const response = await fetch(`${API_BASE}/uploads/${currentSession.id}/name-box-preview`);
+    const data = await response.json();
+    if (!response.ok) {
+        throw new Error(data.detail || 'Failed to load name-box preview');
+    }
+
+    showNameBoxSelectionInterface(data);
+}
+
+function getCanvasPoint(event, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
+    const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
+    return {
+        x: Math.max(0, Math.min(canvas.width, x)),
+        y: Math.max(0, Math.min(canvas.height, y))
+    };
+}
+
+function rectFromPoints(a, b) {
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    const width = Math.abs(a.x - b.x);
+    const height = Math.abs(a.y - b.y);
+    return { x, y, width, height };
+}
+
+function drawNameBoxSelection() {
+    if (!nameBoxSelectionState) return;
+    const { canvas, image, selectedRect, dragStart, dragCurrent } = nameBoxSelectionState;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0);
+
+    let rect = selectedRect;
+    if (dragStart && dragCurrent) {
+        rect = rectFromPoints(dragStart, dragCurrent);
+    }
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+        return;
+    }
+
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#dc2626';
+    ctx.fillStyle = 'rgba(220, 38, 38, 0.18)';
+    ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    ctx.restore();
+}
+
+function showNameBoxSelectionInterface(previewData) {
+    const statusDiv = document.getElementById('upload-status');
+    const container = document.getElementById('upload-progress-container');
+    const progressBar = document.getElementById('upload-progress');
+    const progressFill = document.getElementById('upload-progress-fill');
+    const uploadArea = document.getElementById('upload-area');
+
+    removeNameBoxSelectionContainer();
+    uploadArea.style.display = 'none';
+    progressBar.style.display = 'none';
+    progressFill.style.width = '0%';
+    progressFill.textContent = '';
+    progressFill.innerHTML = '';
+
+    statusDiv.innerHTML = `
+        <h3>Select Name Box</h3>
+        <p>Draw a box around the student-name area on this merged first-page preview (${previewData.pages_merged || 1} exams combined). This will be reused for all uploaded exams in this session.</p>
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <button id="submit-name-box-btn" class="btn btn-primary">Use This Box & Extract Names</button>
+            <button id="reset-name-box-btn" class="btn btn-secondary">Reset Box</button>
+            <button id="cancel-name-box-btn" class="btn btn-secondary">Cancel</button>
+        </div>
+    `;
+
+    const previewWrapper = document.createElement('div');
+    previewWrapper.id = NAME_BOX_SELECTION_CONTAINER_ID;
+    previewWrapper.style.cssText = 'margin-top: 16px; display: flex; justify-content: center;';
+    const previewFrame = document.createElement('div');
+    previewFrame.style.cssText = 'background: white; border: 1px solid var(--gray-300); border-radius: 8px; padding: 12px; max-width: 95%;';
+
+    const helpText = document.createElement('p');
+    helpText.style.cssText = 'margin: 0 0 10px 0; color: var(--gray-700); font-size: 14px;';
+    helpText.textContent = 'Click and drag to draw the name box. You can redraw it at any time before submitting.';
+
+    const canvas = document.createElement('canvas');
+    canvas.id = 'name-box-canvas';
+    canvas.style.cssText = 'display: block; border: 1px solid var(--gray-200); max-width: 100%; height: auto; cursor: crosshair;';
+
+    previewFrame.appendChild(helpText);
+    previewFrame.appendChild(canvas);
+    previewWrapper.appendChild(previewFrame);
+    container.appendChild(previewWrapper);
+
+    const img = new Image();
+    img.onload = () => {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const displayWidth = Math.min(img.width, ALIGNMENT_DEFAULT_DISPLAY_WIDTH);
+        canvas.style.width = `${displayWidth}px`;
+
+        nameBoxSelectionState = {
+            canvas,
+            image: img,
+            selectedRect: null,
+            dragStart: null,
+            dragCurrent: null
+        };
+
+        const existing = previewData.existing_name_box;
+        if (existing) {
+            nameBoxSelectionState.selectedRect = {
+                x: existing.x * canvas.width,
+                y: existing.y * canvas.height,
+                width: existing.width * canvas.width,
+                height: existing.height * canvas.height
+            };
+        }
+        drawNameBoxSelection();
+    };
+    img.onerror = () => {
+        statusDiv.innerHTML = '<h3>Select Name Box</h3><p style="color: var(--danger-color);">Failed to load preview image. Please re-upload and try again.</p>';
+    };
+    img.src = `data:image/png;base64,${previewData.page_image}`;
+
+    canvas.addEventListener('mousedown', (event) => {
+        if (!nameBoxSelectionState) return;
+        const point = getCanvasPoint(event, canvas);
+        nameBoxSelectionState.dragStart = point;
+        nameBoxSelectionState.dragCurrent = point;
+        drawNameBoxSelection();
+    });
+
+    canvas.addEventListener('mousemove', (event) => {
+        if (!nameBoxSelectionState || !nameBoxSelectionState.dragStart) return;
+        nameBoxSelectionState.dragCurrent = getCanvasPoint(event, canvas);
+        drawNameBoxSelection();
+    });
+
+    const finalizeDragSelection = (event) => {
+        if (!nameBoxSelectionState || !nameBoxSelectionState.dragStart) return;
+        nameBoxSelectionState.dragCurrent = getCanvasPoint(event, canvas);
+        const rect = rectFromPoints(nameBoxSelectionState.dragStart, nameBoxSelectionState.dragCurrent);
+        nameBoxSelectionState.dragStart = null;
+        nameBoxSelectionState.dragCurrent = null;
+        if (rect.width >= 8 && rect.height >= 8) {
+            nameBoxSelectionState.selectedRect = rect;
+        }
+        drawNameBoxSelection();
+    };
+
+    canvas.addEventListener('mouseup', finalizeDragSelection);
+    canvas.addEventListener('mouseleave', finalizeDragSelection);
+
+    document.getElementById('reset-name-box-btn').onclick = () => {
+        if (!nameBoxSelectionState) return;
+        nameBoxSelectionState.selectedRect = null;
+        nameBoxSelectionState.dragStart = null;
+        nameBoxSelectionState.dragCurrent = null;
+        drawNameBoxSelection();
+    };
+
+    document.getElementById('cancel-name-box-btn').onclick = () => {
+        if (confirm('Cancel name-box selection? You will need to re-upload exams to continue.')) {
+            removeNameBoxSelectionContainer();
+            document.getElementById('upload-area').style.display = 'block';
+            document.getElementById('upload-progress-container').style.display = 'none';
+            document.getElementById('file-input').value = '';
+            nameBoxSelectionState = null;
+        }
+    };
+
+    document.getElementById('submit-name-box-btn').onclick = submitNameBoxSelection;
+}
+
+async function submitNameBoxSelection() {
+    if (!currentSession || !nameBoxSelectionState || !nameBoxSelectionState.selectedRect) {
+        alert('Please draw a name box before continuing.');
+        return;
+    }
+
+    const submitBtn = document.getElementById('submit-name-box-btn');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving...';
+
+    try {
+        const { canvas, selectedRect } = nameBoxSelectionState;
+        const payload = {
+            x: selectedRect.x / canvas.width,
+            y: selectedRect.y / canvas.height,
+            width: selectedRect.width / canvas.width,
+            height: selectedRect.height / canvas.height,
+            ai_provider: getAIProvider()
+        };
+
+        const response = await fetch(`${API_BASE}/uploads/${currentSession.id}/submit-name-box`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to save name box');
+        }
+
+        removeNameBoxSelectionContainer();
+        nameBoxSelectionState = null;
+        document.getElementById('upload-progress').style.display = 'block';
+        document.getElementById('upload-status').textContent = result.message || 'Extracting names...';
+        listenForStatusUpdates();
+    } catch (error) {
+        console.error('Failed to submit name box:', error);
+        alert(`Failed to submit name box: ${error.message}`);
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Use This Box & Extract Names';
     }
 }
 
@@ -1361,11 +1621,15 @@ let uploadEventSource = null;
 
 function listenForStatusUpdates() {
     const container = document.getElementById('upload-progress-container');
+    const progressBar = document.getElementById('upload-progress');
     const progressFill = document.getElementById('upload-progress-fill');
     const statusDiv = document.getElementById('upload-status');
 
+    removeNameBoxSelectionContainer();
+
     // Show progress container
     container.style.display = 'block';
+    progressBar.style.display = 'block';
     statusDiv.textContent = 'Starting upload processing...';
     progressFill.style.width = '0%';
 

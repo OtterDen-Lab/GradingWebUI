@@ -15,6 +15,11 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 import yaml
+import base64
+import fitz  # PyMuPDF
+import io
+import numpy as np
+from PIL import Image
 
 from ..models import UploadResponse
 from .. import sse
@@ -42,6 +47,7 @@ QUIZ_YAML_FILENAME_KEY = "quiz_yaml_filename"
 QUIZ_YAML_IDS_KEY = "quiz_yaml_ids"
 QUIZ_YAML_DOC_COUNT_KEY = "quiz_yaml_doc_count"
 QUIZ_YAML_UPLOADED_AT_KEY = "quiz_yaml_uploaded_at"
+NAME_RECT_KEY = "name_rect"
 
 
 class SplitPointsSubmission(BaseModel):
@@ -50,6 +56,132 @@ class SplitPointsSubmission(BaseModel):
   skip_first_region: bool = True  # Default to skipping first region (header/title)
   last_page_blank: bool = False  # Default to not skipping last page
   ai_provider: str = "anthropic"  # AI provider for name extraction (anthropic, openai, ollama)
+
+
+class NameBoxSelectionSubmission(BaseModel):
+  """Model for manual name-box selection (normalized to page bounds)."""
+  x: float
+  y: float
+  width: float
+  height: float
+  ai_provider: str = "anthropic"
+
+
+def _sanitize_name_rect(raw_rect: Optional[dict]) -> Optional[Dict[str, float]]:
+  """Validate and normalize a stored name rectangle."""
+  if not isinstance(raw_rect, dict):
+    return None
+
+  required_keys = ("x", "y", "width", "height")
+  if any(key not in raw_rect for key in required_keys):
+    return None
+
+  try:
+    rect = {
+      "x": float(raw_rect["x"]),
+      "y": float(raw_rect["y"]),
+      "width": float(raw_rect["width"]),
+      "height": float(raw_rect["height"])
+    }
+  except (TypeError, ValueError):
+    return None
+
+  if rect["width"] <= 0 or rect["height"] <= 0:
+    return None
+
+  return rect
+
+
+def _get_name_rect_from_session_data(
+    session_data: Optional[dict]) -> Optional[Dict[str, float]]:
+  """Fetch the validated name rect from session metadata."""
+  if not session_data:
+    return None
+  return _sanitize_name_rect(session_data.get(NAME_RECT_KEY))
+
+
+def _session_requires_manual_name_box(session_data: Optional[dict]) -> bool:
+  """True when this upload session should pause for manual name-box selection."""
+  if not session_data:
+    return False
+
+  ai_name_extraction = bool(session_data.get("ai_name_extraction", True))
+  mock_roster = bool(session_data.get("mock_roster", False))
+  has_name_rect = _get_name_rect_from_session_data(session_data) is not None
+  return (not ai_name_extraction) and (not mock_roster) and (not has_name_rect)
+
+
+def _create_merged_first_page_preview(file_paths: List[Path],
+                                      dpi: int = 150) -> tuple[str, dict, dict, int]:
+  """Create an averaged first-page preview across all uploaded exams."""
+  valid_paths = [path for path in file_paths if path.exists()]
+  if not valid_paths:
+    raise HTTPException(status_code=404, detail="Uploaded PDF files are not available on disk")
+
+  preview_paths: List[Path] = []
+  max_pdf_width = 0.0
+  max_pdf_height = 0.0
+
+  for path in valid_paths:
+    try:
+      with fitz.open(str(path)) as doc:
+        if doc.page_count == 0:
+          continue
+        page = doc[0]
+        preview_paths.append(path)
+        max_pdf_width = max(max_pdf_width, float(page.rect.width))
+        max_pdf_height = max(max_pdf_height, float(page.rect.height))
+    except Exception:
+      continue
+
+  if not preview_paths:
+    raise HTTPException(status_code=400, detail="No first-page data available in uploaded PDFs")
+
+  target_width = max(1, int(round(max_pdf_width * dpi / 72.0)))
+  target_height = max(1, int(round(max_pdf_height * dpi / 72.0)))
+  accumulator = np.zeros((target_height, target_width, 3), dtype=np.uint64)
+
+  merged_count = 0
+  for path in preview_paths:
+    try:
+      with fitz.open(str(path)) as doc:
+        if doc.page_count == 0:
+          continue
+        pix = doc[0].get_pixmap(dpi=dpi, alpha=False)
+    except Exception:
+      continue
+
+    image_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+      pix.height, pix.width, pix.n)[:, :, :3]
+    canvas = np.full((target_height, target_width, 3), 255, dtype=np.uint8)
+
+    paste_width = min(target_width, image_array.shape[1])
+    paste_height = min(target_height, image_array.shape[0])
+    x_offset = max(0, (target_width - paste_width) // 2)
+    y_offset = max(0, (target_height - paste_height) // 2)
+
+    canvas[y_offset:y_offset + paste_height, x_offset:x_offset + paste_width] = (
+      image_array[:paste_height, :paste_width]
+    )
+
+    accumulator += canvas
+    merged_count += 1
+
+  if merged_count == 0:
+    raise HTTPException(status_code=500, detail="Failed to render merged name-box preview")
+
+  averaged = (accumulator / merged_count).astype(np.uint8)
+  output = io.BytesIO()
+  Image.fromarray(averaged, mode="RGB").save(output, format="PNG")
+  preview_image = base64.b64encode(output.getvalue()).decode("utf-8")
+
+  return preview_image, {
+    "width": target_width,
+    "height": target_height
+  }, {
+    "width": max_pdf_width,
+    "height": max_pdf_height
+  }, merged_count
 
 
 def compute_file_hash(file_path: Path) -> str:
@@ -390,6 +522,8 @@ async def upload_exams(
       log.info(
         f"Reusing existing split points from previous upload: {session_data['split_points']}"
       )
+    if NAME_RECT_KEY in existing_data:
+      session_data[NAME_RECT_KEY] = existing_data[NAME_RECT_KEY]
 
     total_files = len(existing_files)
   else:
@@ -411,6 +545,8 @@ async def upload_exams(
                   QUIZ_YAML_DOC_COUNT_KEY, QUIZ_YAML_UPLOADED_AT_KEY):
         if key in existing_data:
           session_data[key] = existing_data[key]
+    if NAME_RECT_KEY in existing_data:
+      session_data[NAME_RECT_KEY] = existing_data[NAME_RECT_KEY]
     total_files = len(saved_files)
 
   # Update session with file metadata and status
@@ -428,6 +564,22 @@ async def upload_exams(
   yaml_note = ""
   if uploaded_yaml:
     yaml_note = f" Quiz YAML '{uploaded_yaml['filename']}' attached."
+
+  if _session_requires_manual_name_box(session_data):
+    session_repo.update_status(
+      session_id,
+      SessionStatus.PREPROCESSING,
+      "Uploaded. Select the name box on page 1 to continue."
+    )
+    return {
+      "session_id": session_id,
+      "files_uploaded": len(saved_files),
+      "status": "awaiting_name_box",
+      "message":
+      f"Uploaded {len(saved_files)} exam(s). Select the name box on page 1, then continue.{yaml_note}",
+      "num_exams": total_files,
+      "auto_processed": False
+    }
 
   # If we already have split points from a previous upload, auto-submit and skip alignment UI
   if has_existing_split_points:
@@ -492,6 +644,147 @@ async def upload_exams(
     "message":
     f"Uploaded {len(saved_files)} exam(s). Total: {total_files} exam(s). Extracting names...{yaml_note}",
     "num_exams": total_files,
+    "auto_processed": False
+  }
+
+
+@router.get("/{session_id}/name-box-preview")
+async def get_name_box_preview(
+  session_id: int,
+  current_user: dict = Depends(require_instructor)
+):
+  """Return a merged first-page preview image for manual name-box selection."""
+  session_repo = SessionRepository()
+  session = session_repo.get_by_id(session_id)
+  if not session:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  session_data = session_repo.get_metadata(session_id) or {}
+  file_paths_raw = session_data.get("file_paths")
+  if not isinstance(file_paths_raw, list) or not file_paths_raw:
+    raise HTTPException(status_code=400, detail="No uploaded files found for this session")
+
+  preview_image, image_dimensions, pdf_dimensions, merged_count = _create_merged_first_page_preview(
+    [Path(path_str) for path_str in file_paths_raw],
+    dpi=150
+  )
+
+  existing_rect = _get_name_rect_from_session_data(session_data)
+  existing_rect_normalized = None
+  if existing_rect and pdf_dimensions["width"] > 0 and pdf_dimensions["height"] > 0:
+    existing_rect_normalized = {
+      "x": existing_rect["x"] / pdf_dimensions["width"],
+      "y": existing_rect["y"] / pdf_dimensions["height"],
+      "width": existing_rect["width"] / pdf_dimensions["width"],
+      "height": existing_rect["height"] / pdf_dimensions["height"]
+    }
+
+  return {
+    "session_id": session_id,
+    "page_image": preview_image,
+    "image_dimensions": image_dimensions,
+    "pdf_dimensions": pdf_dimensions,
+    "pages_merged": merged_count,
+    "existing_name_box": existing_rect_normalized
+  }
+
+
+@router.post("/{session_id}/submit-name-box", response_model=UploadResponse)
+async def submit_name_box_selection(
+  session_id: int,
+  background_tasks: BackgroundTasks,
+  submission: NameBoxSelectionSubmission,
+  current_user: dict = Depends(require_instructor)
+):
+  """Store manual name-box coordinates and start name extraction."""
+  session_repo = SessionRepository()
+  session = session_repo.get_by_id(session_id)
+  if not session:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  session_data = session_repo.get_metadata(session_id) or {}
+  file_paths_raw = session_data.get("file_paths")
+  if not isinstance(file_paths_raw, list) or not file_paths_raw:
+    raise HTTPException(status_code=400, detail="No uploaded files found for this session")
+
+  file_paths = [Path(path_str) for path_str in file_paths_raw]
+  file_metadata_raw = session_data.get("file_metadata")
+  if not isinstance(file_metadata_raw, dict):
+    raise HTTPException(status_code=400, detail="Missing file metadata for session uploads")
+  file_metadata = {Path(path_str): value for path_str, value in file_metadata_raw.items()}
+
+  preview_path = None
+  for path in file_paths:
+    if path.exists():
+      preview_path = path
+      break
+  if not preview_path:
+    raise HTTPException(status_code=404, detail="Uploaded PDF files are not available on disk")
+
+  nx = max(0.0, min(float(submission.x), 1.0))
+  ny = max(0.0, min(float(submission.y), 1.0))
+  nw = max(0.0, min(float(submission.width), 1.0))
+  nh = max(0.0, min(float(submission.height), 1.0))
+
+  if nw <= 0 or nh <= 0:
+    raise HTTPException(status_code=400, detail="Name box width and height must be greater than 0")
+
+  x2 = min(1.0, nx + nw)
+  y2 = min(1.0, ny + nh)
+  if x2 <= nx or y2 <= ny:
+    raise HTTPException(status_code=400, detail="Name box selection is invalid")
+
+  try:
+    with fitz.open(str(preview_path)) as doc:
+      if doc.page_count == 0:
+        raise HTTPException(status_code=400, detail="Preview PDF has no pages")
+      page = doc[0]
+      page_width = float(page.rect.width)
+      page_height = float(page.rect.height)
+  except HTTPException:
+    raise
+  except Exception as exc:
+    raise HTTPException(
+      status_code=500,
+      detail=f"Failed to read preview PDF dimensions: {str(exc)}"
+    ) from exc
+
+  name_rect = {
+    "x": round(nx * page_width, 3),
+    "y": round(ny * page_height, 3),
+    "width": round((x2 - nx) * page_width, 3),
+    "height": round((y2 - ny) * page_height, 3)
+  }
+  if name_rect["width"] < 1 or name_rect["height"] < 1:
+    raise HTTPException(status_code=400, detail="Selected name box is too small")
+
+  session_data[NAME_RECT_KEY] = name_rect
+  session_repo.update_metadata(session_id, session_data)
+  session_repo.update_status(
+    session_id,
+    SessionStatus.PREPROCESSING,
+    "Name box saved. Extracting names..."
+  )
+
+  stream_id = sse.make_stream_id("upload", session_id)
+  if not sse.get_stream(stream_id):
+    sse.create_stream(stream_id)
+
+  background_tasks.add_task(
+    process_exam_names,
+    session_id,
+    file_paths,
+    file_metadata,
+    stream_id,
+    submission.ai_provider
+  )
+
+  return {
+    "session_id": session_id,
+    "files_uploaded": len(file_paths),
+    "status": "processing",
+    "message": "Name box saved. Extracting names...",
+    "num_exams": session.total_exams,
     "auto_processed": False
   }
 
@@ -907,7 +1200,8 @@ async def process_exam_names(
       except Exception as e:
         log.error(f"Failed to send SSE event: {e}")
 
-    processor = ExamProcessor(ai_provider=ai_provider)
+    name_rect = _get_name_rect_from_session_data(session_data)
+    processor = ExamProcessor(name_rect=name_rect, ai_provider=ai_provider)
     submissions_to_create = []
     matched_count = 0
     unmatched_students = canvas_students.copy()
@@ -1143,7 +1437,8 @@ async def process_exam_splits(
       except Exception as e:
         log.error(f"Failed to send SSE event: {e}")
 
-    processor = ExamProcessor(ai_provider=ai_provider)
+    name_rect = _get_name_rect_from_session_data(session_data)
+    processor = ExamProcessor(name_rect=name_rect, ai_provider=ai_provider)
     loop = asyncio.get_event_loop()
     matched, unmatched = await loop.run_in_executor(
       None,

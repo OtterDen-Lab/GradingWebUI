@@ -596,11 +596,18 @@ class ExamProcessor:
         query += "\n\nPossible names (use as guide):\n - " + "\n - ".join(
           sorted(student_names))
 
-      response, _ = self.ai_helper_class().query_ai(query,
-                                                    attachments=[
-                                                      ("png",
-                                                       name_image_base64)
-                                                    ])
+      if self.ai_helper_class is ai_helper.AI_Helper__Anthropic:
+        # Keep name matching on the fast Haiku 4.5 path to avoid stale model aliases.
+        response, _ = self.ai_helper_class().query_ai(
+          query,
+          attachments=[("png", name_image_base64)],
+          candidate_models=["claude-haiku-4-5"]
+        )
+      else:
+        response, _ = self.ai_helper_class().query_ai(
+          query,
+          attachments=[("png", name_image_base64)]
+        )
       return response.strip(), name_image_base64
     except Exception as e:
       log.warning(

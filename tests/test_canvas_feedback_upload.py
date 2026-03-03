@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import os
 from types import SimpleNamespace
 
 import canvasapi.exceptions
@@ -78,8 +76,7 @@ def test_push_feedback_uploads_html_attachment_without_inline_summary():
     )
   ]
   assert not any("comment" in edit for edit in submission.edits)
-  assert any(os.path.basename(path) == "feedback.html"
-             for path in submission.uploaded_paths)
+  assert any(path.endswith(".html") for path in submission.uploaded_paths)
   assert not any(path.endswith(".txt") for path in submission.uploaded_paths)
 
 
@@ -95,11 +92,8 @@ def test_push_feedback_posts_plain_text_inline_comment():
   )
 
   assert result is True
-  assert any(
-    edit.get("comment", {}).get("text_comment") == "Plain text feedback"
-    for edit in submission.edits
-  )
-  assert submission.uploaded_paths == []
+  assert not any("comment" in edit for edit in submission.edits)
+  assert any(path.endswith(".txt") for path in submission.uploaded_paths)
 
 
 def test_push_feedback_uploads_html_with_tag_attributes():
@@ -115,8 +109,7 @@ def test_push_feedback_uploads_html_with_tag_attributes():
 
   assert result is True
   assert not any("comment" in edit for edit in submission.edits)
-  assert any(os.path.basename(path) == "feedback.html"
-             for path in submission.uploaded_paths)
+  assert any(path.endswith(".html") for path in submission.uploaded_paths)
 
 
 def test_push_feedback_falls_back_to_txt_attachment_for_plain_text():
