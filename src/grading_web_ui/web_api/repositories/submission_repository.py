@@ -486,9 +486,14 @@ class SubmissionRepository(BaseRepository[Submission]):
       cursor.execute(
         """
         SELECT
-          s.id,
+          s.id as submission_id,
+          s.document_id,
+          s.approximate_name,
+          COALESCE(s.display_name, s.student_name, s.approximate_name) as display_name,
           s.student_name,
           s.canvas_user_id,
+          s.original_filename,
+          CASE WHEN s.exam_pdf_data IS NOT NULL THEN 1 ELSE 0 END as has_exam_pdf,
           COUNT(p.id) as total_problems,
           SUM(CASE WHEN p.graded = 1 THEN 1 ELSE 0 END) as graded_problems,
           SUM(CASE WHEN p.graded = 1 THEN p.score ELSE 0 END) as total_score
@@ -503,15 +508,37 @@ class SubmissionRepository(BaseRepository[Submission]):
       students = []
       for row in cursor.fetchall():
         students.append({
+          "submission_id": row["submission_id"],
+          "document_id": row["document_id"],
+          "approximate_name": row["approximate_name"],
+          "display_name": row["display_name"],
           "student_name": row["student_name"],
           "canvas_user_id": row["canvas_user_id"],
+          "original_filename": row["original_filename"],
+          "has_exam_pdf": bool(row["has_exam_pdf"]),
           "total_problems": row["total_problems"],
-          "graded_problems": row["graded_problems"],
+          "graded_problems": row["graded_problems"] or 0,
           "total_score": row["total_score"],
-          "is_complete": row["graded_problems"] == row["total_problems"]
+          "is_complete":
+          (row["graded_problems"] or 0) == row["total_problems"]
         })
 
       return students
+
+  def delete_by_id(self, submission_id: int) -> int:
+    """
+    Delete one submission by primary key.
+
+    Args:
+      submission_id: Submission primary key
+
+    Returns:
+      Number of submissions deleted
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("DELETE FROM submissions WHERE id = ?", (submission_id,))
+      return cursor.rowcount
 
   def get_blank_stats(self, session_id: int) -> List[Dict]:
     """

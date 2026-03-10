@@ -2,6 +2,7 @@
 Basic API tests to verify setup.
 """
 import asyncio
+import base64
 import csv
 import io
 import os
@@ -67,6 +68,8 @@ def seed_submission_with_problem(session_id: int,
                                  student_name: str = "Student One",
                                  canvas_user_id: int | None = None,
                                  file_hash: str | None = None,
+                                 original_filename: str | None = None,
+                                 exam_pdf_data: str | None = None,
                                  problem_number: int = 1,
                                  graded: bool = False,
                                  score: float | None = None,
@@ -90,8 +93,8 @@ def seed_submission_with_problem(session_id: int,
         canvas_user_id=canvas_user_id,
         page_mappings={},
         file_hash=file_hash,
-        original_filename=None,
-        exam_pdf_data=None,
+        original_filename=original_filename,
+        exam_pdf_data=exam_pdf_data,
       ))
     created_problem = repos.problems.create(
       Problem(
@@ -1546,6 +1549,132 @@ def test_session_stats_blank_rate_counts_manual_blanks_only(client):
   assert stats_row["num_blank"] == 1
   assert stats_row["num_blank_ungraded"] == 0
   assert stats_row["pct_blank"] == pytest.approx((1 / 3) * 100, rel=1e-3)
+
+
+def test_student_scores_include_submission_metadata(client):
+  """Student score rows should expose submission metadata for stats-page actions."""
+  session_id = create_test_session(client, "Student Score Actions Test")
+  pdf_bytes = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"
+  submission_id, _ = seed_submission_with_problem(
+    session_id,
+    student_name="Ada Lovelace",
+    original_filename="ada_exam.pdf",
+    exam_pdf_data=base64.b64encode(pdf_bytes).decode("utf-8"),
+    graded=True,
+    score=5.0,
+  )
+
+  response = client.get(f"/api/sessions/{session_id}/student-scores")
+  assert response.status_code == 200
+
+  payload = response.json()
+  assert payload["students"] == [{
+    "submission_id": submission_id,
+    "document_id": 1,
+    "approximate_name": None,
+    "display_name": "Ada Lovelace",
+    "student_name": "Ada Lovelace",
+    "canvas_user_id": None,
+    "original_filename": "ada_exam.pdf",
+    "has_exam_pdf": True,
+    "total_problems": 1,
+    "graded_problems": 1,
+    "total_score": 5.0,
+    "is_complete": True,
+  }]
+
+
+def test_get_submission_exam_pdf_returns_inline_pdf(client):
+  """Full-exam preview endpoint should stream the stored PDF inline."""
+  session_id = create_test_session(client, "Exam PDF Preview Test")
+  pdf_bytes = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"
+  submission_id, _ = seed_submission_with_problem(
+    session_id,
+    student_name="Grace Hopper",
+    original_filename="grace_exam.pdf",
+    exam_pdf_data=base64.b64encode(pdf_bytes).decode("utf-8"),
+  )
+
+  response = client.get(
+    f"/api/sessions/{session_id}/submissions/{submission_id}/exam-pdf")
+
+  assert response.status_code == 200
+  assert response.headers["content-type"].startswith("application/pdf")
+  assert response.headers["content-disposition"] == (
+    'inline; filename="grace_exam.pdf"')
+  assert response.content == pdf_bytes
+
+
+def test_delete_submission_removes_exam_and_refreshes_session_counts(client):
+  """Deleting one submission should remove its problems and decrement session counts."""
+  session_id = create_test_session(client, "Delete Submission Test")
+  deleted_submission_id, _ = seed_submission_with_problem(
+    session_id,
+    document_id=1,
+    student_name="Delete Me",
+    graded=True,
+    score=3.0,
+  )
+  kept_submission_id, _ = seed_submission_with_problem(
+    session_id,
+    document_id=2,
+    student_name="Keep Me",
+    graded=False,
+    score=None,
+  )
+
+  session_repo = SessionRepository()
+  session = session_repo.get_by_id(session_id)
+  assert session is not None
+  session.total_exams = 2
+  session.processed_exams = 2
+  session.matched_exams = 0
+  session_repo.update(session)
+
+  delete_response = client.delete(
+    f"/api/sessions/{session_id}/submissions/{deleted_submission_id}")
+  assert delete_response.status_code == 200
+  assert delete_response.json()["status"] == "deleted"
+
+  scores_response = client.get(f"/api/sessions/{session_id}/student-scores")
+  assert scores_response.status_code == 200
+  assert scores_response.json()["students"] == [{
+    "submission_id": kept_submission_id,
+    "document_id": 2,
+    "approximate_name": None,
+    "display_name": "Keep Me",
+    "student_name": "Keep Me",
+    "canvas_user_id": None,
+    "original_filename": None,
+    "has_exam_pdf": False,
+    "total_problems": 1,
+    "graded_problems": 0,
+    "total_score": 0,
+    "is_complete": False,
+  }]
+
+  stats_response = client.get(f"/api/sessions/{session_id}/stats")
+  assert stats_response.status_code == 200
+  stats_payload = stats_response.json()
+  assert stats_payload["total_submissions"] == 1
+  assert stats_payload["total_problems"] == 1
+  assert stats_payload["problems_graded"] == 0
+
+  session_response = client.get(f"/api/sessions/{session_id}")
+  assert session_response.status_code == 200
+  session_payload = session_response.json()
+  assert session_payload["total_exams"] == 1
+  assert session_payload["processed_exams"] == 1
+  assert session_payload["matched_exams"] == 0
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) AS count FROM submissions WHERE id = ?",
+                   (deleted_submission_id, ))
+    assert cursor.fetchone()["count"] == 0
+    cursor.execute("SELECT COUNT(*) AS count FROM problems WHERE submission_id = ?",
+                   (deleted_submission_id, ))
+    assert cursor.fetchone()["count"] == 0
 
 
 def test_set_encryption_key_uses_runtime_store_not_env(client):

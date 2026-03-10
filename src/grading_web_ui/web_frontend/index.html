@@ -1065,6 +1065,20 @@
         </div>
     </div>
 
+    <!-- Student Exam Preview Modal -->
+    <div id="student-exam-modal" class="student-exam-modal" style="display: none;">
+        <div class="student-exam-modal-content">
+            <div class="student-exam-modal-header">
+                <h3 id="student-exam-modal-title" style="margin: 0;">Full Exam Preview</h3>
+                <button id="close-student-exam-modal" class="student-exam-modal-close" type="button">&times;</button>
+            </div>
+            <div class="student-exam-modal-body">
+                <div id="student-exam-loading" class="student-exam-loading">Loading exam PDF...</div>
+                <iframe id="student-exam-frame" title="Full exam preview" class="student-exam-frame" style="display: none;"></iframe>
+            </div>
+        </div>
+    </div>
+
     <!-- Answer Display Dialog -->
     <div id="answer-dialog" class="answer-dialog" style="display: none;">
         <div class="answer-header">

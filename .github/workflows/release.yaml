@@ -73,20 +73,40 @@ jobs:
           echo "Not a release commit; skipping remaining steps."
           exit 0
 
-      - name: Ensure tag does not already exist
+      - name: Check whether tag already exists
         if: steps.decision.outputs.release == 'true'
+        id: tag_check
         run: |
           VERSION="${{ steps.curr_version.outputs.version }}"
           TAG="v${VERSION}"
 
-          echo "Checking for existing tag $TAG"
+          echo "Checking for existing tag $TAG (local + remote)"
+          git fetch --tags origin
+
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists. Aborting."
-            exit 1
+            echo "Tag $TAG already exists locally."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists on origin."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Tag $TAG does not exist yet."
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+
+      - name: Skip release when tag already exists
+        if: steps.decision.outputs.release == 'true' && steps.tag_check.outputs.exists == 'true'
+        run: |
+          VERSION="${{ steps.curr_version.outputs.version }}"
+          TAG="v${VERSION}"
+          echo "Tag $TAG already exists; skipping tag/release creation."
+
       - name: Create and push tag
-        if: steps.decision.outputs.release == 'true'
+        if: steps.decision.outputs.release == 'true' && steps.tag_check.outputs.exists != 'true'
         run: |
           VERSION="${{ steps.curr_version.outputs.version }}"
           TAG="v${VERSION}"
@@ -100,7 +120,7 @@ jobs:
           git push origin "$TAG"
 
       - name: Create GitHub Release
-        if: steps.decision.outputs.release == 'true'
+        if: steps.decision.outputs.release == 'true' && steps.tag_check.outputs.exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.curr_version.outputs.version }}

@@ -576,6 +576,78 @@ async def get_student_scores(
   return {"students": students}
 
 
+@router.get("/{session_id}/submissions/{submission_id}/exam-pdf")
+async def get_submission_exam_pdf(
+  session_id: int,
+  submission_id: int,
+  current_user: dict = Depends(require_session_access())
+):
+  """Stream the full exam PDF for one submission (requires session access)."""
+  submission_repo = SubmissionRepository()
+  submission = submission_repo.get_by_id(submission_id)
+
+  if not submission or submission.session_id != session_id:
+    raise HTTPException(status_code=404,
+                        detail="Submission not found in this session")
+
+  if not submission.exam_pdf_data:
+    raise HTTPException(status_code=404, detail="Exam PDF not available")
+
+  try:
+    pdf_bytes = base64.b64decode(submission.exam_pdf_data)
+  except Exception as exc:
+    raise HTTPException(status_code=500,
+                        detail="Stored exam PDF could not be decoded") from exc
+
+  filename = submission.original_filename or f"submission-{submission_id}.pdf"
+  safe_filename = filename.replace('"', "")
+
+  return StreamingResponse(
+    io.BytesIO(pdf_bytes),
+    media_type="application/pdf",
+    headers={
+      "Content-Disposition": f'inline; filename="{safe_filename}"'
+    })
+
+
+@router.delete("/{session_id}/submissions/{submission_id}")
+async def delete_submission(
+  session_id: int,
+  submission_id: int,
+  current_user: dict = Depends(require_instructor)
+):
+  """Delete one submission and its problems from a session (instructor only)."""
+  with with_transaction() as repos:
+    submission = repos.submissions.get_by_id(submission_id)
+    if not submission or submission.session_id != session_id:
+      raise HTTPException(status_code=404,
+                          detail="Submission not found in this session")
+
+    repos.problems.delete_by_submission(submission_id)
+    deleted_count = repos.submissions.delete_by_id(submission_id)
+
+    if deleted_count == 0:
+      raise HTTPException(status_code=404,
+                          detail="Submission not found in this session")
+
+    remaining_submissions = repos.submissions.get_by_session_lightweight(session_id)
+    matched_count = sum(1 for sub in remaining_submissions
+                        if sub.canvas_user_id is not None)
+    repos.sessions.update_progress(session_id,
+                                   total=len(remaining_submissions),
+                                   processed=len(remaining_submissions),
+                                   matched=matched_count)
+    repos.problem_stats.delete_by_session(session_id)
+
+  update_problem_stats(session_id)
+
+  return {
+    "status": "deleted",
+    "session_id": session_id,
+    "submission_id": submission_id,
+  }
+
+
 @router.get("/{session_id}/submissions/{submission_id}/problems")
 async def get_submission_problems(
   session_id: int,

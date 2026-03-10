@@ -322,6 +322,22 @@ function showNotification(message, callback) {
     okBtn.focus();
 }
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function getStudentDisplayName(student) {
+    return student.display_name
+        || student.student_name
+        || student.approximate_name
+        || `Document ${student.document_id}`;
+}
+
 // Update max points dropdown based on current problem number
 function updateMaxPointsDropdown() {
     const maxPointsInput = document.getElementById('max-points-input');
@@ -2798,6 +2814,64 @@ function toggleStudentScores() {
     }
 }
 
+async function removeSubmissionFromStats(submissionId, studentName, triggerButton) {
+    if (!currentSession) return;
+
+    const confirmed = confirm(
+        `Remove ${studentName} from this grading session?\n\nThis deletes the exam and all graded problem data for that submission.`
+    );
+    if (!confirmed) {
+        return;
+    }
+
+    if (triggerButton) {
+        triggerButton.disabled = true;
+        triggerButton.textContent = 'Removing...';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/submissions/${submissionId}`, {
+            method: 'DELETE'
+        });
+        const payload = await response.json();
+
+        if (!response.ok) {
+            throw new Error(payload.detail || 'Failed to remove submission');
+        }
+
+        await loadStatistics();
+        showNotification(`Removed ${studentName} from this session.`);
+    } catch (error) {
+        console.error('Failed to remove submission:', error);
+        showNotification(error.message || 'Failed to remove submission.');
+        if (triggerButton) {
+            triggerButton.disabled = false;
+            triggerButton.textContent = 'Remove';
+        }
+    }
+}
+
+function openStudentExamModal(submissionId, studentName) {
+    if (!currentSession) return;
+
+    studentExamModalTitle.textContent = `Full Exam Preview: ${studentName}`;
+    studentExamLoading.style.display = 'block';
+    studentExamFrame.style.display = 'none';
+    studentExamFrame.onload = () => {
+        studentExamLoading.style.display = 'none';
+        studentExamFrame.style.display = 'block';
+    };
+    studentExamFrame.src = `${API_BASE}/sessions/${currentSession.id}/submissions/${submissionId}/exam-pdf`;
+    studentExamModal.style.display = 'flex';
+}
+
+function closeStudentExamModal() {
+    studentExamModal.style.display = 'none';
+    studentExamFrame.src = 'about:blank';
+    studentExamFrame.style.display = 'none';
+    studentExamLoading.style.display = 'block';
+}
+
 // Load statistics
 async function loadStatistics() {
     try {
@@ -3070,6 +3144,7 @@ async function loadStatistics() {
             `;
             // Check if current user is a TA for anonymous grading
             const isTA = currentUser && currentUser.role === 'ta';
+            const canDeleteSubmissions = currentUser && currentUser.role === 'instructor';
 
             const studentScoresHtml = `
                 <div id="student-scores-container" style="display: none;">
@@ -3087,24 +3162,72 @@ async function loadStatistics() {
                                 <th class="sortable" onclick="sortStudentTable('score')" data-sort="score">
                                     Total Score <span class="sort-indicator"></span>
                                 </th>
+                                <th class="student-actions-cell">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="student-scores-tbody">
-                            ${scoresData.students.map(s => `
+                            ${scoresData.students.map(s => {
+                                const displayName = getStudentDisplayName(s);
+                                const escapedName = escapeHtml(displayName);
+                                const progressRatio = s.total_problems > 0 ? (s.graded_problems / s.total_problems) : 0;
+                                return `
                                 <tr class="${s.is_complete ? 'complete' : 'incomplete'}"
-                                    data-name="${s.student_name || 'Unmatched'}"
-                                    data-progress="${s.graded_problems / s.total_problems}"
+                                    data-name="${escapeHtml(displayName)}"
+                                    data-progress="${progressRatio}"
                                     data-score="${s.total_score || 0}">
-                                    ${!isTA ? `<td>${s.student_name || 'Unmatched'}</td>` : ''}
+                                    ${!isTA ? `<td>${escapedName}</td>` : ''}
                                     <td>${s.graded_problems} / ${s.total_problems}</td>
                                     <td>${s.total_score ? s.total_score.toFixed(2) : '0.00'}</td>
+                                    <td class="student-actions-cell">
+                                        <div class="student-actions">
+                                            <button
+                                                type="button"
+                                                class="btn btn-secondary btn-small student-action-btn"
+                                                data-action="view-exam"
+                                                data-submission-id="${s.submission_id}"
+                                                data-student-name="${escapedName}"
+                                                ${s.has_exam_pdf ? '' : 'disabled title="Exam PDF not available"'}>
+                                                ${s.has_exam_pdf ? 'View Exam' : 'No PDF'}
+                                            </button>
+                                            ${canDeleteSubmissions ? `
+                                            <button
+                                                type="button"
+                                                class="btn btn-danger btn-small student-action-btn"
+                                                data-action="remove-submission"
+                                                data-submission-id="${s.submission_id}"
+                                                data-student-name="${escapedName}">
+                                                Remove
+                                            </button>
+                                            ` : ''}
+                                        </div>
+                                    </td>
                                 </tr>
-                            `).join('')}
+                            `;
+                            }).join('')}
                         </tbody>
                     </table>
                 </div>
             `;
             container.innerHTML += studentScoresHtml;
+
+            document.querySelectorAll('.student-action-btn[data-action="view-exam"]').forEach(button => {
+                button.addEventListener('click', () => {
+                    if (button.disabled) {
+                        return;
+                    }
+                    const submissionId = button.dataset.submissionId;
+                    const studentName = button.dataset.studentName || 'Submission';
+                    openStudentExamModal(submissionId, studentName);
+                });
+            });
+
+            document.querySelectorAll('.student-action-btn[data-action="remove-submission"]').forEach(button => {
+                button.addEventListener('click', async () => {
+                    const submissionId = button.dataset.submissionId;
+                    const studentName = button.dataset.studentName || 'Submission';
+                    await removeSubmissionFromStats(submissionId, studentName, button);
+                });
+            });
         }
 
         // Load TA assignments for instructors
@@ -3607,6 +3730,11 @@ const contextDialog = document.getElementById('context-dialog');
 const closeContext = document.getElementById('close-context');
 const contextPageImage = document.getElementById('context-page-image');
 const contextHighlight = document.getElementById('context-highlight');
+const studentExamModal = document.getElementById('student-exam-modal');
+const closeStudentExamModalBtn = document.getElementById('close-student-exam-modal');
+const studentExamModalTitle = document.getElementById('student-exam-modal-title');
+const studentExamLoading = document.getElementById('student-exam-loading');
+const studentExamFrame = document.getElementById('student-exam-frame');
 
 showContextBtn.addEventListener('click', async () => {
     if (!currentProblem) {
@@ -3668,6 +3796,16 @@ closeContext.addEventListener('click', () => {
 contextDialog.addEventListener('click', (e) => {
     if (e.target === contextDialog) {
         contextDialog.style.display = 'none';
+    }
+});
+
+closeStudentExamModalBtn.addEventListener('click', () => {
+    closeStudentExamModal();
+});
+
+studentExamModal.addEventListener('click', (e) => {
+    if (e.target === studentExamModal) {
+        closeStudentExamModal();
     }
 });
 

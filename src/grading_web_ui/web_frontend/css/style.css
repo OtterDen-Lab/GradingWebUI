@@ -710,6 +710,7 @@ header h1 {
 .student-scores-table td {
     padding: 12px 15px;
     border-top: 1px solid var(--gray-200);
+    vertical-align: middle;
 }
 
 .student-scores-table tr.complete {
@@ -722,6 +723,84 @@ header h1 {
 
 .student-scores-table tbody tr:hover {
     background-color: var(--gray-50);
+}
+
+.student-actions-cell {
+    width: 1%;
+    white-space: nowrap;
+}
+
+.student-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+.student-action-btn[disabled] {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.student-exam-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.72);
+    z-index: 2200;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.student-exam-modal-content {
+    width: min(1100px, 100%);
+    height: min(90vh, 900px);
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.35);
+    display: flex;
+    flex-direction: column;
+}
+
+.student-exam-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--gray-200);
+    background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+}
+
+.student-exam-modal-close {
+    border: none;
+    background: transparent;
+    color: var(--gray-700);
+    font-size: 28px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.student-exam-modal-body {
+    flex: 1;
+    min-height: 0;
+    background: var(--gray-100);
+}
+
+.student-exam-loading {
+    padding: 32px;
+    text-align: center;
+    color: var(--gray-700);
+    font-style: italic;
+}
+
+.student-exam-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: white;
 }
 
 /* Session List */

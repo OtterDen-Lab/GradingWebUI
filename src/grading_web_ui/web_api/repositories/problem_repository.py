@@ -882,6 +882,22 @@ class ProblemRepository(BaseRepository[Problem]):
       cursor.execute("DELETE FROM problems WHERE session_id = ?", (session_id,))
       return cursor.rowcount
 
+  def delete_by_submission(self, submission_id: int) -> int:
+    """
+    Delete all problems for a submission.
+
+    Args:
+      submission_id: Submission primary key
+
+    Returns:
+      Number of problems deleted
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("DELETE FROM problems WHERE submission_id = ?",
+                     (submission_id,))
+      return cursor.rowcount
+
   def get_submission_ids_with_problems(self, session_id: int) -> set:
     """
     Get set of submission IDs that already have problems.

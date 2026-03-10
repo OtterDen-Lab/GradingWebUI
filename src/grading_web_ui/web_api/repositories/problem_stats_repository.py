@@ -65,3 +65,13 @@ class ProblemStatsRepository(BaseRepository):
         )
         inserted += 1
       return inserted
+
+  def delete_by_session(self, session_id: int) -> int:
+    """
+    Delete all computed stats rows for a session.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("DELETE FROM problem_stats WHERE session_id = ?",
+                     (session_id,))
+      return cursor.rowcount
