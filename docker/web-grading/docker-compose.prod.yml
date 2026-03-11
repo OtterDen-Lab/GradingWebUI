@@ -1,6 +1,6 @@
 services:
   web:
-    image: ${GRADING_WEB_IMAGE:-ghcr.io/otterden-lab/gradingwebui:latest}
+    image: ${GRADING_WEB_IMAGE:-samogden/webgraderui:latest}
     container_name: autograder-web-grading
     ports:
       - "${GRADING_WEB_PORT:-8765}:8765"

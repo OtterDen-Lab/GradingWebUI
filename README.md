@@ -99,8 +99,8 @@ make publish v0.8.1
 ```
 
 This pushes:
-- `ghcr.io/otterden-lab/gradingwebui:v0.8.1`
-- `ghcr.io/otterden-lab/gradingwebui:latest`
+- `samogden/webgraderui:v0.8.1`
+- `samogden/webgraderui:latest`
 
 Default platform is `linux/amd64`.
 
@@ -141,11 +141,11 @@ If you deploy from a remote registry image instead of a local build, use
 direct Compose commands:
 
 ```bash
-GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.8.1 \
+GRADING_WEB_IMAGE=samogden/webgraderui:v0.8.1 \
 GRADING_WEB_ENV_FILE=/etc/grading-web/web.env \
 docker compose -f docker/web-grading/docker-compose.prod.yml pull
 
-GRADING_WEB_IMAGE=ghcr.io/otterden-lab/gradingwebui:v0.8.1 \
+GRADING_WEB_IMAGE=samogden/webgraderui:v0.8.1 \
 GRADING_WEB_ENV_FILE=/etc/grading-web/web.env \
 docker compose -f docker/web-grading/docker-compose.prod.yml up -d
 ```

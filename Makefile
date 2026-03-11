@@ -12,7 +12,7 @@ DOCKER_BUILD_CONTEXT ?= .
 RUN_IMAGE ?= autograder-web-grading:local
 RUN_ENV_FILE ?= .env
 DEPLOY_ENV_FILE ?= /etc/grading-web/web.env
-REGISTRY_IMAGE ?= ghcr.io/otterden-lab/gradingwebui
+REGISTRY_IMAGE ?= samogden/webgraderui
 PROJECT_VERSION ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1)
 PUBLISH_VERSION ?= v$(PROJECT_VERSION)
 DEPLOY_TAG ?= latest
@@ -44,7 +44,7 @@ help:
 	@echo "    Run local FastAPI server with local DB path (old make run behavior)."
 	@echo "  make run [RUN_IMAGE=autograder-web-grading:local] [RUN_ENV_FILE=.env]"
 	@echo "    Build local Docker image and run it via production compose."
-	@echo "  make publish [vX.Y.Z] [REGISTRY_IMAGE=ghcr.io/otterden-lab/gradingwebui]"
+	@echo "  make publish [vX.Y.Z] [REGISTRY_IMAGE=samogden/webgraderui]"
 	@echo "    Build and push :vX.Y.Z and :latest (default platform: linux/amd64)."
 	@echo "    Optional multi-arch: PUBLISH_PLATFORMS=linux/amd64,linux/arm64"
 	@echo "  make deploy [vX.Y.Z] [DEPLOY_ENV_FILE=/etc/grading-web/web.env]"
