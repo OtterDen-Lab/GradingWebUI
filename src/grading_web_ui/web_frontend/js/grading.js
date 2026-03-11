@@ -2865,11 +2865,32 @@ function openStudentExamModal(submissionId, studentName) {
     studentExamModal.style.display = 'flex';
 }
 
+function openStudentFeedbackModal(submissionId, studentName) {
+    if (!currentSession) return;
+
+    studentFeedbackModalTitle.textContent = `Feedback Preview: ${studentName}`;
+    studentFeedbackLoading.style.display = 'block';
+    studentFeedbackFrame.style.display = 'none';
+    studentFeedbackFrame.onload = () => {
+        studentFeedbackLoading.style.display = 'none';
+        studentFeedbackFrame.style.display = 'block';
+    };
+    studentFeedbackFrame.src = `${API_BASE}/finalize/${currentSession.id}/submissions/${submissionId}/feedback-preview`;
+    studentFeedbackModal.style.display = 'flex';
+}
+
 function closeStudentExamModal() {
     studentExamModal.style.display = 'none';
     studentExamFrame.src = 'about:blank';
     studentExamFrame.style.display = 'none';
     studentExamLoading.style.display = 'block';
+}
+
+function closeStudentFeedbackModal() {
+    studentFeedbackModal.style.display = 'none';
+    studentFeedbackFrame.src = 'about:blank';
+    studentFeedbackFrame.style.display = 'none';
+    studentFeedbackLoading.style.display = 'block';
 }
 
 // Load statistics
@@ -3239,6 +3260,355 @@ async function loadStatistics() {
     }
 }
 
+const finalizeUploadState = {
+    stats: null,
+    canvasInfo: null,
+    students: [],
+};
+
+function getCanvasTargetControls(kind = 'config') {
+    if (kind === 'finalize') {
+        return {
+            dialog: document.getElementById('finalize-upload-dialog'),
+            envSelect: document.getElementById('finalize-canvas-env-select'),
+            courseSelect: document.getElementById('finalize-canvas-course-select'),
+            assignmentSelect: document.getElementById('finalize-canvas-assignment-select'),
+            summary: document.getElementById('finalize-canvas-target-summary'),
+        };
+    }
+
+    return {
+        dialog: document.getElementById('canvas-target-dialog'),
+        envSelect: document.getElementById('canvas-env-select'),
+        courseSelect: document.getElementById('canvas-course-select'),
+        assignmentSelect: document.getElementById('canvas-assignment-select'),
+        summary: null,
+    };
+}
+
+async function loadCanvasCoursesFor(controls) {
+    const useProd = controls.envSelect.value === 'true';
+
+    controls.courseSelect.innerHTML = '<option value="">Loading courses...</option>';
+    controls.courseSelect.disabled = true;
+    controls.assignmentSelect.innerHTML = '<option value="">Select a course first</option>';
+    controls.assignmentSelect.disabled = true;
+
+    try {
+        const response = await fetch(`${API_BASE}/canvas/courses?use_prod=${useProd}`);
+        const data = await response.json();
+
+        controls.courseSelect.innerHTML = '<option value="">-- Select a Course --</option>';
+        data.courses.forEach(course => {
+            const option = document.createElement('option');
+            option.value = course.id;
+            option.textContent = `${course.is_favorite ? '⭐ ' : ''}${course.name}`;
+            controls.courseSelect.appendChild(option);
+        });
+        controls.courseSelect.disabled = false;
+    } catch (error) {
+        console.error('Failed to load courses:', error);
+        controls.courseSelect.innerHTML = '<option value="">Failed to load courses</option>';
+    }
+}
+
+async function loadCanvasAssignmentsFor(controls, courseId) {
+    if (!courseId) {
+        controls.assignmentSelect.innerHTML = '<option value="">Select a course first</option>';
+        controls.assignmentSelect.disabled = true;
+        return;
+    }
+
+    const useProd = controls.envSelect.value === 'true';
+    controls.assignmentSelect.innerHTML = '<option value="">Loading assignments...</option>';
+    controls.assignmentSelect.disabled = true;
+
+    try {
+        const response = await fetch(`${API_BASE}/canvas/courses/${courseId}/assignments?use_prod=${useProd}`);
+        const data = await response.json();
+
+        controls.assignmentSelect.innerHTML = '<option value="">-- Select an Assignment --</option>';
+        data.assignments.forEach(assignment => {
+            const option = document.createElement('option');
+            option.value = assignment.id;
+            option.textContent = assignment.name;
+            controls.assignmentSelect.appendChild(option);
+        });
+        controls.assignmentSelect.disabled = false;
+    } catch (error) {
+        console.error('Failed to load assignments:', error);
+        controls.assignmentSelect.innerHTML = '<option value="">Failed to load assignments</option>';
+    }
+}
+
+function updateFinalizeCanvasTargetSummary() {
+    const controls = getCanvasTargetControls('finalize');
+    const courseText = controls.courseSelect.options[controls.courseSelect.selectedIndex]?.textContent || 'No course selected';
+    const assignmentText = controls.assignmentSelect.options[controls.assignmentSelect.selectedIndex]?.textContent || 'No assignment selected';
+    const environment = controls.envSelect.value === 'true' ? 'Production' : 'Development';
+    const savedTarget = finalizeUploadState.canvasInfo;
+    const matchesSavedTarget = savedTarget
+        && String(savedTarget.course_id) === controls.courseSelect.value
+        && String(savedTarget.assignment_id) === controls.assignmentSelect.value
+        && ((savedTarget.environment === 'production') === (controls.envSelect.value === 'true'));
+    const url = matchesSavedTarget ? (savedTarget.canvas_url || '') : '';
+    controls.summary.innerHTML = `
+        <div><strong>Environment:</strong> ${environment}</div>
+        <div><strong>Course:</strong> ${courseText}</div>
+        <div><strong>Assignment:</strong> ${assignmentText}</div>
+        <div><strong>Canvas URL:</strong> ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>` : 'Will update after target is saved'}</div>
+    `;
+}
+
+function setFinalizeUploadStatus(message, tone = 'info') {
+    const status = document.getElementById('finalize-upload-status');
+    if (!message) {
+        status.style.display = 'none';
+        status.textContent = '';
+        return;
+    }
+
+    const palette = {
+        info: { background: '#eff6ff', color: '#1d4ed8' },
+        warning: { background: '#fff7ed', color: '#c2410c' },
+        error: { background: '#fef2f2', color: '#b91c1c' },
+    };
+    const colors = palette[tone] || palette.info;
+    status.style.display = 'block';
+    status.style.background = colors.background;
+    status.style.color = colors.color;
+    status.textContent = message;
+}
+
+async function populateCanvasTargetControls(kind, info) {
+    const controls = getCanvasTargetControls(kind);
+    controls.envSelect.value = info.environment === 'production' ? 'true' : 'false';
+    await loadCanvasCoursesFor(controls);
+    controls.courseSelect.value = String(info.course_id);
+    await loadCanvasAssignmentsFor(controls, info.course_id);
+    controls.assignmentSelect.value = String(info.assignment_id);
+    if (kind === 'finalize') {
+        updateFinalizeCanvasTargetSummary();
+    }
+}
+
+async function refreshCurrentSession() {
+    const response = await fetch(`${API_BASE}/sessions/${currentSession.id}`);
+    currentSession = await response.json();
+    updateSessionInfo();
+}
+
+async function updateCanvasConfigFromControls(kind) {
+    const controls = getCanvasTargetControls(kind);
+    const courseId = controls.courseSelect.value;
+    const assignmentId = controls.assignmentSelect.value;
+    const useProd = controls.envSelect.value === 'true';
+
+    if (!courseId || !assignmentId) {
+        throw new Error('Please select both a course and an assignment');
+    }
+
+    const response = await fetch(
+        `${API_BASE}/sessions/${currentSession.id}/canvas-config?course_id=${courseId}&assignment_id=${assignmentId}&use_prod=${useProd}`,
+        { method: 'PUT' }
+    );
+
+    const result = await response.json();
+    if (!response.ok) {
+        throw new Error(result.detail || 'Failed to update Canvas configuration');
+    }
+
+    await refreshCurrentSession();
+
+    const canvasInfoResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}/canvas-info`);
+    finalizeUploadState.canvasInfo = await canvasInfoResponse.json();
+    if (kind === 'finalize') {
+        updateFinalizeCanvasTargetSummary();
+    }
+    return result;
+}
+
+function isFinalizeUploadableStudent(student) {
+    return Boolean(student.canvas_user_id) && student.is_complete;
+}
+
+function formatFinalizeStudentScore(student) {
+    const score = Number(student.total_score || 0);
+    const maxPoints = Number(student.total_max_points || 0);
+    if (maxPoints > 0) {
+        return `${score.toFixed(2)} / ${maxPoints.toFixed(2)}`;
+    }
+    return score.toFixed(2);
+}
+
+function getSelectedFinalizeSubmissionIds() {
+    return finalizeUploadState.students
+        .filter(student => isFinalizeUploadableStudent(student) && student.selected !== false)
+        .map(student => student.submission_id);
+}
+
+function updateFinalizeUploadSummary() {
+    const selectedIds = getSelectedFinalizeSubmissionIds();
+    const uploadable = finalizeUploadState.students.filter(isFinalizeUploadableStudent);
+    const blocked = finalizeUploadState.students.length - uploadable.length;
+    const summary = document.getElementById('finalize-upload-summary');
+    const confirmBtn = document.getElementById('finalize-upload-confirm-btn');
+
+    let text = `Selected ${selectedIds.length} of ${uploadable.length} uploadable students.`;
+    if (blocked > 0) {
+        text += ` ${blocked} student${blocked === 1 ? '' : 's'} cannot be uploaded yet.`;
+    }
+    summary.textContent = text;
+    confirmBtn.textContent = selectedIds.length === 1
+        ? 'Upload 1 Student'
+        : `Upload ${selectedIds.length} Students`;
+    confirmBtn.disabled = selectedIds.length === 0;
+}
+
+function renderFinalizeUploadStudents() {
+    const container = document.getElementById('finalize-upload-student-list');
+    container.innerHTML = '';
+
+    if (!finalizeUploadState.students.length) {
+        container.innerHTML = '<div style="color: var(--gray-700); padding: 18px; border: 1px dashed var(--gray-300); border-radius: 8px;">No students are available for this session.</div>';
+        updateFinalizeUploadSummary();
+        return;
+    }
+
+    finalizeUploadState.students.forEach(student => {
+        const uploadable = isFinalizeUploadableStudent(student);
+        if (student.selected === undefined) {
+            student.selected = uploadable;
+        }
+
+        const row = document.createElement('div');
+        row.style.cssText = 'border: 1px solid var(--gray-200); border-radius: 10px; padding: 12px; background: #fff;';
+
+        const disabledReason = !student.canvas_user_id
+            ? 'Not matched to a Canvas student'
+            : !student.is_complete
+                ? 'Grading is incomplete'
+                : '';
+
+        row.innerHTML = `
+            <div style="display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;">
+                <label style="display: flex; gap: 10px; align-items: flex-start; flex: 1; min-width: 260px;">
+                    <input class="finalize-student-checkbox" type="checkbox" ${student.selected ? 'checked' : ''} ${uploadable ? '' : 'disabled'} style="margin-top: 4px;">
+                    <span>
+                        <strong>${student.display_name || student.student_name || student.approximate_name || `Submission ${student.submission_id}`}</strong>
+                        <div style="font-size: 13px; color: var(--gray-700); margin-top: 4px;">
+                            Score: ${formatFinalizeStudentScore(student)}<br>
+                            ${student.original_filename ? `File: ${student.original_filename}<br>` : ''}
+                            ${student.canvas_user_id ? `Canvas ID: ${student.canvas_user_id}` : disabledReason}
+                        </div>
+                    </span>
+                </label>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end;">
+                    <button type="button" class="btn btn-secondary btn-small finalize-preview-exam" ${student.has_exam_pdf ? '' : 'disabled'}>Preview Exam</button>
+                    <button type="button" class="btn btn-secondary btn-small finalize-preview-feedback">Preview Feedback</button>
+                </div>
+            </div>
+            ${disabledReason ? `<div style="margin-top: 10px; font-size: 12px; color: #b45309;">${disabledReason}</div>` : ''}
+        `;
+
+        row.querySelector('.finalize-student-checkbox').addEventListener('change', (e) => {
+            student.selected = e.target.checked;
+            updateFinalizeUploadSummary();
+        });
+        row.querySelector('.finalize-preview-exam').addEventListener('click', () => {
+            openStudentExamModal(student.submission_id, student.display_name || student.student_name || 'Student');
+        });
+        row.querySelector('.finalize-preview-feedback').addEventListener('click', () => {
+            openStudentFeedbackModal(student.submission_id, student.display_name || student.student_name || 'Student');
+        });
+
+        container.appendChild(row);
+    });
+
+    updateFinalizeUploadSummary();
+}
+
+function closeFinalizeUploadDialog() {
+    document.getElementById('finalize-upload-dialog').style.display = 'none';
+    setFinalizeUploadStatus('');
+}
+
+async function openFinalizeUploadDialog() {
+    const dialog = document.getElementById('finalize-upload-dialog');
+    dialog.style.display = 'flex';
+    setFinalizeUploadStatus('Loading Canvas target and student upload preview...');
+
+    const [statsResponse, canvasInfoResponse, scoresResponse] = await Promise.all([
+        fetch(`${API_BASE}/sessions/${currentSession.id}/stats`),
+        fetch(`${API_BASE}/sessions/${currentSession.id}/canvas-info`),
+        fetch(`${API_BASE}/sessions/${currentSession.id}/student-scores`),
+    ]);
+
+    const stats = await statsResponse.json();
+    const canvasInfo = await canvasInfoResponse.json();
+    const scoresData = await scoresResponse.json();
+
+    if (!statsResponse.ok) {
+        throw new Error(stats.detail || 'Failed to load grading statistics');
+    }
+    if (!canvasInfoResponse.ok) {
+        throw new Error(canvasInfo.detail || 'Failed to load Canvas target');
+    }
+    if (!scoresResponse.ok) {
+        throw new Error(scoresData.detail || 'Failed to load student scores');
+    }
+
+    if (stats.problems_graded < stats.total_problems) {
+        throw new Error(`Cannot finalize: ${stats.total_problems - stats.problems_graded} problems still ungraded. Please complete all grading first.`);
+    }
+
+    finalizeUploadState.stats = stats;
+    finalizeUploadState.canvasInfo = canvasInfo;
+    finalizeUploadState.students = (scoresData.students || []).map(student => ({
+        ...student,
+        selected: isFinalizeUploadableStudent(student),
+    }));
+
+    document.getElementById('finalize-clobber-feedback').checked = false;
+    await populateCanvasTargetControls('finalize', canvasInfo);
+    renderFinalizeUploadStudents();
+
+    const blocked = finalizeUploadState.students.filter(student => !isFinalizeUploadableStudent(student)).length;
+    if (blocked > 0) {
+        setFinalizeUploadStatus(`${blocked} student${blocked === 1 ? '' : 's'} cannot be uploaded because they are not fully ready for Canvas.`, 'warning');
+    } else {
+        setFinalizeUploadStatus('');
+    }
+}
+
+async function startFinalization(options) {
+    const progressDiv = document.getElementById('finalization-progress');
+    const messageDiv = document.getElementById('finalization-message');
+    const progressBar = document.getElementById('finalization-progress-bar');
+
+    progressDiv.style.display = 'block';
+    messageDiv.textContent = 'Initializing finalization...';
+    progressBar.style.width = '0%';
+    document.getElementById('finalize-btn').disabled = true;
+
+    const response = await fetch(`${API_BASE}/finalize/${currentSession.id}/finalize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(options),
+    });
+
+    if (!response.ok) {
+        const error = await response.json();
+        progressDiv.style.display = 'none';
+        document.getElementById('finalize-btn').disabled = false;
+        throw new Error(error.detail || 'Finalization failed');
+    }
+
+    messageDiv.textContent = 'Starting finalization...';
+    closeFinalizeUploadDialog();
+    connectToFinalizationStream();
+}
+
 // Change Canvas Target button
 document.getElementById('change-canvas-target-btn').onclick = async () => {
     if (!currentSession) return;
@@ -3248,139 +3618,52 @@ document.getElementById('change-canvas-target-btn').onclick = async () => {
     }
 
     const dialog = document.getElementById('canvas-target-dialog');
-    const envSelect = document.getElementById('canvas-env-select');
-    const courseSelect = document.getElementById('canvas-course-select');
-    const assignmentSelect = document.getElementById('canvas-assignment-select');
-
-    // Show dialog
     dialog.style.display = 'flex';
 
-    // Load current settings
     try {
         const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/canvas-info`);
         const info = await response.json();
-
-        // Set current environment
-        envSelect.value = info.environment === 'production' ? 'true' : 'false';
-
-        // Load courses for selected environment
-        await loadCanvasConfigCourses();
-
-        // Select current course
-        courseSelect.value = info.course_id;
-
-        // Load and select current assignment
-        await loadCanvasConfigAssignments(info.course_id);
-        assignmentSelect.value = info.assignment_id;
-
+        if (!response.ok) {
+            throw new Error(info.detail || 'Failed to load current Canvas configuration');
+        }
+        await populateCanvasTargetControls('config', info);
     } catch (error) {
         console.error('Failed to load current Canvas config:', error);
+        alert(`Failed to load current Canvas config: ${error.message}`);
     }
 };
 
-// Load courses for Canvas config dialog
-async function loadCanvasConfigCourses() {
-    const envSelect = document.getElementById('canvas-env-select');
-    const courseSelect = document.getElementById('canvas-course-select');
-    const useProd = envSelect.value === 'true';
-
-    courseSelect.innerHTML = '<option value="">Loading courses...</option>';
-    courseSelect.disabled = true;
-
-    try {
-        const response = await fetch(`${API_BASE}/canvas/courses?use_prod=${useProd}`);
-        const data = await response.json();
-
-        courseSelect.innerHTML = '<option value="">-- Select a Course --</option>';
-        data.courses.forEach(course => {
-            const option = document.createElement('option');
-            option.value = course.id;
-            const prefix = course.is_favorite ? '⭐ ' : '';
-            option.textContent = prefix + course.name;
-            courseSelect.appendChild(option);
-        });
-
-        courseSelect.disabled = false;
-    } catch (error) {
-        console.error('Failed to load courses:', error);
-        courseSelect.innerHTML = '<option value="">Failed to load courses</option>';
-    }
-}
-
-// Load assignments for Canvas config dialog
-async function loadCanvasConfigAssignments(courseId) {
-    const envSelect = document.getElementById('canvas-env-select');
-    const assignmentSelect = document.getElementById('canvas-assignment-select');
-    const useProd = envSelect.value === 'true';
-
-    assignmentSelect.innerHTML = '<option value="">Loading assignments...</option>';
-    assignmentSelect.disabled = true;
-
-    try {
-        const response = await fetch(`${API_BASE}/canvas/courses/${courseId}/assignments?use_prod=${useProd}`);
-        const data = await response.json();
-
-        assignmentSelect.innerHTML = '<option value="">-- Select an Assignment --</option>';
-        data.assignments.forEach(assignment => {
-            const option = document.createElement('option');
-            option.value = assignment.id;
-            option.textContent = assignment.name;
-            assignmentSelect.appendChild(option);
-        });
-
-        assignmentSelect.disabled = false;
-    } catch (error) {
-        console.error('Failed to load assignments:', error);
-        assignmentSelect.innerHTML = '<option value="">Failed to load assignments</option>';
-    }
-}
-
-// Canvas config dialog event handlers
-document.getElementById('canvas-env-select').onchange = loadCanvasConfigCourses;
+document.getElementById('canvas-env-select').onchange = () => {
+    loadCanvasCoursesFor(getCanvasTargetControls('config'));
+};
 document.getElementById('canvas-course-select').onchange = (e) => {
-    if (e.target.value) {
-        loadCanvasConfigAssignments(e.target.value);
-    }
+    loadCanvasAssignmentsFor(getCanvasTargetControls('config'), e.target.value);
 };
+
+document.getElementById('finalize-canvas-env-select').onchange = async () => {
+    const controls = getCanvasTargetControls('finalize');
+    await loadCanvasCoursesFor(controls);
+    updateFinalizeCanvasTargetSummary();
+};
+document.getElementById('finalize-canvas-course-select').onchange = async (e) => {
+    const controls = getCanvasTargetControls('finalize');
+    await loadCanvasAssignmentsFor(controls, e.target.value);
+    updateFinalizeCanvasTargetSummary();
+};
+document.getElementById('finalize-canvas-assignment-select').onchange = updateFinalizeCanvasTargetSummary;
 
 document.getElementById('cancel-canvas-target-btn').onclick = () => {
     document.getElementById('canvas-target-dialog').style.display = 'none';
 };
 
 document.getElementById('save-canvas-target-btn').onclick = async () => {
-    const courseId = document.getElementById('canvas-course-select').value;
-    const assignmentId = document.getElementById('canvas-assignment-select').value;
-    const useProd = document.getElementById('canvas-env-select').value === 'true';
-
-    if (!courseId || !assignmentId) {
-        alert('Please select both a course and an assignment');
-        return;
-    }
-
     try {
-        const response = await fetch(
-            `${API_BASE}/sessions/${currentSession.id}/canvas-config?course_id=${courseId}&assignment_id=${assignmentId}&use_prod=${useProd}`,
-            { method: 'PUT' }
-        );
-
-        if (!response.ok) {
-            throw new Error('Failed to update Canvas configuration');
-        }
-
-        const result = await response.json();
+        const result = await updateCanvasConfigFromControls('config');
         alert(`Canvas target updated!\n\nEnvironment: ${result.environment}\nCourse: ${result.course_name}\nAssignment: ${result.assignment_name}`);
-
-        // Close dialog and reload session
         document.getElementById('canvas-target-dialog').style.display = 'none';
-
-        // Refresh session data
-        const sessionResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}`);
-        currentSession = await sessionResponse.json();
-        updateSessionInfo();
-
     } catch (error) {
         console.error('Failed to update Canvas config:', error);
-        alert('Failed to update Canvas configuration. Please try again.');
+        alert(error.message || 'Failed to update Canvas configuration. Please try again.');
     }
 };
 
@@ -3425,6 +3708,52 @@ document.getElementById('export-session-btn').onclick = async () => {
     }
 };
 
+document.getElementById('close-finalize-upload-btn').onclick = closeFinalizeUploadDialog;
+document.getElementById('finalize-upload-cancel-btn').onclick = closeFinalizeUploadDialog;
+document.getElementById('finalize-select-all-btn').onclick = () => {
+    finalizeUploadState.students.forEach(student => {
+        if (isFinalizeUploadableStudent(student)) {
+            student.selected = true;
+        }
+    });
+    renderFinalizeUploadStudents();
+};
+document.getElementById('finalize-select-none-btn').onclick = () => {
+    finalizeUploadState.students.forEach(student => {
+        if (isFinalizeUploadableStudent(student)) {
+            student.selected = false;
+        }
+    });
+    renderFinalizeUploadStudents();
+};
+
+document.getElementById('finalize-upload-confirm-btn').onclick = async () => {
+    const confirmBtn = document.getElementById('finalize-upload-confirm-btn');
+    const selectedSubmissionIds = getSelectedFinalizeSubmissionIds();
+    if (!selectedSubmissionIds.length) {
+        setFinalizeUploadStatus('Select at least one student to upload.', 'error');
+        return;
+    }
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Preparing Upload...';
+    setFinalizeUploadStatus('Saving Canvas target and starting upload...');
+
+    try {
+        await updateCanvasConfigFromControls('finalize');
+        await startFinalization({
+            clobber_feedback: document.getElementById('finalize-clobber-feedback').checked,
+            keep_previous_best: true,
+            submission_ids: selectedSubmissionIds,
+        });
+    } catch (error) {
+        console.error('Failed to start finalization:', error);
+        setFinalizeUploadStatus(error.message || 'Failed to start finalization.', 'error');
+        confirmBtn.disabled = false;
+        updateFinalizeUploadSummary();
+    }
+};
+
 // Finalize and upload to Canvas
 document.getElementById('finalize-btn').onclick = async () => {
     if (!currentSession) return;
@@ -3433,70 +3762,12 @@ document.getElementById('finalize-btn').onclick = async () => {
         return;
     }
 
-    // Check if all grading is complete
     try {
-        const [statsResponse, canvasInfoResponse] = await Promise.all([
-            fetch(`${API_BASE}/sessions/${currentSession.id}/stats`),
-            fetch(`${API_BASE}/sessions/${currentSession.id}/canvas-info`)
-        ]);
-
-        const stats = await statsResponse.json();
-        const canvasInfo = await canvasInfoResponse.json();
-
-        if (stats.problems_graded < stats.total_problems) {
-            showNotification(
-                `Cannot finalize: ${stats.total_problems - stats.problems_graded} problems still ungraded. Please complete all grading first.`
-            );
-            return;
-        }
-
-        // Confirm finalization with Canvas details
-        const confirmMessage = `Ready to finalize and upload ${stats.total_submissions} submissions to Canvas?\n\n` +
-            `Canvas Details:\n` +
-            `- Environment: ${canvasInfo.environment.toUpperCase()}\n` +
-            `- Course: ${canvasInfo.course_name}\n` +
-            `- Assignment: ${canvasInfo.assignment_name}\n` +
-            `- URL: ${canvasInfo.canvas_url}\n\n` +
-            `This will:\n` +
-            `- Generate annotated PDFs with scores\n` +
-            `- Upload to Canvas with detailed comments\n` +
-            `- Mark this session as complete`;
-
-        if (!confirm(confirmMessage)) {
-            return;
-        }
-
-        // Show progress area IMMEDIATELY to provide feedback
-        const progressDiv = document.getElementById('finalization-progress');
-        const messageDiv = document.getElementById('finalization-message');
-        const progressBar = document.getElementById('finalization-progress-bar');
-
-        progressDiv.style.display = 'block';
-        messageDiv.textContent = 'Initializing finalization...';
-        progressBar.style.width = '0%';
-        document.getElementById('finalize-btn').disabled = true;
-
-        // Start finalization
-        const response = await fetch(`${API_BASE}/finalize/${currentSession.id}/finalize`, {
-            method: 'POST'
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            // Reset UI on error
-            progressDiv.style.display = 'none';
-            document.getElementById('finalize-btn').disabled = false;
-            throw new Error(error.detail || 'Finalization failed');
-        }
-
-        // Update message once server responds
-        messageDiv.textContent = 'Starting finalization...';
-
-        connectToFinalizationStream();
-
+        await openFinalizeUploadDialog();
     } catch (error) {
-        console.error('Finalization failed:', error);
-        alert('Failed to start finalization: ' + error.message);
+        console.error('Failed to open finalize upload dialog:', error);
+        closeFinalizeUploadDialog();
+        alert('Failed to prepare finalization: ' + error.message);
     }
 };
 
@@ -3735,6 +4006,11 @@ const closeStudentExamModalBtn = document.getElementById('close-student-exam-mod
 const studentExamModalTitle = document.getElementById('student-exam-modal-title');
 const studentExamLoading = document.getElementById('student-exam-loading');
 const studentExamFrame = document.getElementById('student-exam-frame');
+const studentFeedbackModal = document.getElementById('student-feedback-modal');
+const closeStudentFeedbackModalBtn = document.getElementById('close-student-feedback-modal');
+const studentFeedbackModalTitle = document.getElementById('student-feedback-modal-title');
+const studentFeedbackLoading = document.getElementById('student-feedback-loading');
+const studentFeedbackFrame = document.getElementById('student-feedback-frame');
 
 showContextBtn.addEventListener('click', async () => {
     if (!currentProblem) {
@@ -3806,6 +4082,22 @@ closeStudentExamModalBtn.addEventListener('click', () => {
 studentExamModal.addEventListener('click', (e) => {
     if (e.target === studentExamModal) {
         closeStudentExamModal();
+    }
+});
+
+closeStudentFeedbackModalBtn.addEventListener('click', () => {
+    closeStudentFeedbackModal();
+});
+
+studentFeedbackModal.addEventListener('click', (e) => {
+    if (e.target === studentFeedbackModal) {
+        closeStudentFeedbackModal();
+    }
+});
+
+document.getElementById('finalize-upload-dialog').addEventListener('click', (e) => {
+    if (e.target.id === 'finalize-upload-dialog') {
+        closeFinalizeUploadDialog();
     }
 });
 

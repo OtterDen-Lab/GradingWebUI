@@ -1030,6 +1030,75 @@
         </div>
     </div>
 
+    <!-- Finalize Upload Dialog -->
+    <div id="finalize-upload-dialog" style="display: none; position: fixed; inset: 0; background: rgba(17,24,39,0.55); z-index: 1150; align-items: center; justify-content: center;">
+        <div style="background: white; border-radius: 12px; padding: 24px; width: min(1100px, 96vw); max-height: 92vh; overflow-y: auto; box-shadow: 0 24px 64px rgba(15, 23, 42, 0.22);">
+            <div style="display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 16px;">
+                <div>
+                    <h2 style="margin: 0 0 8px;">Finalize & Upload to Canvas</h2>
+                    <p style="margin: 0; color: var(--gray-700);">
+                        Confirm the Canvas target, choose what to overwrite, and decide which students to upload.
+                    </p>
+                </div>
+                <button id="close-finalize-upload-btn" class="btn" type="button" style="padding: 6px 14px;">Close</button>
+            </div>
+
+            <div id="finalize-upload-status" style="display: none; margin-bottom: 16px; padding: 12px 14px; border-radius: 8px; background: #eff6ff; color: #1d4ed8;"></div>
+
+            <div style="display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.4fr); gap: 20px; align-items: start;">
+                <div style="border: 1px solid var(--gray-200); border-radius: 10px; padding: 16px; background: #f8fafc;">
+                    <h3 style="margin: 0 0 12px;">Canvas Target</h3>
+                    <label style="display: block; margin-bottom: 12px;">
+                        <strong>Environment:</strong>
+                        <select id="finalize-canvas-env-select" style="display: block; width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--gray-200); border-radius: 4px;">
+                            <option value="false">Development (Beta/Test)</option>
+                            <option value="true">Production</option>
+                        </select>
+                    </label>
+                    <label style="display: block; margin-bottom: 12px;">
+                        <strong>Course:</strong>
+                        <select id="finalize-canvas-course-select" style="display: block; width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--gray-200); border-radius: 4px;">
+                            <option value="">Loading courses...</option>
+                        </select>
+                    </label>
+                    <label style="display: block; margin-bottom: 12px;">
+                        <strong>Assignment:</strong>
+                        <select id="finalize-canvas-assignment-select" disabled style="display: block; width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--gray-200); border-radius: 4px;">
+                            <option value="">Select a course first</option>
+                        </select>
+                    </label>
+                    <div id="finalize-canvas-target-summary" style="font-size: 13px; color: var(--gray-700); line-height: 1.5;"></div>
+                    <label style="display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--gray-200);">
+                        <input id="finalize-clobber-feedback" type="checkbox" style="margin-top: 3px;">
+                        <span>
+                            <strong>Clobber existing Canvas feedback</strong><br>
+                            <span style="color: var(--gray-700); font-size: 13px;">Delete prior comments before uploading new grades and attachments.</span>
+                        </span>
+                    </label>
+                </div>
+
+                <div style="border: 1px solid var(--gray-200); border-radius: 10px; padding: 16px;">
+                    <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap;">
+                        <div>
+                            <h3 style="margin: 0;">Students</h3>
+                            <div id="finalize-upload-summary" style="font-size: 13px; color: var(--gray-700); margin-top: 4px;"></div>
+                        </div>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                            <button id="finalize-select-all-btn" type="button" class="btn btn-secondary btn-small">Select All</button>
+                            <button id="finalize-select-none-btn" type="button" class="btn btn-secondary btn-small">Clear All</button>
+                        </div>
+                    </div>
+                    <div id="finalize-upload-student-list" style="display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; padding-right: 4px;"></div>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;">
+                <button id="finalize-upload-cancel-btn" class="btn" type="button">Cancel</button>
+                <button id="finalize-upload-confirm-btn" class="btn btn-success" type="button">Upload Selected Students</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Handwriting Transcription Dialog -->
     <div id="transcription-dialog" class="transcription-dialog" style="display: none;">
         <div class="transcription-header">
@@ -1075,6 +1144,20 @@
             <div class="student-exam-modal-body">
                 <div id="student-exam-loading" class="student-exam-loading">Loading exam PDF...</div>
                 <iframe id="student-exam-frame" title="Full exam preview" class="student-exam-frame" style="display: none;"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- Student Feedback Preview Modal -->
+    <div id="student-feedback-modal" class="student-exam-modal" style="display: none;">
+        <div class="student-exam-modal-content">
+            <div class="student-exam-modal-header">
+                <h3 id="student-feedback-modal-title" style="margin: 0;">Feedback Preview</h3>
+                <button id="close-student-feedback-modal" class="student-exam-modal-close" type="button">&times;</button>
+            </div>
+            <div class="student-exam-modal-body">
+                <div id="student-feedback-loading" class="student-exam-loading">Loading feedback preview...</div>
+                <iframe id="student-feedback-frame" title="Feedback preview" class="student-exam-frame" style="display: none;"></iframe>
             </div>
         </div>
     </div>

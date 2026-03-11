@@ -1562,6 +1562,7 @@ def test_student_scores_include_submission_metadata(client):
     exam_pdf_data=base64.b64encode(pdf_bytes).decode("utf-8"),
     graded=True,
     score=5.0,
+    max_points=6.0,
   )
 
   response = client.get(f"/api/sessions/{session_id}/student-scores")
@@ -1580,6 +1581,7 @@ def test_student_scores_include_submission_metadata(client):
     "total_problems": 1,
     "graded_problems": 1,
     "total_score": 5.0,
+    "total_max_points": 6.0,
     "is_complete": True,
   }]
 
@@ -1650,6 +1652,7 @@ def test_delete_submission_removes_exam_and_refreshes_session_counts(client):
     "total_problems": 1,
     "graded_problems": 0,
     "total_score": 0,
+    "total_max_points": 0,
     "is_complete": False,
   }]
 
@@ -2006,11 +2009,11 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
   from grading_web_ui.web_api.routes import finalize as finalize_routes
 
   session_id = create_test_session(client, "Finalize Options Test")
-  seed_submission_with_problem(session_id,
-                               student_name="Student Options",
-                               canvas_user_id=9003,
-                               graded=True,
-                               score=4.0)
+  submission_id, _ = seed_submission_with_problem(session_id,
+                                                  student_name="Student Options",
+                                                  canvas_user_id=9003,
+                                                  graded=True,
+                                                  score=4.0)
   captured = {}
 
   async def fake_run_finalization(target_session_id: int, stream_id: str,
@@ -2019,6 +2022,7 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
     captured["stream_id"] = stream_id
     captured["keep_previous_best"] = options.keep_previous_best
     captured["clobber_feedback"] = options.clobber_feedback
+    captured["submission_ids"] = options.submission_ids
     workflow_locks.release("finalize", target_session_id)
 
   monkeypatch.setattr(finalize_routes, "run_finalization", fake_run_finalization)
@@ -2026,7 +2030,8 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
   response = client.post(f"/api/finalize/{session_id}/finalize",
                          json={
                            "keep_previous_best": False,
-                           "clobber_feedback": True
+                           "clobber_feedback": True,
+                           "submission_ids": [submission_id],
                          })
 
   assert response.status_code == 200
@@ -2035,8 +2040,30 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
     "stream_id": f"finalize_{session_id}",
     "keep_previous_best": False,
     "clobber_feedback": True,
+    "submission_ids": [submission_id],
   }
   assert workflow_locks.is_active("finalize", session_id) is False
+
+
+def test_finalize_feedback_preview_returns_html(client):
+  """Finalize preview endpoint should render HTML feedback for a submission."""
+  session_id = create_test_session(client, "Finalize Preview Test")
+  submission_id, _ = seed_submission_with_problem(session_id,
+                                                  student_name="Student Preview",
+                                                  canvas_user_id=9004,
+                                                  graded=True,
+                                                  score=4.0,
+                                                  feedback="Nice work.",
+                                                  max_points=5.0)
+
+  response = client.get(
+    f"/api/finalize/{session_id}/submissions/{submission_id}/feedback-preview")
+
+  assert response.status_code == 200
+  assert response.headers["content-type"].startswith("text/html")
+  assert "Student Preview" not in response.text
+  assert "Finalize Preview Test" in response.text
+  assert "Nice work." in response.text
 
 
 def test_autograde_image_lifecycle_starts_job(client, monkeypatch):

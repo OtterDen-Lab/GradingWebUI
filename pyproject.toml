@@ -44,7 +44,7 @@ dependencies = [
     "QuizGenerator==0.23.0",
     "bcrypt==5.0.0",
     "canvasapi==3.2.0",
-    "lms-interface @ git+https://github.com/OtterDen-Lab/LMSInterface.git@v0.5.1",
+    "lms-interface @ git+https://github.com/OtterDen-Lab/LMSInterface.git@v0.5.3",
 ]
 
 [project.optional-dependencies]

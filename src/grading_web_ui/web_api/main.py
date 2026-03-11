@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 from pathlib import Path
 from dotenv import load_dotenv
 import subprocess
@@ -60,6 +61,23 @@ def _is_ahead_of_tag(version: str) -> bool:
 
 PROJECT_VERSION = _read_project_version()
 DISPLAY_VERSION = f"v{PROJECT_VERSION}" + ("+" if _is_ahead_of_tag(PROJECT_VERSION) else "")
+
+
+class NoCacheStaticFiles(StaticFiles):
+  """Serve frontend assets without browser caching so UI edits take effect immediately."""
+
+  def file_response(self,
+                    full_path,
+                    stat_result,
+                    scope,
+                    status_code: int = 200):
+    response = FileResponse(full_path,
+                            status_code=status_code,
+                            stat_result=stat_result)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 from .database import init_database, get_db_connection
@@ -210,7 +228,7 @@ frontend_path = Path(__file__).parent.parent / "web_frontend"
 if frontend_path.exists():
   app.mount(
     "/",
-    StaticFiles(directory=str(frontend_path), html=True),
+    NoCacheStaticFiles(directory=str(frontend_path), html=True),
     name="static"
   )
 

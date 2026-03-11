@@ -4,6 +4,7 @@ Finalization endpoints for completing grading and uploading to Canvas.
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body
+from fastapi.responses import HTMLResponse
 from fastapi.responses import StreamingResponse
 from pathlib import Path
 import tempfile
@@ -13,11 +14,11 @@ import asyncio
 from pydantic import BaseModel
 
 from ..database import get_db_connection
-from ..repositories import SessionRepository, ProblemRepository
+from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository
 from ..domain.common import SessionStatus
 from ..services.finalizer import FinalizationService
 from .. import sse
-from ..auth import require_instructor
+from ..auth import require_instructor, require_session_access
 from .. import workflow_locks
 
 router = APIRouter()
@@ -27,6 +28,7 @@ log = logging.getLogger(__name__)
 class FinalizeOptions(BaseModel):
   keep_previous_best: bool = True
   clobber_feedback: bool = False
+  submission_ids: list[int] | None = None
 
 
 @router.get("/{session_id}/finalize-stream")
@@ -91,6 +93,35 @@ async def finalize_session(
     raise HTTPException(status_code=409,
                         detail="Finalization is already running for this session")
 
+  finalization_options = options or FinalizeOptions()
+  if finalization_options.submission_ids is not None:
+    if len(finalization_options.submission_ids) == 0:
+      workflow_locks.release("finalize", session_id)
+      raise HTTPException(status_code=400,
+                          detail="Select at least one student to upload.")
+
+    submission_repo = SubmissionRepository()
+    submissions = {
+      submission.id: submission
+      for submission in submission_repo.get_by_session_lightweight(session_id)
+    }
+    invalid_ids = sorted(
+      submission_id for submission_id in finalization_options.submission_ids
+      if submission_id not in submissions)
+    if invalid_ids:
+      workflow_locks.release("finalize", session_id)
+      raise HTTPException(status_code=400,
+                          detail="One or more selected submissions are invalid.")
+
+    unmatched_ids = sorted(
+      submission_id for submission_id in finalization_options.submission_ids
+      if submissions[submission_id].canvas_user_id is None)
+    if unmatched_ids:
+      workflow_locks.release("finalize", session_id)
+      raise HTTPException(
+        status_code=400,
+        detail="Selected submissions must be matched to Canvas students.")
+
   # Update session status with initial progress message
   session_repo.update_status(session_id, SessionStatus.FINALIZING, "Starting finalization...")
 
@@ -99,7 +130,6 @@ async def finalize_session(
   sse.create_stream(stream_id)
 
   # Start background finalization
-  finalization_options = options or FinalizeOptions()
   try:
     background_tasks.add_task(run_finalization, session_id, stream_id,
                               finalization_options)
@@ -132,6 +162,38 @@ async def get_finalization_status(
   }
 
 
+@router.get("/{session_id}/submissions/{submission_id}/feedback-preview",
+            response_class=HTMLResponse)
+async def get_finalize_feedback_preview(
+  session_id: int,
+  submission_id: int,
+  current_user: dict = Depends(require_session_access())
+):
+  """Render the exact feedback HTML that finalization would upload."""
+  submission_repo = SubmissionRepository()
+  submission = submission_repo.get_by_id(submission_id)
+  if not submission or submission.session_id != session_id:
+    raise HTTPException(status_code=404,
+                        detail="Submission not found in this session")
+
+  finalizer = FinalizationService(session_id,
+                                  Path("."),
+                                  "preview",
+                                  None,
+                                  selected_submission_ids=[submission_id])
+  session_info = finalizer._get_session_info()
+  submissions = finalizer._get_submissions()
+  if not submissions:
+    raise HTTPException(status_code=404,
+                        detail="Submission not found in this session")
+
+  preview_submission = submissions[0]
+  preview_submission["assignment_name"] = session_info.get("assignment_name")
+  preview_submission["session_name"] = session_info.get("session_name")
+
+  return HTMLResponse(content=finalizer._generate_comments(preview_submission))
+
+
 async def run_finalization(session_id: int, stream_id: str,
                            options: Optional[FinalizeOptions] = None):
   """Background task to finalize grading and upload to Canvas"""
@@ -158,6 +220,7 @@ async def run_finalization(session_id: int, stream_id: str,
         loop,
         keep_previous_best=finalization_options.keep_previous_best,
         clobber_feedback=finalization_options.clobber_feedback,
+        selected_submission_ids=finalization_options.submission_ids,
       )
 
       # Run finalization in thread executor so event loop can send SSE events

@@ -39,13 +39,17 @@ class FinalizationService:
 
   def __init__(self, session_id: int, temp_dir: Path, stream_id: str,
                event_loop, *, keep_previous_best: bool = True,
-               clobber_feedback: bool = False):
+               clobber_feedback: bool = False,
+               selected_submission_ids: List[int] | None = None):
     self.session_id = session_id
     self.temp_dir = temp_dir
     self.stream_id = stream_id
     self.event_loop = event_loop  # Store event loop reference for thread communication
     self.keep_previous_best = keep_previous_best
     self.clobber_feedback = clobber_feedback
+    self.selected_submission_ids = (set(selected_submission_ids)
+                                    if selected_submission_ids is not None
+                                    else None)
     self.canvas_interface = None
     self.course = None
     self.assignment = None
@@ -166,6 +170,10 @@ class FinalizationService:
 
     # Get all submissions for this session
     submissions_list = submission_repo.get_by_session(self.session_id)
+    if self.selected_submission_ids is not None:
+      submissions_list = [
+        sub for sub in submissions_list if sub.id in self.selected_submission_ids
+      ]
 
     submissions = []
     for sub in submissions_list:

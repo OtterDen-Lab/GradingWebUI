@@ -496,7 +496,8 @@ class SubmissionRepository(BaseRepository[Submission]):
           CASE WHEN s.exam_pdf_data IS NOT NULL THEN 1 ELSE 0 END as has_exam_pdf,
           COUNT(p.id) as total_problems,
           SUM(CASE WHEN p.graded = 1 THEN 1 ELSE 0 END) as graded_problems,
-          SUM(CASE WHEN p.graded = 1 THEN p.score ELSE 0 END) as total_score
+          SUM(CASE WHEN p.graded = 1 THEN p.score ELSE 0 END) as total_score,
+          SUM(COALESCE(p.max_points, 0)) as total_max_points
         FROM submissions s
         LEFT JOIN problems p ON p.submission_id = s.id
         WHERE s.session_id = ?
@@ -519,6 +520,7 @@ class SubmissionRepository(BaseRepository[Submission]):
           "total_problems": row["total_problems"],
           "graded_problems": row["graded_problems"] or 0,
           "total_score": row["total_score"],
+          "total_max_points": row["total_max_points"] or 0,
           "is_complete":
           (row["graded_problems"] or 0) == row["total_problems"]
         })
