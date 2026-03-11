@@ -11,7 +11,7 @@ import mimetypes
 import os
 import re
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict
 import fitz  # PyMuPDF
 from PIL import Image
 
@@ -19,7 +19,6 @@ from ..repositories import SessionRepository, SubmissionRepository, ProblemRepos
 from ..services.problem_service import ProblemService
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from lms_interface.canvas_interface import CanvasInterface
-from lms_interface.classes import Feedback
 from .. import sse
 
 log = logging.getLogger(__name__)
@@ -39,11 +38,14 @@ class FinalizationService:
     return "submission"
 
   def __init__(self, session_id: int, temp_dir: Path, stream_id: str,
-               event_loop):
+               event_loop, *, keep_previous_best: bool = True,
+               clobber_feedback: bool = False):
     self.session_id = session_id
     self.temp_dir = temp_dir
     self.stream_id = stream_id
     self.event_loop = event_loop  # Store event loop reference for thread communication
+    self.keep_previous_best = keep_previous_best
+    self.clobber_feedback = clobber_feedback
     self.canvas_interface = None
     self.course = None
     self.assignment = None
@@ -653,26 +655,29 @@ class FinalizationService:
 
   def _upload_to_canvas(self, submission: Dict, pdf_path: Path, comments: str):
     """Upload graded exam and comments to Canvas"""
-    # Create feedback object
-    feedback = Feedback()
-    feedback.comments = comments
+    # Route HTML feedback through normal attachments so Canvas sees the intended
+    # filename instead of the temp-path name generated inside lms-interface.
+    feedback_attachments = []
+    canvas_comments = comments
+    if comments and self._looks_like_html(comments):
+      feedback_file = io.BytesIO(comments.encode("utf-8"))
+      feedback_file.name = f"feedback_submission_{submission['id']}.html"
+      feedback_attachments.append(feedback_file)
+      canvas_comments = ""
 
-    # Add PDF as attachment
     with open(pdf_path, 'rb') as f:
       pdf_bytes = f.read()
 
-    # Canvas expects file-like objects
     pdf_file = io.BytesIO(pdf_bytes)
     pdf_file.name = f"graded_exam_submission_{submission['id']}.pdf"
 
-    # Upload to Canvas
     self.assignment.push_feedback(score=sum(p["score"]
                                             for p in submission["problems"]),
-                                  comments=comments,
-                                  attachments=[pdf_file],
+                                  comments=canvas_comments,
+                                  attachments=[*feedback_attachments, pdf_file],
                                   user_id=submission["canvas_user_id"],
-                                  keep_previous_best=True,
-                                  clobber_feedback=False)
+                                  keep_previous_best=self.keep_previous_best,
+                                  clobber_feedback=self.clobber_feedback)
 
   def _update_progress(self, message: str):
     """Update progress message in database and send SSE event"""

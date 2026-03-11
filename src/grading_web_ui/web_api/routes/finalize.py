@@ -1,13 +1,16 @@
 """
 Finalization endpoints for completing grading and uploading to Canvas.
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body
 from fastapi.responses import StreamingResponse
 from pathlib import Path
 import tempfile
 import shutil
 import logging
 import asyncio
+from pydantic import BaseModel
 
 from ..database import get_db_connection
 from ..repositories import SessionRepository, ProblemRepository
@@ -19,6 +22,11 @@ from .. import workflow_locks
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+
+
+class FinalizeOptions(BaseModel):
+  keep_previous_best: bool = True
+  clobber_feedback: bool = False
 
 
 @router.get("/{session_id}/finalize-stream")
@@ -45,6 +53,7 @@ async def finalize_progress_stream(
 async def finalize_session(
   session_id: int,
   background_tasks: BackgroundTasks,
+  options: Optional[FinalizeOptions] = Body(default=None),
   current_user: dict = Depends(require_instructor)
 ):
   """Start finalization process for a session (instructor only)"""
@@ -90,8 +99,10 @@ async def finalize_session(
   sse.create_stream(stream_id)
 
   # Start background finalization
+  finalization_options = options or FinalizeOptions()
   try:
-    background_tasks.add_task(run_finalization, session_id, stream_id)
+    background_tasks.add_task(run_finalization, session_id, stream_id,
+                              finalization_options)
   except Exception:
     workflow_locks.release("finalize", session_id)
     raise
@@ -121,7 +132,8 @@ async def get_finalization_status(
   }
 
 
-async def run_finalization(session_id: int, stream_id: str):
+async def run_finalization(session_id: int, stream_id: str,
+                           options: Optional[FinalizeOptions] = None):
   """Background task to finalize grading and upload to Canvas"""
   try:
     log.info(f"Starting finalization for session {session_id}")
@@ -138,7 +150,15 @@ async def run_finalization(session_id: int, stream_id: str):
       loop = asyncio.get_event_loop()
 
       # Initialize finalizer with event loop reference
-      finalizer = FinalizationService(session_id, temp_path, stream_id, loop)
+      finalization_options = options or FinalizeOptions()
+      finalizer = FinalizationService(
+        session_id,
+        temp_path,
+        stream_id,
+        loop,
+        keep_previous_best=finalization_options.keep_previous_best,
+        clobber_feedback=finalization_options.clobber_feedback,
+      )
 
       # Run finalization in thread executor so event loop can send SSE events
       await loop.run_in_executor(None, finalizer.finalize)

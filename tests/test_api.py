@@ -1866,7 +1866,8 @@ def test_finalize_concurrent_requests_allow_only_one_start(client, monkeypatch):
                                graded=True,
                                score=5.0)
 
-  async def slow_fake_run_finalization(target_session_id: int, stream_id: str):
+  async def slow_fake_run_finalization(target_session_id: int, stream_id: str,
+                                       options=None):
     await asyncio.sleep(0.25)
     workflow_locks.release("finalize", target_session_id)
 
@@ -1976,7 +1977,8 @@ def test_finalize_lifecycle_starts_and_completes_with_background_task(client,
                                graded=True,
                                score=4.0)
 
-  async def fake_run_finalization(target_session_id: int, stream_id: str):
+  async def fake_run_finalization(target_session_id: int, stream_id: str,
+                                  options=None):
     repo = SessionRepository()
     repo.update_status(target_session_id, DomainSessionStatus.FINALIZED,
                        "Finalized in test")
@@ -1996,6 +1998,44 @@ def test_finalize_lifecycle_starts_and_completes_with_background_task(client,
   final_status = client.get(
     f"/api/finalize/{session_id}/finalization-status").json()["status"]
   assert final_status == "finalized"
+  assert workflow_locks.is_active("finalize", session_id) is False
+
+
+def test_finalize_accepts_options_payload(client, monkeypatch):
+  """Finalize endpoint should forward finalize options to background worker."""
+  from grading_web_ui.web_api.routes import finalize as finalize_routes
+
+  session_id = create_test_session(client, "Finalize Options Test")
+  seed_submission_with_problem(session_id,
+                               student_name="Student Options",
+                               canvas_user_id=9003,
+                               graded=True,
+                               score=4.0)
+  captured = {}
+
+  async def fake_run_finalization(target_session_id: int, stream_id: str,
+                                  options=None):
+    captured["session_id"] = target_session_id
+    captured["stream_id"] = stream_id
+    captured["keep_previous_best"] = options.keep_previous_best
+    captured["clobber_feedback"] = options.clobber_feedback
+    workflow_locks.release("finalize", target_session_id)
+
+  monkeypatch.setattr(finalize_routes, "run_finalization", fake_run_finalization)
+
+  response = client.post(f"/api/finalize/{session_id}/finalize",
+                         json={
+                           "keep_previous_best": False,
+                           "clobber_feedback": True
+                         })
+
+  assert response.status_code == 200
+  assert captured == {
+    "session_id": session_id,
+    "stream_id": f"finalize_{session_id}",
+    "keep_previous_best": False,
+    "clobber_feedback": True,
+  }
   assert workflow_locks.is_active("finalize", session_id) is False
 
 
@@ -2148,7 +2188,7 @@ def test_run_finalization_sets_error_status_and_releases_lock(client,
 
   class FailingFinalizer:
 
-    def __init__(self, session_id, temp_dir, stream_id, loop):
+    def __init__(self, session_id, temp_dir, stream_id, loop, **_kwargs):
       self.session_id = session_id
 
     def finalize(self):
