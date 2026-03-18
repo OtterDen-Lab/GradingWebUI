@@ -14,7 +14,10 @@ import base64
 import fitz
 from ..services.qr_scanner import QRScanner, qr_matches_problem_number
 from ..services.exam_processor import ExamProcessor, PRESCAN_DPI_STEPS
-from ..services.quiz_encryption import set_runtime_encryption_key
+from ..services.quiz_encryption import (
+  set_runtime_encryption_key,
+  get_question_qrcode_class,
+)
 from ..services.feedback_text import merge_general_feedback
 
 from ..models import (
@@ -1685,7 +1688,7 @@ async def test_encryption_key(
 ):
   """Test if an encryption key can decrypt sample QR code data (instructor only)"""
   try:
-    from QuizGenerator.qrcode_generator import QuestionQRCode
+    QuestionQRCode = get_question_qrcode_class()
   except ImportError:
     raise HTTPException(
       status_code=500,

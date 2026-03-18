@@ -14,6 +14,24 @@ _GENERATED_KEY: Optional[bytes] = None
 _PATCHED = False
 
 
+def get_question_qrcode_class():
+  """Load QuizGenerator's QuestionQRCode class across package layouts."""
+  import_paths = (
+    "QuizGenerator.generation.qrcode_generator",
+    "QuizGenerator.qrcode_generator",
+  )
+  errors = []
+
+  for module_path in import_paths:
+    try:
+      module = __import__(module_path, fromlist=["QuestionQRCode"])
+      return module.QuestionQRCode
+    except Exception as exc:
+      errors.append(f"{module_path}: {exc}")
+
+  raise ImportError("; ".join(errors))
+
+
 def _quiet_quizgenerator_loggers() -> None:
   """Clamp noisy QuizGenerator loggers to WARNING."""
   for logger_name in (
@@ -92,7 +110,7 @@ def install_quizgenerator_key_provider() -> bool:
     return True
 
   try:
-    from QuizGenerator.qrcode_generator import QuestionQRCode
+    QuestionQRCode = get_question_qrcode_class()
     _restore_app_logging_after_quizgenerator_import()
   except Exception as exc:
     log.warning("QuizGenerator not available for key-provider patch: %s", exc)

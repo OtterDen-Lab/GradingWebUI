@@ -6,6 +6,7 @@ import os
 from grading_web_ui.web_api.services.quiz_encryption import (
   install_quizgenerator_key_provider,
   clear_runtime_encryption_key,
+  get_question_qrcode_class,
 )
 
 
@@ -17,7 +18,7 @@ def test_quizgenerator_key_provider_does_not_write_env():
   os.environ.pop("QUIZ_ENCRYPTION_KEY", None)
   clear_runtime_encryption_key()
   try:
-    from QuizGenerator.qrcode_generator import QuestionQRCode
+    QuestionQRCode = get_question_qrcode_class()
     key = QuestionQRCode.get_encryption_key()
     assert isinstance(key, bytes)
     assert key
