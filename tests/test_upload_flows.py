@@ -792,7 +792,16 @@ def test_process_exam_splits_creates_problems_and_marks_session_ready(
 
   session_id = create_test_session(client, "Split Worker Flow")
   session_repo = SessionRepository()
-  session_repo.update_metadata(session_id, {})
+  session_repo.update_metadata(session_id, {
+    "page_transforms": {
+      "split-hash-1": {
+        "0": {
+          "target_width": 300,
+          "target_height": 400,
+        }
+      }
+    }
+  })
 
   pdf_path = tmp_path / "five.pdf"
   doc = fitz.open()
@@ -824,6 +833,14 @@ def test_process_exam_splits_creates_problems_and_marks_session_ready(
       pass
 
     def process_exams(self, **kwargs):
+      assert kwargs["page_transforms_by_file"] == {
+        pdf_path: {
+          "0": {
+            "target_width": 300,
+            "target_height": 400,
+          }
+        }
+      }
       problem_dto = SimpleNamespace(
         problem_number=1,
         is_blank=False,

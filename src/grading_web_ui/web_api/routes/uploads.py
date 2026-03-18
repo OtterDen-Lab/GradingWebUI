@@ -1585,6 +1585,12 @@ async def process_exam_splits(
         log.error(f"Failed to send SSE event: {e}")
 
     name_rect = _get_name_rect_from_session_data(session_data)
+    page_transforms_by_file = {}
+    for file_path in file_paths_to_process:
+      file_hash = file_metadata[file_path]["hash"]
+      transforms = page_transforms_by_hash.get(file_hash)
+      if transforms:
+        page_transforms_by_file[file_path] = transforms
     processor = ExamProcessor(
       name_rect=name_rect,
       ai_provider=ai_provider,
@@ -1599,6 +1605,7 @@ async def process_exam_splits(
         progress_callback=update_progress,
         document_id_offset=0,
         file_metadata=file_metadata,
+        page_transforms_by_file=page_transforms_by_file,
         manual_split_points=manual_split_points,
         skip_first_region=skip_first_region,
         last_page_blank=last_page_blank,

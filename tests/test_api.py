@@ -11,6 +11,7 @@ from pathlib import Path
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 import pytest
+import fitz
 from fastapi.testclient import TestClient
 from grading_web_ui.web_api.main import app
 from grading_web_ui.web_api.database import get_db_connection
@@ -77,6 +78,7 @@ def seed_submission_with_problem(session_id: int,
                                  is_blank: bool = False,
                                  blank_method: str | None = None,
                                  blank_reasoning: str | None = None,
+                                 region_coords: dict | None = None,
                                  qr_encrypted_data: str | None = None,
                                  max_points: float | None = None) -> tuple[int, int]:
   """Create one submission and one problem via repositories."""
@@ -108,6 +110,7 @@ def seed_submission_with_problem(session_id: int,
         is_blank=is_blank,
         blank_method=blank_method,
         blank_reasoning=blank_reasoning,
+        region_coords=region_coords,
         qr_encrypted_data=qr_encrypted_data,
         max_points=max_points,
       ))
@@ -702,6 +705,80 @@ def test_manual_qr_payload_rejects_question_number_mismatch(client):
   )
   assert response.status_code == 400
   assert "does not match current problem number" in response.json()["detail"]
+
+
+def test_qr_match_helper_requires_matching_question_number():
+  """QR helper should only accept payloads for the expected problem number."""
+  from grading_web_ui.web_api.services.qr_scanner import qr_matches_problem_number
+
+  assert qr_matches_problem_number({"question_number": 2}, 2) is True
+  assert qr_matches_problem_number({"question_number": "2"}, 2) is True
+  assert qr_matches_problem_number({"question_number": 3}, 2) is False
+  assert qr_matches_problem_number({}, 2) is False
+  assert qr_matches_problem_number(None, 2) is False
+
+
+def test_rescan_qr_rejects_mismatched_question_number(client, monkeypatch):
+  """Single-problem QR re-scan should reject payloads for the wrong question."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+  from grading_web_ui.web_api.services import qr_scanner as qr_scanner_service
+
+  session_id = create_test_session(client, "QR Rescan Mismatch")
+
+  pdf_doc = fitz.open()
+  pdf_doc.new_page(width=200, height=200)
+  pdf_bytes = pdf_doc.tobytes()
+  pdf_doc.close()
+
+  _, problem_id = seed_submission_with_problem(
+    session_id,
+    problem_number=2,
+    exam_pdf_data=base64.b64encode(pdf_bytes).decode("utf-8"),
+    region_coords={
+      "page_number": 0,
+      "region_y_start": 0,
+      "region_y_end": 100,
+    },
+    qr_encrypted_data=None,
+    max_points=None,
+  )
+
+  class FakeQRScanner:
+    available = True
+
+    def __init__(self):
+      pass
+
+    def scan_qr_from_image(self, image_base64):
+      return {
+        "question_number": 3,
+        "max_points": 8.0,
+        "encrypted_data": "wrong-encrypted-data",
+      }
+
+  def fake_extract_image_from_document(*args, **kwargs):
+    return ("fake-image", 100)
+
+  monkeypatch.setattr(qr_scanner_service, "QRScanner", FakeQRScanner)
+  monkeypatch.setattr(
+    problems_routes._problem_service,
+    "extract_image_from_document",
+    fake_extract_image_from_document,
+  )
+
+  response = client.post(f"/api/problems/{problem_id}/rescan-qr")
+  assert response.status_code == 400
+  assert "question number 3 does not match problem number 2" in response.json()["detail"]
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute(
+      "SELECT qr_encrypted_data, max_points FROM problems WHERE id = ?",
+      (problem_id,),
+    )
+    row = cursor.fetchone()
+    assert row["qr_encrypted_data"] is None
+    assert row["max_points"] is None
 
 
 def test_manual_qr_payload_accepts_zero_max_points(client):

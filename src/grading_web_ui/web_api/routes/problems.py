@@ -22,6 +22,7 @@ from ..repositories import (ProblemRepository, SubmissionRepository,
 from ..services.problem_service import ProblemService
 from ..services.feedback_text import merge_general_feedback
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
+from ..services.qr_scanner import qr_matches_problem_number
 from ..auth import require_session_access, get_current_user
 
 from grading_web_ui import ai_helper
@@ -1703,6 +1704,14 @@ async def rescan_qr_for_single_problem(
   pdf_document.close()
 
   if qr_data:
+    if not qr_matches_problem_number(qr_data, problem.problem_number):
+      raise HTTPException(
+        status_code=400,
+        detail=(
+          f"Scanned QR payload question number {qr_data.get('question_number')} "
+          f"does not match problem number {problem.problem_number}"
+        )
+      )
     log.info(
       f"Problem {problem.problem_number} (ID {problem_id}): Found QR code with max_points={qr_data['max_points']}"
     )

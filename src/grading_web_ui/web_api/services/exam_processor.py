@@ -27,7 +27,8 @@ import concurrent.futures
 from grading_web_ui import ai_helper
 
 # Import QR scanner service
-from .qr_scanner import QRScanner
+from .qr_scanner import QRScanner, qr_matches_problem_number
+from .problem_service import ProblemService
 
 # Import DTOs
 from ..dtos import SubmissionDTO, ProblemDTO
@@ -71,6 +72,7 @@ class ExamProcessor:
       self.name_rect["y"] + self.name_rect["height"],
     ])
     self.qr_scanner = QRScanner()
+    self.problem_service = ProblemService()
     if qr_prescan_dpi_steps is None:
       self.qr_prescan_dpi_steps = list(PRESCAN_DPI_STEPS)
     else:
@@ -107,6 +109,7 @@ class ExamProcessor:
       progress_callback: Optional[callable] = None,
       document_id_offset: int = 0,
       file_metadata: Optional[Dict[Path, Dict]] = None,
+      page_transforms_by_file: Optional[Dict[Path, Dict]] = None,
       manual_split_points: Optional[Dict[int, List[int]]] = None,
       skip_first_region: bool = True,
       last_page_blank: bool = False,
@@ -205,8 +208,9 @@ class ExamProcessor:
       pdf_data, problems = self.redact_and_extract_regions(
         pdf_path,
         consensus_break_points,
-        skip_first_region,
-        last_page_blank,
+        page_transforms=(page_transforms_by_file or {}).get(pdf_path),
+        skip_first_region=skip_first_region,
+        last_page_blank=last_page_blank,
         message_callback=report_prescan
       )
       
@@ -808,6 +812,7 @@ class ExamProcessor:
       self,
       pdf_path: Path,
       split_points: Dict[int, List[int]],
+      page_transforms: Optional[Dict] = None,
       skip_first_region: bool = True,
       last_page_blank: bool = False,
       message_callback: Optional[callable] = None) -> Tuple[str, List[ProblemDTO]]:
@@ -961,7 +966,7 @@ class ExamProcessor:
 
       regions = []
       for i in range(start_index, len(linear_splits) - 1):
-        start_page, start_y, _ = linear_splits[i]
+        start_page, start_y, start_pct = linear_splits[i]
         end_page, end_y, end_pct = linear_splits[i + 1]
 
         # Adjust end point if needed (same logic as problem extraction)
@@ -969,7 +974,9 @@ class ExamProcessor:
           end_page = end_page - 1
           end_y = pdf_document_original[end_page].rect.height
           end_pct = 1.0
-        regions.append((problem_number_prescan, start_page, start_y, end_page, end_y))
+        regions.append(
+          (problem_number_prescan, start_page, start_y, start_pct, end_page, end_y, end_pct)
+        )
         problem_number_prescan += 1
 
       callback_lock = threading.Lock()
@@ -979,8 +986,8 @@ class ExamProcessor:
           with callback_lock:
             message_callback(message, step_increment=step_increment)
 
-      def scan_region(region: Tuple[int, int, float, int, float]) -> Tuple[int, Optional[dict]]:
-        problem_num, start_page, start_y, end_page, end_y = region
+      def scan_region(region: Tuple[int, int, float, float, int, float, float]) -> Tuple[int, Optional[dict]]:
+        problem_num, start_page, start_y, start_pct, end_page, end_y, end_pct = region
         qr_data = None
         try:
           local_doc = fitz.open(str(pdf_path))
@@ -988,15 +995,26 @@ class ExamProcessor:
             log.info(
               f"Pre-scan problem {problem_num}/{total_prescan} at {dpi} DPI"
             )
-            problem_image_base64, _ = self._extract_cross_page_region(
+            problem_image_base64, _ = self.problem_service.extract_image_from_document(
               local_doc,
               start_page,
               start_y,
               end_page,
               end_y,
+              start_y_pct=start_pct,
+              end_y_pct=end_pct if start_page == end_page else None,
+              end_page_y_pct=end_pct if start_page != end_page else None,
+              page_transforms=page_transforms,
               dpi=dpi)
 
             qr_data = self.qr_scanner.scan_qr_from_image(problem_image_base64)
+            if qr_data and not qr_matches_problem_number(qr_data, problem_num):
+              log.warning(
+                "Pre-scan problem %s: ignoring QR payload for question %s",
+                problem_num,
+                qr_data.get("question_number")
+              )
+              qr_data = None
             step_increment = 1
             remaining_steps = len(self.qr_prescan_dpi_steps) - dpi_index - 1
             if qr_data and remaining_steps > 0:
@@ -1069,8 +1087,17 @@ class ExamProcessor:
       )
 
       # Extract region(s) and create merged image
-      problem_image_base64, region_height = self._extract_cross_page_region(
-        pdf_document, start_page, start_y, end_page, end_y)
+      problem_image_base64, region_height = self.problem_service.extract_image_from_document(
+        pdf_document,
+        start_page,
+        start_y,
+        end_page,
+        end_y,
+        start_y_pct=start_pct,
+        end_y_pct=end_pct if start_page == end_page else None,
+        end_page_y_pct=end_pct if start_page != end_page else None,
+        page_transforms=page_transforms,
+      )
 
       # Build region coordinates dict
       region_coords = {

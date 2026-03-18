@@ -12,7 +12,7 @@ import yaml
 import logging
 import base64
 import fitz
-from ..services.qr_scanner import QRScanner
+from ..services.qr_scanner import QRScanner, qr_matches_problem_number
 from ..services.exam_processor import ExamProcessor, PRESCAN_DPI_STEPS
 from ..services.quiz_encryption import set_runtime_encryption_key
 from ..services.feedback_text import merge_general_feedback
@@ -1834,6 +1834,15 @@ async def rescan_qr_codes(
         # Try scanning at this resolution
         qr_data = qr_scanner.scan_qr_from_image(problem_image_base64)
         if qr_data:
+          if not qr_matches_problem_number(qr_data, problem.problem_number):
+            log.warning(
+              "Problem %s (ID %s): ignoring QR payload for question %s during session re-scan",
+              problem.problem_number,
+              problem.id,
+              qr_data.get("question_number")
+            )
+            qr_data = None
+            continue
           if dpi > 150:
             log.info(
               f"Problem {problem.problem_number} (ID {problem.id}): Found QR code at {dpi} DPI (after trying lower resolutions)"

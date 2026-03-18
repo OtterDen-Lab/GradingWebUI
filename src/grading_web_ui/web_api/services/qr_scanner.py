@@ -23,6 +23,20 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 
+def qr_matches_problem_number(qr_data: Optional[Dict],
+                              expected_problem_number: int) -> bool:
+  """Return True when scanned QR payload belongs to the expected problem number."""
+  if not isinstance(qr_data, dict):
+    return False
+
+  try:
+    scanned_problem_number = int(qr_data.get("question_number"))
+  except (TypeError, ValueError):
+    return False
+
+  return scanned_problem_number == int(expected_problem_number)
+
+
 def _configure_macos_zbar_library_path() -> bool:
   """
   Add common Homebrew zbar library locations to DYLD fallback path.
