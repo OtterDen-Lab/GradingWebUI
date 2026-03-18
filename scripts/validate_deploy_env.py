@@ -76,6 +76,10 @@ def _validate(values: dict[str, str], *, require_prod_pair: bool) -> tuple[list[
     warnings.append(
       "AUTH_COOKIE_SECURE is not true; session cookies may be exposed on non-HTTPS connections."
     )
+  if not _is_truthy(values.get("QUIZGEN_ALLOW_GENERATOR", "false")):
+    warnings.append(
+      "QUIZGEN_ALLOW_GENERATOR is not true; quiz answer regeneration for generator-backed questions will fail."
+    )
 
   return errors, warnings
 

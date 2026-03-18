@@ -10,6 +10,7 @@ services:
       - GRADING_DB_PATH=/data/grading.db
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app/src
+      - QUIZGEN_ALLOW_GENERATOR=${QUIZGEN_ALLOW_GENERATOR:-1}
       # Optional one-time bootstrap vars passed from host environment.
       - GRADING_BOOTSTRAP_ADMIN_PASSWORD
       - GRADING_BOOTSTRAP_ADMIN_USERNAME

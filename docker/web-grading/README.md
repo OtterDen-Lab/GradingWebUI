@@ -79,7 +79,9 @@ Use the production compose file with a server-only env file.
    sudo cp docker/web-grading/.env.example /etc/grading-web/web.env
    sudo chmod 600 /etc/grading-web/web.env
    ```
-   Fill `/etc/grading-web/web.env` with real secrets.
+   Fill `/etc/grading-web/web.env` with real secrets. Keep
+   `QUIZGEN_ALLOW_GENERATOR=1` in that file if you want the "show answer"
+   flow to regenerate generator-backed questions.
 
 2. **Deploy a tagged image:**
    ```bash
@@ -257,6 +259,7 @@ docker-compose exec web ls -lh /data/
 ```bash
 docker-compose exec web env | grep CANVAS
 docker-compose exec web env | grep ANTHROPIC
+docker-compose exec web env | grep QUIZGEN_ALLOW_GENERATOR
 ```
 
 **Test Canvas connection:**

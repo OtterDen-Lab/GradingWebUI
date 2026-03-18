@@ -32,3 +32,18 @@ def test_startup_config_non_strict_returns_warnings(monkeypatch):
   warnings = validate_startup_configuration()
   assert any("Canvas credentials are missing" in msg for msg in warnings)
   assert any("AUTH_COOKIE_SECURE is false" in msg for msg in warnings)
+  assert any("QUIZGEN_ALLOW_GENERATOR is false" in msg for msg in warnings)
+
+
+def test_startup_config_no_generator_warning_when_enabled(monkeypatch):
+  monkeypatch.setenv("GRADING_STRICT_STARTUP_CONFIG", "false")
+  monkeypatch.delenv("CANVAS_API_URL", raising=False)
+  monkeypatch.delenv("CANVAS_API_KEY", raising=False)
+  monkeypatch.delenv("CANVAS_API_URL_PROD", raising=False)
+  monkeypatch.delenv("CANVAS_API_KEY_PROD", raising=False)
+  monkeypatch.delenv("CANVAS_API_URL_prod", raising=False)
+  monkeypatch.delenv("CANVAS_API_KEY_prod", raising=False)
+  monkeypatch.setenv("QUIZGEN_ALLOW_GENERATOR", "1")
+
+  warnings = validate_startup_configuration()
+  assert not any("QUIZGEN_ALLOW_GENERATOR is false" in msg for msg in warnings)

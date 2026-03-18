@@ -52,6 +52,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 ENV PYTHONUNBUFFERED=1
 ENV GRADING_DB_PATH=/data/grading.db
 ENV PYTHONPATH=/app/src
+ENV QUIZGEN_ALLOW_GENERATOR=1
 
 # Run the application
 CMD ["uvicorn", "grading_web_ui.web_api.main:app", "--host", "0.0.0.0", "--port", "8765"]

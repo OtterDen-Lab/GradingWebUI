@@ -45,9 +45,13 @@ def validate_startup_configuration() -> List[str]:
       "AUTH_COOKIE_SECURE is false. Session cookies may be exposed on non-HTTPS connections."
     )
 
+  if not _is_truthy(os.getenv("QUIZGEN_ALLOW_GENERATOR", "false")):
+    warnings.append(
+      "QUIZGEN_ALLOW_GENERATOR is false. Quiz answer regeneration for generator-backed questions will fail."
+    )
+
   if strict and errors:
     raise RuntimeError("Startup configuration validation failed: " + " ".join(errors))
 
   warnings.extend(errors)
   return warnings
-
