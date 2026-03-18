@@ -563,7 +563,7 @@ wheels = [
 
 [[package]]
 name = "gradingwebui"
-version = "0.9.10"
+version = "0.9.11"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -621,7 +621,7 @@ requires-dist = [
     { name = "python-multipart", specifier = "==0.0.22" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "pyzbar", specifier = "==0.1.9" },
-    { name = "quizgenerator", specifier = "==0.23.0" },
+    { name = "quizgenerator", specifier = "~=0.24.2" },
     { name = "requests", specifier = "==2.32.4" },
     { name = "scikit-learn", specifier = "==1.8.0" },
     { name = "urllib3", specifier = "==2.6.3" },
@@ -1661,7 +1661,7 @@ wheels = [
 
 [[package]]
 name = "quizgenerator"
-version = "0.23.0"
+version = "0.24.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "canvasapi" },
@@ -1669,6 +1669,7 @@ dependencies = [
     { name = "markdown" },
     { name = "matplotlib" },
     { name = "numpy" },
+    { name = "pydantic" },
     { name = "pypandoc" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1678,9 +1679,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/cd/114764190fcb4f3731e2fcaebbe7404e945bc64af4c263c0586fd3038369/quizgenerator-0.23.0.tar.gz", hash = "sha256:0ee2d75e28fed16895aa569f925079900e543f0498c612fe8e6f6082c06e20e5", size = 200806, upload-time = "2026-02-18T19:30:35.631Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f9/15/894931311745decc79dcd8153e6ce9c9a037d339a88ee78a11641bb23bc7/quizgenerator-0.24.2.tar.gz", hash = "sha256:0fabd1631af61b2effac609466f4badbf690377487a01befca130baa95bfaf60", size = 231884, upload-time = "2026-03-18T21:02:57.787Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/69/3f/0492a12d002e60826fd85986157a72415a9b7eb057648ff3f6842b18301c/quizgenerator-0.23.0-py3-none-any.whl", hash = "sha256:9c982b38d04ebcc04c499e8da1311ce0333e1694cb5ae05737fbf9265d75dc92", size = 225992, upload-time = "2026-02-18T19:30:34.258Z" },
+    { url = "https://files.pythonhosted.org/packages/96/06/bd38b8b9c8d92c17c04bdbcd941138005e44d6257104c2a95ef1b60068a1/quizgenerator-0.24.2-py3-none-any.whl", hash = "sha256:658b582667585d506356371d9448239f7ee2e88ec3898bdddbdcfd15aa31435b", size = 260976, upload-time = "2026-03-18T21:02:59.171Z" },
 ]
 
 [[package]]
