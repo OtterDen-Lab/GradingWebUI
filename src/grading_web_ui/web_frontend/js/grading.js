@@ -1688,10 +1688,21 @@ function handleGradingKeyboard(e) {
     // Enter key - submit and move to next
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        if (isGroupingMode(getCurrentSubjectiveSettings()?.grading_mode)) {
-            submitSubjectiveTriage();
+        const groupingMode = getCurrentSubjectiveSettings()?.grading_mode;
+        if (isGroupingMode(groupingMode)) {
+            if (isTagMode(groupingMode) && selectedSubjectiveTagIds.size === 0) {
+                if (shouldUseSubjectiveBucketFilter()) {
+                    void loadProblemFromActiveBucketFilter('next', false);
+                } else {
+                    void loadNextProblem({
+                        excludeProblemIds: currentProblem?.id ? [currentProblem.id] : []
+                    });
+                }
+                return;
+            }
+            void submitSubjectiveTriage();
         } else {
-            submitGrade();
+            void submitGrade();
         }
     }
 
@@ -2137,19 +2148,30 @@ async function maybeOfferSubjectiveFinalizeForCurrentProblem() {
 }
 
 // Load next ungraded problem
-async function loadNextProblem() {
+async function loadNextProblem(options = {}) {
     try {
+        const excludeProblemIds = Array.isArray(options.excludeProblemIds)
+            ? options.excludeProblemIds
+                .map((id) => Number(id))
+                .filter((id) => Number.isInteger(id) && id > 0)
+            : [];
+
         if (shouldUseSubjectiveBucketFilter()) {
             await loadProblemFromActiveBucketFilter('next', false);
             return;
         }
 
-        if (usePrefetchedNextProblemIfAvailable()) {
+        if (excludeProblemIds.length === 0 && usePrefetchedNextProblemIfAvailable()) {
             return;
         }
 
+        const params = new URLSearchParams();
+        if (excludeProblemIds.length > 0) {
+            params.set('exclude_problem_ids', excludeProblemIds.join(','));
+        }
+        const query = params.toString() ? `?${params.toString()}` : '';
         const response = await fetch(
-            `${API_BASE}/problems/${currentSession.id}/${currentProblemNumber}/next`
+            `${API_BASE}/problems/${currentSession.id}/${currentProblemNumber}/next${query}`
         );
 
         if (response.status === 404) {

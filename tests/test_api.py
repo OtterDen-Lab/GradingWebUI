@@ -1384,6 +1384,74 @@ def test_subjective_finalize_includes_general_feedback_section(client):
       )
 
 
+def test_subjective_finalize_appends_triage_notes_as_response_specific_feedback(client):
+  """Per-response subjective notes should become student-facing specific feedback on finalize."""
+  session_id = create_test_session(client, "Subjective Notes Feedback")
+  _, problem_id_a = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=17, max_points=8.0
+  )
+  _, problem_id_b = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=17, max_points=8.0
+  )
+
+  mode_response = client.put(
+    f"/api/sessions/{session_id}/subjective-settings",
+    json={
+      "problem_number": 17,
+      "grading_mode": "subjective",
+      "buckets": [
+        {"id": "good", "label": "Good"},
+      ]
+    }
+  )
+  assert mode_response.status_code == 200
+
+  triage_a = client.post(
+    f"/api/problems/{problem_id_a}/subjective-triage",
+    json={"bucket_id": "good", "notes": "You justified the sign incorrectly."}
+  )
+  assert triage_a.status_code == 200
+
+  triage_b = client.post(
+    f"/api/problems/{problem_id_b}/subjective-triage",
+    json={"bucket_id": "good"}
+  )
+  assert triage_b.status_code == 200
+
+  finalize_response = client.post(
+    f"/api/sessions/{session_id}/subjective-finalize",
+    json={
+      "problem_number": 17,
+      "bucket_scores": [
+        {"bucket_id": "good", "score": 6.0, "feedback": "Reasoning is mostly correct."},
+      ]
+    }
+  )
+  assert finalize_response.status_code == 200
+  payload = finalize_response.json()
+  assert payload["status"] == "finalized"
+  bucket_updates = {update["bucket_id"]: update for update in payload["bucket_updates"]}
+  assert bucket_updates["good"]["has_response_specific_notes"] is True
+
+  with get_db_connection() as conn:
+    cursor = conn.cursor()
+    cursor.execute("""
+      SELECT id, feedback
+      FROM problems
+      WHERE session_id = ? AND problem_number = ?
+      ORDER BY id
+    """, (session_id, 17))
+    rows = {row["id"]: row["feedback"] for row in cursor.fetchall()}
+
+    assert rows[problem_id_a] == (
+      "General feedback:\n"
+      "Reasoning is mostly correct.\n\n"
+      "Response-specific feedback:\n"
+      "You justified the sign incorrectly."
+    )
+    assert rows[problem_id_b] == "Reasoning is mostly correct."
+
+
 def test_subjective_reopen_restores_triaged_state(client):
   """Reopen should clear finalized grades and return to triaged/ungraded."""
   session_id = create_test_session(client, "Subjective Reopen")

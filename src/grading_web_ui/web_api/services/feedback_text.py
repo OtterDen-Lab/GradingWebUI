@@ -7,6 +7,14 @@ GENERAL_FEEDBACK_HEADER = "General feedback:"
 SPECIFIC_FEEDBACK_HEADER = "Response-specific feedback:"
 
 
+def join_feedback_parts(*parts: Optional[str]) -> Optional[str]:
+  """Join non-empty feedback fragments with paragraph spacing."""
+  normalized = [(part or "").strip() for part in parts if (part or "").strip()]
+  if not normalized:
+    return None
+  return "\n\n".join(normalized)
+
+
 def merge_general_feedback(
   general_feedback: Optional[str],
   response_specific_feedback: Optional[str]

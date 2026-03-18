@@ -18,7 +18,7 @@ from ..services.quiz_encryption import (
   set_runtime_encryption_key,
   get_question_qrcode_class,
 )
-from ..services.feedback_text import merge_general_feedback
+from ..services.feedback_text import merge_general_feedback, join_feedback_parts
 
 from ..models import (
   SessionCreate,
@@ -1089,7 +1089,26 @@ async def finalize_subjective_scores(
         default_feedback,
         bucket_score.feedback
       )
-      if is_dash_blank:
+      notes_by_problem_id = triage_repo.get_notes_for_problem_ids(problem_ids)
+      has_response_specific_notes = any(
+        (notes or "").strip() for notes in notes_by_problem_id.values()
+      )
+      if has_response_specific_notes:
+        general_feedback = join_feedback_parts(default_feedback, bucket_score.feedback)
+        updated_rows = 0
+        for problem_id in problem_ids:
+          response_specific_notes = (notes_by_problem_id.get(problem_id) or "").strip()
+          per_problem_feedback = (
+            merge_general_feedback(general_feedback, response_specific_notes)
+            if response_specific_notes else
+            merged_feedback
+          )
+          if is_dash_blank:
+            repos.problems.mark_as_blank(problem_id, per_problem_feedback)
+          else:
+            repos.problems.update_grade(problem_id, score_value, per_problem_feedback)
+          updated_rows += 1
+      elif is_dash_blank:
         updated_rows = repos.problems.bulk_mark_as_blank(
           problem_ids,
           merged_feedback
@@ -1106,6 +1125,7 @@ async def finalize_subjective_scores(
         "score": "-" if is_dash_blank else score_value,
         "is_blank": is_dash_blank,
         "feedback": merged_feedback,
+        "has_response_specific_notes": has_response_specific_notes,
         "count": updated_rows
       })
 

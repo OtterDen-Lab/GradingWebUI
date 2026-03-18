@@ -109,6 +109,31 @@ class SubjectiveTriageRepository(BaseRepository):
         grouped.setdefault(bucket_id, []).append(int(row["problem_id"]))
       return grouped
 
+  def get_notes_for_problem_ids(self, problem_ids: List[int]) -> Dict[int, Optional[str]]:
+    """Return triage notes keyed by problem_id."""
+    if not problem_ids:
+      return {}
+
+    normalized_ids = sorted({
+      int(problem_id) for problem_id in problem_ids
+      if problem_id is not None and int(problem_id) > 0
+    })
+    if not normalized_ids:
+      return {}
+
+    placeholders = ",".join("?" for _ in normalized_ids)
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute(f"""
+        SELECT problem_id, notes
+        FROM subjective_triage
+        WHERE problem_id IN ({placeholders})
+      """, normalized_ids)
+      return {
+        int(row["problem_id"]): row["notes"]
+        for row in cursor.fetchall()
+      }
+
   def count_graded_for_problem_number(self, session_id: int,
                                       problem_number: int) -> int:
     """Count triage rows whose problems are currently graded."""
