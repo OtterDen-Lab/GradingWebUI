@@ -4214,6 +4214,16 @@ function showAnswerDialogError(message) {
     answerError.textContent = message;
 }
 
+function scrollAnswerDialogToBottom() {
+    const answerContentWrapper = document.getElementById('answer-content-wrapper');
+    if (answerContentWrapper) {
+        answerContentWrapper.scrollTop = answerContentWrapper.scrollHeight;
+    }
+    if (answerDialog) {
+        answerDialog.scrollTop = answerDialog.scrollHeight;
+    }
+}
+
 function renderAnswerDialogData(data) {
     const answerList = document.getElementById('answer-list');
     const answerMetadata = document.getElementById('answer-metadata');
@@ -4252,8 +4262,13 @@ function renderAnswerDialogData(data) {
     }
 
     if (typeof MathJax !== 'undefined') {
-        MathJax.typesetPromise([answerList]).catch((err) => console.error('MathJax typesetting failed:', err));
+        MathJax.typesetPromise([answerList])
+            .then(() => scrollAnswerDialogToBottom())
+            .catch((err) => console.error('MathJax typesetting failed:', err));
+        return;
     }
+
+    scrollAnswerDialogToBottom();
 }
 
 // Function to update answer dialog with current problem
@@ -4289,6 +4304,7 @@ showAnswerBtn.addEventListener('click', async () => {
     }
 
     answerDialog.style.display = 'flex';
+    scrollAnswerDialogToBottom();
     await updateAnswerDialog();
 });
 
