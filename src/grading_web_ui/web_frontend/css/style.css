@@ -1223,6 +1223,7 @@ header h1 {
 }
 
 #answer-dialog {
+    height: min(80vh, 700px);
     max-height: none;
 }
 
