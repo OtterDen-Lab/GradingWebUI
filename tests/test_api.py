@@ -286,6 +286,7 @@ def test_matching_students_uses_cached_roster_when_canvas_unavailable(client,
   assert payload["students"] == [{
     "user_id": 101,
     "name": "Student One",
+    "section": None,
     "is_matched": False
   }]
 
@@ -310,6 +311,82 @@ def test_matching_students_returns_503_when_canvas_and_cache_unavailable(
   response = client.get(f"/api/matching/{session_id}/students")
   assert response.status_code == 503
   assert "no cached roster" in response.json()["detail"].lower()
+
+
+def test_matching_students_includes_section_labels_when_available(
+    client, monkeypatch):
+  """Matching students endpoint should expose Canvas section labels."""
+  from grading_web_ui.web_api.routes import matching as matching_routes
+
+  session_id = create_test_session(client, "Matching Sections")
+
+  class FakeStudent:
+
+    def __init__(self, user_id, name):
+      self.user_id = user_id
+      self.name = name
+
+  class FakeAssignment:
+
+    def get_students(self, include_names=True):
+      return [
+        FakeStudent(101, "Sam Ogden"),
+        FakeStudent(102, "Ada Lovelace"),
+      ]
+
+  class FakeSection:
+
+    def __init__(self, section_id, name):
+      self.id = section_id
+      self.name = name
+
+  class FakeEnrollment:
+
+    def __init__(self, user_id, course_section_id):
+      self.user_id = user_id
+      self.course_section_id = course_section_id
+
+  class FakeCourse:
+
+    def get_assignment(self, assignment_id):
+      return FakeAssignment()
+
+    def get_sections(self):
+      return [FakeSection(11, "01")]
+
+    def get_enrollments(self, **kwargs):
+      return [
+        FakeEnrollment(101, 11),
+        FakeEnrollment(102, 11),
+      ]
+
+  class FakeCanvasInterface:
+
+    def __init__(self, prod=False, privacy_mode="none"):
+      pass
+
+    def get_course(self, course_id):
+      return FakeCourse()
+
+  monkeypatch.setattr(matching_routes, "CanvasInterface", FakeCanvasInterface)
+
+  response = client.get(f"/api/matching/{session_id}/students")
+  assert response.status_code == 200
+  payload = response.json()
+  assert payload["students"] == [
+    {
+      "user_id": 102,
+      "name": "Ada Lovelace",
+      "section": "01",
+      "is_matched": False
+    },
+    {
+      "user_id": 101,
+      "name": "Sam Ogden",
+      "section": "01",
+      "is_matched": False
+    },
+  ]
 
 
 def test_update_problem_max_points_accepts_zero_to_hundred(client):
@@ -1823,6 +1900,45 @@ def test_delete_submission_removes_exam_and_refreshes_session_counts(client):
     cursor.execute("SELECT COUNT(*) AS count FROM problems WHERE submission_id = ?",
                    (deleted_submission_id, ))
     assert cursor.fetchone()["count"] == 0
+
+
+def test_delete_submission_prunes_upload_metadata_and_source_file(client, tmp_path):
+  """Deleting a submission should remove its upload metadata and backing file."""
+  session_id = create_test_session(client, "Delete Submission Metadata Test")
+  pdf_path = tmp_path / "blank_exam.pdf"
+  pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF")
+
+  session_repo = SessionRepository()
+  session_repo.update_metadata(session_id, {
+    "temp_dir": str(tmp_path),
+    "file_paths": [str(pdf_path)],
+    "file_metadata": {
+      str(pdf_path): {
+        "hash": "blank-hash",
+        "original_filename": "blank_exam.pdf"
+      }
+    }
+  })
+
+  deleted_submission_id, _ = seed_submission_with_problem(
+    session_id,
+    document_id=1,
+    student_name="Blank Exam",
+    file_hash="blank-hash",
+    original_filename="blank_exam.pdf",
+    graded=False,
+    score=None,
+  )
+
+  response = client.delete(
+    f"/api/sessions/{session_id}/submissions/{deleted_submission_id}")
+  assert response.status_code == 200
+
+  metadata = session_repo.get_metadata(session_id)
+  assert metadata is not None
+  assert metadata.get("file_paths") == []
+  assert metadata.get("file_metadata") == {}
+  assert not pdf_path.exists()
 
 
 def test_set_encryption_key_uses_runtime_store_not_env(client):

@@ -6,6 +6,9 @@ HOST ?= 127.0.0.1
 PORT ?= 8765
 DB_DIR ?= .tmp
 DB_PATH ?= $(DB_DIR)/grading.db
+DEBUG_BOOTSTRAP_ADMIN_USERNAME ?= admin
+DEBUG_BOOTSTRAP_ADMIN_PASSWORD ?= admin
+DEBUG_BOOTSTRAP_ADMIN_EMAIL ?= admin@example.com
 
 DOCKERFILE ?= docker/web-grading/Dockerfile
 DOCKER_BUILD_CONTEXT ?= .
@@ -41,7 +44,8 @@ endif
 help:
 	@echo "Targets:"
 	@echo "  make debug"
-	@echo "    Run local FastAPI server with local DB path (old make run behavior)."
+	@echo "    Run local FastAPI server with local DB path and a default admin/admin bootstrap account."
+	@echo "    Override with DEBUG_BOOTSTRAP_ADMIN_USERNAME/PASSWORD/EMAIL if needed."
 	@echo "  make run [RUN_IMAGE=autograder-web-grading:local] [RUN_ENV_FILE=.env]"
 	@echo "    Build local Docker image and run it via production compose."
 	@echo "  make publish [vX.Y.Z] [REGISTRY_IMAGE=samogden/webgraderui]"
@@ -54,7 +58,11 @@ help:
 
 debug:
 	@mkdir -p $(DB_DIR)
-	GRADING_DB_PATH=$(DB_PATH) $(PYTHON) -m uvicorn $(APP_MODULE) --host $(HOST) --port $(PORT)
+	GRADING_DB_PATH=$(DB_PATH) \
+	GRADING_BOOTSTRAP_ADMIN_USERNAME=$(DEBUG_BOOTSTRAP_ADMIN_USERNAME) \
+	GRADING_BOOTSTRAP_ADMIN_PASSWORD=$(DEBUG_BOOTSTRAP_ADMIN_PASSWORD) \
+	GRADING_BOOTSTRAP_ADMIN_EMAIL=$(DEBUG_BOOTSTRAP_ADMIN_EMAIL) \
+	$(PYTHON) -m uvicorn $(APP_MODULE) --host $(HOST) --port $(PORT)
 
 # Backward-compatible alias.
 dev: debug

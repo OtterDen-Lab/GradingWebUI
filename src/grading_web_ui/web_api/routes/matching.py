@@ -19,6 +19,55 @@ router = APIRouter()
 log = logging.getLogger(__name__)
 
 
+def _normalize_section_label(raw_section) -> str | None:
+  if raw_section is None:
+    return None
+  if isinstance(raw_section, str):
+    section = raw_section.strip()
+  else:
+    section = str(raw_section).strip()
+  return section or None
+
+
+def _collect_student_sections(course) -> dict[int, str]:
+  """Build a user_id -> section label mapping from Canvas enrollments."""
+  section_names_by_id: dict[int, str] = {}
+  user_sections_by_id: dict[int, str] = {}
+
+  try:
+    for section in course.get_sections():
+      section_name = _normalize_section_label(getattr(section, "name", None))
+      section_id = getattr(section, "id", None)
+      if section_name is None or section_id is None:
+        continue
+      try:
+        section_names_by_id[int(section_id)] = section_name
+      except (TypeError, ValueError):
+        continue
+  except Exception as exc:
+    log.debug("Could not load Canvas sections for roster labeling: %s", exc)
+
+  try:
+    for enrollment in course.get_enrollments(type=["StudentEnrollment"],
+                                             state=["active"]):
+      user_id = getattr(enrollment, "user_id", None)
+      section_id = getattr(enrollment, "course_section_id", None)
+      if user_id is None or section_id is None:
+        continue
+      try:
+        user_id_int = int(user_id)
+        section_id_int = int(section_id)
+      except (TypeError, ValueError):
+        continue
+      section_name = section_names_by_id.get(section_id_int)
+      if section_name:
+        user_sections_by_id[user_id_int] = section_name
+  except Exception as exc:
+    log.debug("Could not load Canvas enrollments for roster labeling: %s", exc)
+
+  return user_sections_by_id
+
+
 def _resolve_submission_pdf_path(session_data: dict,
                                  file_hash: str | None,
                                  original_filename: str | None,
@@ -63,6 +112,7 @@ def _normalize_cached_students(raw_students) -> list[dict]:
     students.append({
       "user_id": user_id,
       "name": name,
+      "section": _normalize_section_label(entry.get("section")),
     })
   return students
 
@@ -81,9 +131,11 @@ def _load_canvas_students_with_fallback(session_id: int,
     course = canvas_interface.get_course(session.course_id)
     assignment = course.get_assignment(session.assignment_id)
     students = assignment.get_students(include_names=True)
+    student_sections_by_id = _collect_student_sections(course)
     normalized = [{
       "user_id": s.user_id,
-      "name": s.name
+      "name": s.name,
+      "section": student_sections_by_id.get(s.user_id)
     } for s in students]
 
     # Cache the real roster when available so matching can survive transient
@@ -91,7 +143,8 @@ def _load_canvas_students_with_fallback(session_id: int,
     metadata = session_repo.get_metadata(session_id) or {}
     metadata["cached_canvas_students"] = [{
       "user_id": s.user_id,
-      "name": s.name
+      "name": s.name,
+      "section": student_sections_by_id.get(s.user_id)
     } for s in students]
     metadata.pop("canvas_roster_error", None)
     session_repo.update_metadata(session_id, metadata)
@@ -110,7 +163,8 @@ def _load_canvas_students_with_fallback(session_id: int,
         return cached_students
       return [{
         "user_id": s["user_id"],
-        "name": f"Student {s['user_id']}"
+        "name": f"Student {s['user_id']}",
+        "section": s.get("section")
       } for s in cached_students]
     raise HTTPException(
       status_code=503,
@@ -252,11 +306,16 @@ async def get_all_students(
   students = [{
     "user_id": s["user_id"],
     "name": s["name"],
+    "section": s.get("section"),
     "is_matched": s["user_id"] in matched_ids
   } for s in all_students]
 
-  # Sort: unmatched first, then alphabetically within each group
-  students.sort(key=lambda s: (s["is_matched"], s["name"]))
+  # Sort: unmatched first, then by section, then alphabetically within each group
+  students.sort(key=lambda s: (
+    s["is_matched"],
+    s.get("section") or "",
+    s["name"]
+  ))
 
   return {"students": students}
 

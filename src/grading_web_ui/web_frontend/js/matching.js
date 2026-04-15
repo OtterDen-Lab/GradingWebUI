@@ -3,6 +3,7 @@
 let allSubmissions = [];
 let allStudents = [];
 let revealCanvasNames = true;
+let matchingSectionFilter = 'all';
 let matchingImagePreviewBound = false;
 let matchingActionStatus = { message: '', type: 'info' };
 let matchingPreviewSessionId = null;
@@ -42,6 +43,37 @@ function setMatchingControlsDisabled(disabled) {
     document.querySelectorAll('.student-select').forEach((select) => {
         select.disabled = disabled;
     });
+}
+
+function getMatchingSectionValues() {
+    const sections = new Set();
+    allStudents.forEach((student) => {
+        if (student && student.section) {
+            sections.add(student.section);
+        }
+    });
+    return Array.from(sections).sort((a, b) => a.localeCompare(b));
+}
+
+function getStudentDisplayLabel(student) {
+    if (!student) return '';
+    return student.section ? `${student.name} (${student.section})` : student.name;
+}
+
+function getVisibleMatchingStudents(submission) {
+    const currentMatch = submission.canvas_user_id
+        ? allStudents.find((student) => student.user_id === submission.canvas_user_id)
+        : null;
+
+    let students = matchingSectionFilter === 'all'
+        ? allStudents
+        : allStudents.filter((student) => student.section === matchingSectionFilter);
+
+    if (currentMatch && !students.some((student) => student.user_id === currentMatch.user_id)) {
+        students = [currentMatch, ...students];
+    }
+
+    return students;
 }
 
 // Simple fuzzy matching helper (Levenshtein distance)
@@ -139,6 +171,12 @@ async function loadNameMatching() {
 // Render all submissions list
 function renderMatchingList() {
     const container = document.getElementById('unmatched-list');
+    const canDeleteSubmissions = currentUser && currentUser.role === 'instructor';
+    const sectionValues = getMatchingSectionValues();
+
+    if (matchingSectionFilter !== 'all' && !sectionValues.includes(matchingSectionFilter)) {
+        matchingSectionFilter = 'all';
+    }
 
     const unmatchedCount = allSubmissions.filter(s => !s.is_matched).length;
     const matchedCount = allSubmissions.length - unmatchedCount;
@@ -161,6 +199,21 @@ function renderMatchingList() {
                 ${revealCanvasNames ? 'Hide Real Names' : 'Show Real Names'}
             </button>
             <div id="matching-action-status" style="margin-top: 10px; font-size: 14px; display: none;"></div>
+            ${sectionValues.length > 0 ? `
+                <div style="margin-top: 14px; display: flex; justify-content: center; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <label for="matching-section-filter" style="font-size: 14px; color: var(--gray-700);">
+                        Section:
+                    </label>
+                    <select id="matching-section-filter" style="min-width: 140px;">
+                        <option value="all" ${matchingSectionFilter === 'all' ? 'selected' : ''}>All sections</option>
+                        ${sectionValues.map((section) => `
+                            <option value="${escapeHtml(section)}" ${matchingSectionFilter === section ? 'selected' : ''}>
+                                ${escapeHtml(section)}
+                            </option>
+                        `).join('')}
+                    </select>
+                </div>
+            ` : ''}
             <p style="margin-top: 10px; color: var(--gray-600); font-size: 14px;">
                 Select students from the dropdowns below, then click this button to confirm all changes at once.
             </p>
@@ -193,7 +246,7 @@ function renderMatchingList() {
                             ${submission.is_matched ? `data-current-match="${submission.canvas_user_id}"` : ''}
                             onchange="handleStudentSelection(${submission.id})">
                         <option value="">-- Select Canvas Student --</option>
-                        ${allStudents.map(s => {
+                        ${getVisibleMatchingStudents(submission).map(s => {
                             // Pre-select if this is the actual match OR the suggested match
                             const isSelected = (submission.canvas_user_id === s.user_id) ||
                                              (!submission.canvas_user_id && submission.suggested_canvas_user_id === s.user_id);
@@ -201,11 +254,22 @@ function renderMatchingList() {
                             <option value="${s.user_id}"
                                     ${s.is_matched ? 'class="matched-student"' : ''}
                                     ${isSelected ? 'selected' : ''}>
-                                ${s.is_matched ? '✓ ' : ''}${s.name}
+                                ${s.is_matched ? '✓ ' : ''}${getStudentDisplayLabel(s)}
                             </option>
                         `;
                         }).join('')}
                     </select>
+                    ${canDeleteSubmissions ? `
+                        <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+                            <button type="button"
+                                    class="btn btn-danger btn-small matching-action-btn"
+                                    data-action="remove-submission"
+                                    data-submission-id="${submission.id}"
+                                    data-student-name="${escapeHtml(submission.student_name || `Exam #${submission.document_id + 1}`)}">
+                                Erase Exam
+                            </button>
+                        </div>
+                    ` : ''}
                 </div>
             </div>
         `;
@@ -214,6 +278,22 @@ function renderMatchingList() {
     container.innerHTML = html;
     setMatchingActionStatus(matchingActionStatus.message, matchingActionStatus.type);
     bindMatchingImagePreview();
+
+    document.querySelectorAll('.matching-action-btn[data-action="remove-submission"]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const submissionId = parseInt(button.dataset.submissionId, 10);
+            const studentName = button.dataset.studentName || 'Submission';
+            await eraseMatchingSubmission(submissionId, studentName, button);
+        });
+    });
+
+    const sectionFilter = document.getElementById('matching-section-filter');
+    if (sectionFilter) {
+        sectionFilter.addEventListener('change', () => {
+            matchingSectionFilter = sectionFilter.value || 'all';
+            renderMatchingList();
+        });
+    }
 }
 
 function bindMatchingImagePreview() {
@@ -309,6 +389,54 @@ async function getPagePreviewErrorMessage(response) {
         // Fall back to a generic error message.
     }
     return `Request failed (${response.status})`;
+}
+
+async function eraseMatchingSubmission(submissionId, studentName, triggerButton) {
+    if (!currentSession) return;
+
+    const confirmed = confirm(
+        `Erase ${studentName}?\n\nThis permanently deletes the exam and all grading data for this submission.`
+    );
+    if (!confirmed) {
+        return;
+    }
+
+    if (triggerButton) {
+        triggerButton.disabled = true;
+        triggerButton.textContent = 'Erasing...';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/submissions/${submissionId}`, {
+            method: 'DELETE'
+        });
+        const payload = await response.json();
+
+        if (!response.ok) {
+            throw new Error(payload.detail || 'Failed to erase submission');
+        }
+
+        await loadNameMatching();
+
+        const remainingCount = allSubmissions.length;
+        const unmatchedCount = allSubmissions.filter((submission) => !submission.is_matched).length;
+        if (remainingCount > 0 && unmatchedCount === 0) {
+            setMatchingActionStatus('All remaining exams are matched. Preparing alignment...', 'info');
+            await prepareAlignment();
+        } else if (remainingCount === 0) {
+            setMatchingActionStatus('All exams have been erased from this session.', 'warning');
+        } else {
+            setMatchingActionStatus(`Erased ${studentName}.`, 'success');
+        }
+    } catch (error) {
+        console.error('Failed to erase submission:', error);
+        setMatchingActionStatus(error.message || 'Failed to erase submission.', 'error');
+        alert(error.message || 'Failed to erase submission.');
+        if (triggerButton) {
+            triggerButton.disabled = false;
+            triggerButton.textContent = 'Erase Exam';
+        }
+    }
 }
 
 async function openMatchingPagePreview(submissionId) {

@@ -94,7 +94,7 @@ Use the production compose file with a server-only env file.
    ```
 
 Equivalent Make targets from repo root:
-- `make debug` (local uvicorn, no Docker)
+- `make debug` (local uvicorn, no Docker; boots a local `admin` / `admin` account by default)
 - `make run` (build local image and run via production compose)
 - `make publish v0.8.1` (publish `samogden/webgraderui:v0.8.1` and `latest` for `linux/amd64`)
 - `make publish v0.8.1 PUBLISH_PLATFORMS=linux/amd64,linux/arm64` (optional multi-arch)

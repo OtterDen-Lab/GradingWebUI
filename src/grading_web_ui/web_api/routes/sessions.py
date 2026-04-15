@@ -12,6 +12,7 @@ import yaml
 import logging
 import base64
 import fitz
+from pathlib import Path
 from ..services.qr_scanner import QRScanner, qr_matches_problem_number
 from ..services.exam_processor import ExamProcessor, PRESCAN_DPI_STEPS
 from ..services.quiz_encryption import (
@@ -147,6 +148,71 @@ def _signature_tag_ids(signature: str) -> set[str]:
     value.strip() for value in (signature or "").split(TAG_SIGNATURE_DELIMITER)
     if value and value.strip()
   }
+
+
+def _remove_submission_upload_metadata(
+  session_repo: SessionRepository,
+  session_id: int,
+  submission
+) -> bool:
+  """Remove the submission's source file from stored upload metadata."""
+  session_data = session_repo.get_metadata(session_id) or {}
+  file_paths = session_data.get("file_paths")
+  file_metadata = session_data.get("file_metadata")
+
+  if not isinstance(file_paths, list) or not isinstance(file_metadata, dict):
+    return False
+
+  removed_path: Path | None = None
+  removed_index: int | None = None
+
+  def matches_submission(path_str: str) -> bool:
+    metadata = file_metadata.get(path_str)
+    if not isinstance(metadata, dict):
+      return False
+    if submission.file_hash and metadata.get("hash") == submission.file_hash:
+      return True
+    if submission.original_filename and metadata.get(
+      "original_filename") == submission.original_filename:
+      return True
+    return False
+
+  for index, path_str in enumerate(file_paths):
+    if not isinstance(path_str, str):
+      continue
+    if matches_submission(path_str):
+      removed_path = Path(path_str)
+      removed_index = index
+      break
+
+  if removed_path is None or removed_index is None:
+    return False
+
+  del file_paths[removed_index]
+  file_metadata.pop(str(removed_path), None)
+
+  temp_dir_raw = session_data.get("temp_dir")
+  if isinstance(temp_dir_raw, str) and temp_dir_raw.strip():
+    temp_dir = Path(temp_dir_raw)
+    try:
+      if removed_path.exists() and removed_path.is_relative_to(temp_dir):
+        removed_path.unlink()
+    except AttributeError:
+      try:
+        removed_path.resolve().relative_to(temp_dir.resolve())
+        if removed_path.exists():
+          removed_path.unlink()
+      except Exception:
+        pass
+    except Exception:
+      log.warning(
+        "Failed to remove uploaded file for deleted submission %s",
+        submission.id,
+        exc_info=True
+      )
+
+  session_repo.update_metadata(session_id, session_data)
+  return True
 
 
 def _parse_bool_metadata_value(raw_value: object, *, default: bool) -> bool:
@@ -626,6 +692,7 @@ async def delete_submission(
       raise HTTPException(status_code=404,
                           detail="Submission not found in this session")
 
+    _remove_submission_upload_metadata(repos.sessions, session_id, submission)
     repos.problems.delete_by_submission(submission_id)
     deleted_count = repos.submissions.delete_by_id(submission_id)
 
