@@ -1396,6 +1396,38 @@ def test_grade_problem_applies_default_feedback_without_persisting_it(client):
   assert "Sign error in the second line." in preview_response.text
 
 
+def test_default_feedback_accepts_json_body_with_image_markup(client):
+  """Default feedback save should accept JSON payloads for embedded HTML/images."""
+  session_id = create_test_session(client, "Default Feedback JSON Test")
+  submission_id, _ = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=9, max_points=8.0
+  )
+
+  response = client.put(
+    f"/api/sessions/{session_id}/default-feedback",
+    json={
+      "problem_number": 9,
+      "default_feedback": '<p><img src="data:image/png;base64,AAA" alt="chart" /></p>',
+      "threshold": 100.0,
+    }
+  )
+  assert response.status_code == 200
+
+  with get_db_connection() as conn:
+    row = conn.execute(
+      "SELECT default_feedback FROM problem_metadata WHERE session_id = ? AND problem_number = ?",
+      (session_id, 9),
+    ).fetchone()
+    assert row is not None
+    assert row["default_feedback"].startswith("<p><img src=\"data:image/png;base64,AAA\"")
+
+  preview_response = client.get(
+    f"/api/finalize/{session_id}/submissions/{submission_id}/feedback-preview"
+  )
+  assert preview_response.status_code == 200
+  assert "data:image/png;base64,AAA" in preview_response.text
+
+
 def test_subjective_finalize_applies_default_feedback_without_persisting_it(client):
   """Subjective finalize should store only bucket-specific feedback."""
   session_id = create_test_session(client, "General Feedback Subjective")

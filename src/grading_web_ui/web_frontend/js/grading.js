@@ -1841,7 +1841,7 @@ function displayCurrentProblem() {
     if (currentProblem.graded) {
         // Already graded - show existing grade
         document.getElementById('score-input').value = currentProblem.score != null ? currentProblem.score : '';
-        document.getElementById('feedback-input').value = currentProblem.feedback || '';
+        document.getElementById('feedback-input').value = currentProblem.response_specific_feedback || '';
 
         // Remove blank indicator
         const oldBlankIndicator = document.getElementById('blank-indicator');
@@ -1853,7 +1853,7 @@ function displayCurrentProblem() {
     } else if (currentProblem.score != null && !currentProblem.graded) {
         // AI-graded suggestion should override heuristic blank flag
         document.getElementById('score-input').value = currentProblem.score != null ? currentProblem.score : '';
-        document.getElementById('feedback-input').value = currentProblem.feedback || '';
+        document.getElementById('feedback-input').value = currentProblem.response_specific_feedback || '';
 
         // Remove blank indicator
         const oldBlankIndicator = document.getElementById('blank-indicator');
@@ -1888,7 +1888,7 @@ function displayCurrentProblem() {
         const isAiBlank = currentProblem.blank_method === 'ai' || currentProblem.feedback;
         if (isAiBlank) {
             document.getElementById('score-input').value = '-';
-            document.getElementById('feedback-input').value = currentProblem.feedback || '';
+            document.getElementById('feedback-input').value = currentProblem.response_specific_feedback || '';
         } else {
             // Don't auto-populate score for heuristically detected blanks - let user verify
             document.getElementById('score-input').value = '';

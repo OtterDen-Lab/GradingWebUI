@@ -1,7 +1,7 @@
 """
 Session management endpoints.
 """
-from fastapi import APIRouter, HTTPException, Response, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, Response, UploadFile, File, Depends, Request
 from fastapi.responses import StreamingResponse
 from typing import List, Optional
 import json
@@ -797,6 +797,7 @@ async def get_submission_problems(
         image_data=problem_image_base64,
         score=problem.score,
         feedback=_display_feedback(problem),
+        response_specific_feedback=problem.feedback,
         graded=problem.graded,
         is_blank=problem.is_blank,
         blank_confidence=problem.blank_confidence,
@@ -1345,7 +1346,8 @@ async def update_ai_grading_notes(
 @router.put("/{session_id}/default-feedback")
 async def update_default_feedback(
   session_id: int,
-  problem_number: int,
+  request: Request,
+  problem_number: int = None,
   default_feedback: str = None,
   threshold: float = 100.0,
   current_user: dict = Depends(require_session_access())
@@ -1354,6 +1356,36 @@ async def update_default_feedback(
   session_repo = SessionRepository()
   if not session_repo.exists(session_id):
     raise HTTPException(status_code=404, detail="Session not found")
+
+  body_problem_number = None
+  body_default_feedback = None
+  body_threshold = None
+  content_type = request.headers.get("content-type", "")
+  if content_type.startswith("application/json"):
+    try:
+      payload = await request.json()
+    except Exception:
+      payload = None
+    if isinstance(payload, dict):
+      body_problem_number = payload.get("problem_number")
+      body_default_feedback = payload.get("default_feedback")
+      body_threshold = payload.get("threshold")
+
+  if body_problem_number is not None:
+    try:
+      problem_number = int(body_problem_number)
+    except (TypeError, ValueError):
+      raise HTTPException(status_code=400, detail="Invalid problem_number")
+  if problem_number is None:
+    raise HTTPException(status_code=400, detail="problem_number is required")
+
+  if body_default_feedback is not None:
+    default_feedback = body_default_feedback
+  if body_threshold is not None:
+    try:
+      threshold = float(body_threshold)
+    except (TypeError, ValueError):
+      raise HTTPException(status_code=400, detail="Invalid threshold")
 
   metadata_repo = ProblemMetadataRepository()
   metadata_repo.upsert_default_feedback(session_id, problem_number,

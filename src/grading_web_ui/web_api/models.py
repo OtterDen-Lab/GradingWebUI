@@ -116,6 +116,7 @@ class ProblemResponse(BaseModel):
   image_data: str  # Base64 encoded PNG
   score: Optional[float]
   feedback: Optional[str]
+  response_specific_feedback: Optional[str] = None
   graded: bool
   max_points: Optional[float] = None
 
