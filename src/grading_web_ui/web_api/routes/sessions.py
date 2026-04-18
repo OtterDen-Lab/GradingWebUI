@@ -19,7 +19,11 @@ from ..services.quiz_encryption import (
   set_runtime_encryption_key,
   get_question_qrcode_class,
 )
-from ..services.feedback_text import merge_general_feedback, join_feedback_parts
+from ..services.feedback_text import (
+  merge_general_feedback,
+  join_feedback_parts,
+  extract_response_specific_feedback,
+)
 
 from ..models import (
   SessionCreate,
@@ -67,6 +71,20 @@ DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
 TAG_SIGNATURE_DELIMITER = "|"
+
+
+def _display_feedback(problem) -> Optional[str]:
+  metadata_repo = ProblemMetadataRepository()
+  default_feedback_row = metadata_repo.get_default_feedback(
+    problem.session_id,
+    problem.problem_number,
+  )
+  default_feedback = default_feedback_row[0] if default_feedback_row else None
+  return merge_general_feedback(default_feedback, problem.feedback)
+
+
+def _stored_feedback(problem, default_feedback: Optional[str]) -> Optional[str]:
+  return extract_response_specific_feedback(default_feedback, problem.feedback)
 
 
 def mock_roster_enabled() -> bool:
@@ -778,7 +796,7 @@ async def get_submission_problems(
         submission_id=problem.submission_id,
         image_data=problem_image_base64,
         score=problem.score,
-        feedback=problem.feedback,
+        feedback=_display_feedback(problem),
         graded=problem.graded,
         is_blank=problem.is_blank,
         blank_confidence=problem.blank_confidence,
@@ -1152,23 +1170,19 @@ async def finalize_subjective_scores(
             )
           )
 
-      merged_feedback = merge_general_feedback(
-        default_feedback,
-        bucket_score.feedback
-      )
+      stored_feedback = join_feedback_parts(bucket_score.feedback)
+      visible_feedback = merge_general_feedback(default_feedback, stored_feedback)
       notes_by_problem_id = triage_repo.get_notes_for_problem_ids(problem_ids)
       has_response_specific_notes = any(
         (notes or "").strip() for notes in notes_by_problem_id.values()
       )
       if has_response_specific_notes:
-        general_feedback = join_feedback_parts(default_feedback, bucket_score.feedback)
         updated_rows = 0
         for problem_id in problem_ids:
           response_specific_notes = (notes_by_problem_id.get(problem_id) or "").strip()
-          per_problem_feedback = (
-            merge_general_feedback(general_feedback, response_specific_notes)
-            if response_specific_notes else
-            merged_feedback
+          per_problem_feedback = join_feedback_parts(
+            stored_feedback,
+            response_specific_notes
           )
           if is_dash_blank:
             repos.problems.mark_as_blank(problem_id, per_problem_feedback)
@@ -1178,20 +1192,20 @@ async def finalize_subjective_scores(
       elif is_dash_blank:
         updated_rows = repos.problems.bulk_mark_as_blank(
           problem_ids,
-          merged_feedback
+          stored_feedback
         )
       else:
         updated_rows = repos.problems.bulk_grade(
           problem_ids,
           score_value,
-          merged_feedback
+          stored_feedback
         )
       total_graded_now += updated_rows
       graded_updates.append({
         "bucket_id": bucket_id,
         "score": "-" if is_dash_blank else score_value,
         "is_blank": is_dash_blank,
-        "feedback": merged_feedback,
+        "feedback": visible_feedback,
         "has_response_specific_notes": has_response_specific_notes,
         "count": updated_rows
       })
@@ -1439,6 +1453,13 @@ async def clone_session(
     for old_sub, new_sub in zip(submissions_list, created_subs):
       submission_map[old_sub.id] = new_sub.id
 
+    source_metadata = repos.metadata.list_by_session(session_id)
+    source_default_feedback_by_problem = {
+      row["problem_number"]: row.get("default_feedback")
+      for row in source_metadata
+      if isinstance(row, dict)
+    }
+
     new_problems = []
     for old_sub in submissions_list:
       problems_list = repos.problems.get_by_submission(old_sub.id)
@@ -1450,7 +1471,13 @@ async def clone_session(
             submission_id=submission_map[old_sub.id],
             problem_number=prob.problem_number,
             score=None if request.clear_scores else prob.score,
-            feedback=None if request.clear_scores else prob.feedback,
+            feedback=(
+              None if request.clear_scores else
+              _stored_feedback(
+                prob,
+                source_default_feedback_by_problem.get(prob.problem_number)
+              )
+            ),
             graded=False if request.clear_scores else prob.graded,
             graded_at=None if request.clear_scores else prob.graded_at,
             is_blank=prob.is_blank,
@@ -1469,7 +1496,6 @@ async def clone_session(
     if new_problems:
       repos.problems.bulk_create(new_problems)
 
-    source_metadata = repos.metadata.list_by_session(session_id)
     repos.metadata.bulk_insert_for_session(
       created_session.id,
       source_metadata,
@@ -1514,16 +1540,29 @@ async def export_session(
 
   # Get all submissions
   submissions_list = submission_repo.get_by_session(session_id)
+  metadata_rows = metadata_repo.list_by_session(session_id)
+  default_feedback_by_problem = {
+    row["problem_number"]: row.get("default_feedback")
+    for row in metadata_rows
+    if isinstance(row, dict)
+  }
   submissions = []
   for sub in submissions_list:
     sub_dict = asdict(sub)
     # Get all problems for this submission
     problems_list = problem_repo.get_by_submission(sub.id)
-    sub_dict["problems"] = [asdict(p) for p in problems_list]
+    sub_dict["problems"] = []
+    for problem in problems_list:
+      problem_dict = asdict(problem)
+      problem_dict["feedback"] = _stored_feedback(
+        problem,
+        default_feedback_by_problem.get(problem.problem_number)
+      )
+      sub_dict["problems"].append(problem_dict)
     submissions.append(sub_dict)
 
   problem_stats = problem_stats_repo.list_by_session(session_id)
-  problem_metadata = metadata_repo.list_by_session(session_id)
+  problem_metadata = metadata_rows
   feedback_tags = [asdict(tag) for tag in feedback_tag_repo.get_by_session(session_id)]
 
   # Build export structure

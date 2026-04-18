@@ -1353,10 +1353,10 @@ def test_subjective_finalize_supports_dash_blank_score(client):
     assert rows[problem_id_numeric]["is_blank"] in (0, None)
 
 
-def test_grade_problem_includes_general_feedback_section(client):
-  """Manual grading should persist default feedback as a general section."""
+def test_grade_problem_applies_default_feedback_without_persisting_it(client):
+  """Manual grading should store only response-specific feedback."""
   session_id = create_test_session(client, "General Feedback Grade")
-  _, problem_id = seed_submission_with_problem(
+  submission_id, problem_id = seed_submission_with_problem(
     session_id, document_id=1, problem_number=12, max_points=8.0
   )
 
@@ -1384,18 +1384,22 @@ def test_grade_problem_includes_general_feedback_section(client):
     cursor.execute("SELECT feedback FROM problems WHERE id = ?", (problem_id,))
     row = cursor.fetchone()
     assert row is not None
-    assert row["feedback"] == (
-      "General feedback:\n"
-      "Show all intermediate steps and include units.\n\n"
-      "Response-specific feedback:\n"
-      "Sign error in the second line."
-    )
+    assert row["feedback"] == "Sign error in the second line."
+
+  preview_response = client.get(
+    f"/api/finalize/{session_id}/submissions/{submission_id}/feedback-preview"
+  )
+  assert preview_response.status_code == 200
+  assert "General feedback:" in preview_response.text
+  assert "Show all intermediate steps and include units." in preview_response.text
+  assert "Response-specific feedback:" in preview_response.text
+  assert "Sign error in the second line." in preview_response.text
 
 
-def test_subjective_finalize_includes_general_feedback_section(client):
-  """Subjective finalize should append default feedback to bucket feedback."""
+def test_subjective_finalize_applies_default_feedback_without_persisting_it(client):
+  """Subjective finalize should store only bucket-specific feedback."""
   session_id = create_test_session(client, "General Feedback Subjective")
-  _, problem_id_a = seed_submission_with_problem(
+  submission_id_a, problem_id_a = seed_submission_with_problem(
     session_id, document_id=1, problem_number=13, max_points=8.0
   )
   _, problem_id_b = seed_submission_with_problem(
@@ -1453,18 +1457,22 @@ def test_subjective_finalize_includes_general_feedback_section(client):
     rows = cursor.fetchall()
     assert len(rows) == 2
     for row in rows:
-      assert row["feedback"] == (
-        "General feedback:\n"
-        "State assumptions clearly.\n\n"
-        "Response-specific feedback:\n"
-        "Reasoning is mostly correct."
-      )
+      assert row["feedback"] == "Reasoning is mostly correct."
+
+  preview_response = client.get(
+    f"/api/finalize/{session_id}/submissions/{submission_id_a}/feedback-preview"
+  )
+  assert preview_response.status_code == 200
+  assert "General feedback:" in preview_response.text
+  assert "State assumptions clearly." in preview_response.text
+  assert "Response-specific feedback:" in preview_response.text
+  assert "Reasoning is mostly correct." in preview_response.text
 
 
 def test_subjective_finalize_appends_triage_notes_as_response_specific_feedback(client):
   """Per-response subjective notes should become student-facing specific feedback on finalize."""
   session_id = create_test_session(client, "Subjective Notes Feedback")
-  _, problem_id_a = seed_submission_with_problem(
+  submission_id_a, problem_id_a = seed_submission_with_problem(
     session_id, document_id=1, problem_number=17, max_points=8.0
   )
   _, problem_id_b = seed_submission_with_problem(
@@ -1521,12 +1529,17 @@ def test_subjective_finalize_appends_triage_notes_as_response_specific_feedback(
     rows = {row["id"]: row["feedback"] for row in cursor.fetchall()}
 
     assert rows[problem_id_a] == (
-      "General feedback:\n"
       "Reasoning is mostly correct.\n\n"
-      "Response-specific feedback:\n"
       "You justified the sign incorrectly."
     )
     assert rows[problem_id_b] == "Reasoning is mostly correct."
+
+  preview_response = client.get(
+    f"/api/finalize/{session_id}/submissions/{submission_id_a}/feedback-preview"
+  )
+  assert preview_response.status_code == 200
+  assert "Reasoning is mostly correct." in preview_response.text
+  assert "You justified the sign incorrectly." in preview_response.text
 
 
 def test_subjective_reopen_restores_triaged_state(client):

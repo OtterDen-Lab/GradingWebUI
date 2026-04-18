@@ -16,8 +16,10 @@ import fitz  # PyMuPDF
 from PIL import Image
 
 from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository
+from ..repositories import ProblemMetadataRepository
 from ..services.problem_service import ProblemService
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
+from ..services.feedback_text import merge_general_feedback
 from lms_interface.canvas_interface import CanvasInterface
 from .. import sse
 
@@ -167,6 +169,7 @@ class FinalizationService:
     """Get all submissions for the session"""
     submission_repo = SubmissionRepository()
     problem_repo = ProblemRepository()
+    metadata_repo = ProblemMetadataRepository()
 
     # Get all submissions for this session
     submissions_list = submission_repo.get_by_session(self.session_id)
@@ -182,10 +185,17 @@ class FinalizationService:
 
       problems = []
       for prob in problems_list:
+        default_feedback_row = metadata_repo.get_default_feedback(
+          prob.session_id,
+          prob.problem_number
+        )
+        default_feedback = (
+          default_feedback_row[0] if default_feedback_row else None
+        )
         problems.append({
           "problem_number": prob.problem_number,
           "score": prob.score or 0.0,
-          "feedback": prob.feedback or '',
+          "feedback": merge_general_feedback(default_feedback, prob.feedback) or '',
           "ai_reasoning": prob.ai_reasoning or '',
           "max_points": prob.max_points,
           "region_coords": prob.region_coords,
