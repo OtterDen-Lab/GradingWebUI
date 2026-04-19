@@ -1885,15 +1885,11 @@ function displayCurrentProblem() {
             indicatorContainer.appendChild(aiIndicator);
         }
     } else if (currentProblem.is_blank) {
-        const isAiBlank = currentProblem.blank_method === 'ai' || currentProblem.feedback;
-        if (isAiBlank) {
-            document.getElementById('score-input').value = '-';
-            document.getElementById('feedback-input').value = currentProblem.response_specific_feedback || '';
-        } else {
-            // Don't auto-populate score for heuristically detected blanks - let user verify
-            document.getElementById('score-input').value = '';
-            document.getElementById('feedback-input').value = '';
-        }
+        // Keep the score field empty for blanks so the grader can decide whether
+        // to enter a numeric score or explicitly type '-' for a blank.
+        document.getElementById('score-input').value = '';
+        document.getElementById('feedback-input').value =
+            currentProblem.response_specific_feedback || '';
 
         // Show blank detection indicator
         const blankIndicator = document.createElement('div');
