@@ -3096,6 +3096,48 @@ function compareProblemComparisonValues(aValue, bValue, direction = 'asc') {
     return ascending ? (aValue - bValue) : (bValue - aValue);
 }
 
+function isNumericComparisonValue(value) {
+    return value !== null && value !== undefined && Number.isFinite(Number(value));
+}
+
+function clamp01(value) {
+    return Math.max(0, Math.min(1, value));
+}
+
+function getComparisonHeatmapRange(values) {
+    const numericValues = values.filter(isNumericComparisonValue).map(Number);
+    if (numericValues.length === 0) {
+        return null;
+    }
+    return {
+        min: Math.min(...numericValues),
+        max: Math.max(...numericValues),
+    };
+}
+
+function getComparisonHeatmapColor(score) {
+    const clamped = clamp01(score);
+    const hue = 24 + (166 - 24) * clamped;
+    const saturation = 54;
+    const lightness = 94 - (18 * clamped);
+    return `hsl(${hue.toFixed(0)} ${saturation}% ${lightness.toFixed(0)}%)`;
+}
+
+function getComparisonHeatmapStyle(value, range, higherIsBetter = true) {
+    if (!isNumericComparisonValue(value)) {
+        return 'background-color: #f3f4f6;';
+    }
+
+    const numericValue = Number(value);
+    if (!range || range.max === range.min) {
+        return `background-color: ${getComparisonHeatmapColor(0.5)};`;
+    }
+
+    const t = (numericValue - range.min) / (range.max - range.min);
+    const score = higherIsBetter ? t : 1 - t;
+    return `background-color: ${getComparisonHeatmapColor(score)};`;
+}
+
 function getProblemComparisonSortIndicator(column) {
     if (statsProblemComparisonSortColumn !== column) {
         return '';
@@ -3180,6 +3222,18 @@ function buildProblemComparisonTable(leftBundle, rightBundle) {
             rightTotal,
         };
     });
+
+    const heatmapRanges = {
+        leftAvg: getComparisonHeatmapRange(rows.map(row => row.leftAvg)),
+        rightAvg: getComparisonHeatmapRange(rows.map(row => row.rightAvg)),
+        leftNormalized: getComparisonHeatmapRange(rows.map(row => row.leftNormalized)),
+        rightNormalized: getComparisonHeatmapRange(rows.map(row => row.rightNormalized)),
+        avgDelta: getComparisonHeatmapRange(rows.map(row => row.avgDelta)),
+        normDelta: getComparisonHeatmapRange(rows.map(row => row.normDelta)),
+        leftBlank: getComparisonHeatmapRange(rows.map(row => row.leftBlank)),
+        rightBlank: getComparisonHeatmapRange(rows.map(row => row.rightBlank)),
+        blankDelta: getComparisonHeatmapRange(rows.map(row => row.blankDelta)),
+    };
 
     rows.sort((a, b) => {
         const sortColumn = statsProblemComparisonSortColumn;
@@ -3293,15 +3347,15 @@ function buildProblemComparisonTable(leftBundle, rightBundle) {
                         data-blank-delta="${row.blankDelta ?? ''}"
                         onclick="reviewProblemFromStats(${row.problemNumber})">
                         <td><strong>Problem ${row.problemNumber}</strong></td>
-                        <td>${formatScore(row.leftAvg)}</td>
-                        <td>${formatScore(row.rightAvg)}</td>
-                        <td>${formatSignedDelta(row.avgDelta, 2)}</td>
-                        <td>${formatScore(row.leftNormalized, 3)}</td>
-                        <td>${formatScore(row.rightNormalized, 3)}</td>
-                        <td>${formatSignedDelta(row.normDelta, 3)}</td>
-                        <td>${formatPct(row.leftBlank)}</td>
-                        <td>${formatPct(row.rightBlank)}</td>
-                        <td>${formatSignedDelta(row.blankDelta, 1)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.leftAvg, heatmapRanges.leftAvg, true)}">${formatScore(row.leftAvg)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.rightAvg, heatmapRanges.rightAvg, true)}">${formatScore(row.rightAvg)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.avgDelta, heatmapRanges.avgDelta, true)}">${formatSignedDelta(row.avgDelta, 2)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.leftNormalized, heatmapRanges.leftNormalized, true)}">${formatScore(row.leftNormalized, 3)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.rightNormalized, heatmapRanges.rightNormalized, true)}">${formatScore(row.rightNormalized, 3)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.normDelta, heatmapRanges.normDelta, true)}">${formatSignedDelta(row.normDelta, 3)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.leftBlank, heatmapRanges.leftBlank, false)}">${formatPct(row.leftBlank)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.rightBlank, heatmapRanges.rightBlank, false)}">${formatPct(row.rightBlank)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.blankDelta, heatmapRanges.blankDelta, false)}">${formatSignedDelta(row.blankDelta, 1)}</td>
                     </tr>
                 `).join('')}
             </tbody>
