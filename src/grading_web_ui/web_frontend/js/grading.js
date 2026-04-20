@@ -32,6 +32,9 @@ let statsSectionFilter = 'all';
 let statsAvailableSections = [];
 let statsCompareMode = false;
 let statsCompareSectionFilter = 'all';
+let statsProblemComparisonSortColumn = 'problem';
+let statsProblemComparisonSortDirection = 'asc';
+let problemComparisonSortListenerBound = false;
 
 const DEFAULT_SUBJECTIVE_BUCKETS = [
     { id: 'above_beyond', label: 'Above and beyond', color: '#16a34a' },
@@ -3075,6 +3078,61 @@ function buildComparisonSummaryTable(leftBundle, rightBundle, leftSummary, right
     `;
 }
 
+function normalizeProblemComparisonSortValue(value) {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function compareProblemComparisonValues(aValue, bValue, direction = 'asc') {
+    const ascending = direction !== 'desc';
+    const aNull = aValue === null || aValue === undefined;
+    const bNull = bValue === null || bValue === undefined;
+    if (aNull && bNull) return 0;
+    if (aNull) return 1;
+    if (bNull) return -1;
+    return ascending ? (aValue - bValue) : (bValue - aValue);
+}
+
+function getProblemComparisonSortIndicator(column) {
+    if (statsProblemComparisonSortColumn !== column) {
+        return '';
+    }
+    return statsProblemComparisonSortDirection === 'asc' ? ' ▲' : ' ▼';
+}
+
+function sortProblemComparisonTable(column) {
+    if (statsProblemComparisonSortColumn === column) {
+        statsProblemComparisonSortDirection = statsProblemComparisonSortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        statsProblemComparisonSortColumn = column;
+        statsProblemComparisonSortDirection = 'asc';
+    }
+
+    void loadStatistics(statsSectionFilter);
+}
+
+function bindProblemComparisonSortControls() {
+    if (problemComparisonSortListenerBound) {
+        return;
+    }
+
+    document.addEventListener('click', (event) => {
+        const header = event.target.closest('#problem-comparison-table th[data-sort]');
+        if (!header) {
+            return;
+        }
+        const column = header.dataset.sort;
+        if (column) {
+            sortProblemComparisonTable(column);
+        }
+    }, true);
+
+    problemComparisonSortListenerBound = true;
+}
+
 function buildProblemComparisonTable(leftBundle, rightBundle) {
     const leftStats = Array.isArray(leftBundle.stats.problem_stats) ? leftBundle.stats.problem_stats : [];
     const rightStats = Array.isArray(rightBundle.stats.problem_stats) ? rightBundle.stats.problem_stats : [];
@@ -3092,53 +3150,160 @@ function buildProblemComparisonTable(leftBundle, rightBundle) {
             : rightValue - leftValue
     );
 
+    const rows = problemNumbers.map((problemNumber) => {
+        const leftPs = leftStats.find(ps => ps.problem_number === problemNumber) || {};
+        const rightPs = rightByProblem.get(problemNumber) || {};
+        const leftAvg = leftPs.avg_score ?? null;
+        const rightAvg = rightPs.avg_score ?? null;
+        const leftNormalized = leftPs.mean_normalized ?? null;
+        const rightNormalized = rightPs.mean_normalized ?? null;
+        const leftBlank = leftPs.pct_blank ?? null;
+        const rightBlank = rightPs.pct_blank ?? null;
+        const leftTotal = leftPs.num_total ?? 0;
+        const rightTotal = rightPs.num_total ?? 0;
+        const avgDelta = deltaValue(leftAvg, rightAvg);
+        const normDelta = deltaValue(leftNormalized, rightNormalized);
+        const blankDelta = deltaValue(leftBlank, rightBlank);
+
+        return {
+            problemNumber,
+            leftAvg,
+            rightAvg,
+            leftNormalized,
+            rightNormalized,
+            avgDelta,
+            normDelta,
+            leftBlank,
+            rightBlank,
+            blankDelta,
+            leftTotal,
+            rightTotal,
+        };
+    });
+
+    rows.sort((a, b) => {
+        const sortColumn = statsProblemComparisonSortColumn;
+        const sortDirection = statsProblemComparisonSortDirection;
+        let aValue;
+        let bValue;
+
+        switch (sortColumn) {
+            case 'left_avg':
+                aValue = a.leftAvg;
+                bValue = b.leftAvg;
+                break;
+            case 'right_avg':
+                aValue = a.rightAvg;
+                bValue = b.rightAvg;
+                break;
+            case 'left_normalized':
+                aValue = a.leftNormalized;
+                bValue = b.leftNormalized;
+                break;
+            case 'right_normalized':
+                aValue = a.rightNormalized;
+                bValue = b.rightNormalized;
+                break;
+            case 'avg_delta':
+                aValue = a.avgDelta;
+                bValue = b.avgDelta;
+                break;
+            case 'norm_delta':
+                aValue = a.normDelta;
+                bValue = b.normDelta;
+                break;
+            case 'left_blank':
+                aValue = a.leftBlank;
+                bValue = b.leftBlank;
+                break;
+            case 'right_blank':
+                aValue = a.rightBlank;
+                bValue = b.rightBlank;
+                break;
+            case 'blank_delta':
+                aValue = a.blankDelta;
+                bValue = b.blankDelta;
+                break;
+            case 'problem':
+            default:
+                aValue = a.problemNumber;
+                bValue = b.problemNumber;
+                break;
+        }
+
+        let comparison = compareProblemComparisonValues(aValue, bValue, sortDirection);
+        if (comparison !== 0) {
+            return comparison;
+        }
+        return compareProblemComparisonValues(a.problemNumber, b.problemNumber, 'asc');
+    });
+
     const formatPct = (value) => value === null || value === undefined ? 'N/A' : `${Number(value).toFixed(1)}%`;
     const formatScore = (value) => value === null || value === undefined ? 'N/A' : Number(value).toFixed(2);
 
     return `
         <h3 style="margin-top: 24px;">Per-Problem Comparison</h3>
-        <table class="student-scores-table">
+        <table class="student-scores-table" id="problem-comparison-table">
             <thead>
                 <tr>
-                    <th>Problem</th>
-                    <th>${escapeHtml(leftLabel)} Avg</th>
-                    <th>${escapeHtml(rightLabel)} Avg</th>
-                    <th>Delta</th>
-                    <th>${escapeHtml(leftLabel)} Blank</th>
-                    <th>${escapeHtml(rightLabel)} Blank</th>
-                    <th>Blank Delta</th>
-                    <th>${escapeHtml(leftLabel)} Graded</th>
-                    <th>${escapeHtml(rightLabel)} Graded</th>
+                    <th class="sortable" data-sort="problem" onclick="sortProblemComparisonTable('problem')" title="Click to sort by problem number">
+                        Problem <span class="sort-indicator">${getProblemComparisonSortIndicator('problem')}</span>
+                    </th>
+                    <th class="sortable" data-sort="left_avg" onclick="sortProblemComparisonTable('left_avg')" title="Click to sort by ${escapeHtml(leftLabel)} average">
+                        ${escapeHtml(leftLabel)} Avg <span class="sort-indicator">${getProblemComparisonSortIndicator('left_avg')}</span>
+                    </th>
+                    <th class="sortable" data-sort="right_avg" onclick="sortProblemComparisonTable('right_avg')" title="Click to sort by ${escapeHtml(rightLabel)} average">
+                        ${escapeHtml(rightLabel)} Avg <span class="sort-indicator">${getProblemComparisonSortIndicator('right_avg')}</span>
+                    </th>
+                    <th class="sortable" data-sort="avg_delta" onclick="sortProblemComparisonTable('avg_delta')" title="Click to sort by average delta">
+                        Avg Delta <span class="sort-indicator">${getProblemComparisonSortIndicator('avg_delta')}</span>
+                    </th>
+                    <th class="sortable" data-sort="left_normalized" onclick="sortProblemComparisonTable('left_normalized')" title="Click to sort by ${escapeHtml(leftLabel)} normalized score">
+                        ${escapeHtml(leftLabel)} Norm <span class="sort-indicator">${getProblemComparisonSortIndicator('left_normalized')}</span>
+                    </th>
+                    <th class="sortable" data-sort="right_normalized" onclick="sortProblemComparisonTable('right_normalized')" title="Click to sort by ${escapeHtml(rightLabel)} normalized score">
+                        ${escapeHtml(rightLabel)} Norm <span class="sort-indicator">${getProblemComparisonSortIndicator('right_normalized')}</span>
+                    </th>
+                    <th class="sortable" data-sort="norm_delta" onclick="sortProblemComparisonTable('norm_delta')" title="Click to sort by normalized delta">
+                        Norm Delta <span class="sort-indicator">${getProblemComparisonSortIndicator('norm_delta')}</span>
+                    </th>
+                    <th class="sortable" data-sort="left_blank" onclick="sortProblemComparisonTable('left_blank')" title="Click to sort by ${escapeHtml(leftLabel)} blank rate">
+                        ${escapeHtml(leftLabel)} Blank <span class="sort-indicator">${getProblemComparisonSortIndicator('left_blank')}</span>
+                    </th>
+                    <th class="sortable" data-sort="right_blank" onclick="sortProblemComparisonTable('right_blank')" title="Click to sort by ${escapeHtml(rightLabel)} blank rate">
+                        ${escapeHtml(rightLabel)} Blank <span class="sort-indicator">${getProblemComparisonSortIndicator('right_blank')}</span>
+                    </th>
+                    <th class="sortable" data-sort="blank_delta" onclick="sortProblemComparisonTable('blank_delta')" title="Click to sort by blank-rate delta">
+                        Blank Delta <span class="sort-indicator">${getProblemComparisonSortIndicator('blank_delta')}</span>
+                    </th>
                 </tr>
             </thead>
-            <tbody>
-                ${problemNumbers.map((problemNumber) => {
-                    const leftPs = leftStats.find(ps => ps.problem_number === problemNumber) || {};
-                    const rightPs = rightByProblem.get(problemNumber) || {};
-                    const leftAvg = leftPs.avg_score ?? null;
-                    const rightAvg = rightPs.avg_score ?? null;
-                    const leftBlank = leftPs.pct_blank ?? null;
-                    const rightBlank = rightPs.pct_blank ?? null;
-                    const leftGraded = leftPs.num_graded ?? 0;
-                    const rightGraded = rightPs.num_graded ?? 0;
-                    const leftTotal = leftPs.num_total ?? 0;
-                    const rightTotal = rightPs.num_total ?? 0;
-                    const avgDelta = deltaValue(leftAvg, rightAvg);
-                    const blankDelta = deltaValue(leftBlank, rightBlank);
-                    return `
-                        <tr style="cursor: pointer;" onclick="reviewProblemFromStats(${problemNumber})">
-                            <td><strong>Problem ${problemNumber}</strong></td>
-                            <td>${formatScore(leftAvg)}</td>
-                            <td>${formatScore(rightAvg)}</td>
-                            <td>${formatSignedDelta(avgDelta, 2)}</td>
-                            <td>${formatPct(leftBlank)}</td>
-                            <td>${formatPct(rightBlank)}</td>
-                            <td>${formatSignedDelta(blankDelta, 1)}</td>
-                            <td>${leftGraded} / ${leftTotal}</td>
-                            <td>${rightGraded} / ${rightTotal}</td>
-                        </tr>
-                    `;
-                }).join('')}
+            <tbody id="problem-comparison-tbody">
+                ${rows.map((row) => `
+                    <tr style="cursor: pointer;"
+                        data-problem-number="${row.problemNumber}"
+                        data-left-avg="${row.leftAvg ?? ''}"
+                        data-right-avg="${row.rightAvg ?? ''}"
+                        data-avg-delta="${row.avgDelta ?? ''}"
+                        data-left-normalized="${row.leftNormalized ?? ''}"
+                        data-right-normalized="${row.rightNormalized ?? ''}"
+                        data-norm-delta="${row.normDelta ?? ''}"
+                        data-left-blank="${row.leftBlank ?? ''}"
+                        data-right-blank="${row.rightBlank ?? ''}"
+                        data-blank-delta="${row.blankDelta ?? ''}"
+                        onclick="reviewProblemFromStats(${row.problemNumber})">
+                        <td><strong>Problem ${row.problemNumber}</strong></td>
+                        <td>${formatScore(row.leftAvg)}</td>
+                        <td>${formatScore(row.rightAvg)}</td>
+                        <td>${formatSignedDelta(row.avgDelta, 2)}</td>
+                        <td>${formatScore(row.leftNormalized, 3)}</td>
+                        <td>${formatScore(row.rightNormalized, 3)}</td>
+                        <td>${formatSignedDelta(row.normDelta, 3)}</td>
+                        <td>${formatPct(row.leftBlank)}</td>
+                        <td>${formatPct(row.rightBlank)}</td>
+                        <td>${formatSignedDelta(row.blankDelta, 1)}</td>
+                    </tr>
+                `).join('')}
             </tbody>
         </table>
     `;
@@ -3334,7 +3499,7 @@ async function loadStatistics(sectionFilter) {
                 <div style="margin-top: 20px; padding: 12px 14px; background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 8px; color: var(--gray-700); font-size: 13px;">
                     Switch off compare mode to return to the single-section student table view.
                 </div>
-            `;
+            `; 
             bindStatsControls();
             lastSessionStats = primaryBundle.stats;
             statsLoadedSessionId = sessionId;
