@@ -87,6 +87,170 @@ def _stored_feedback(problem, default_feedback: Optional[str]) -> Optional[str]:
   return extract_response_specific_feedback(default_feedback, problem.feedback)
 
 
+def _normalize_section_label(raw_section) -> Optional[str]:
+  if raw_section is None:
+    return None
+  if isinstance(raw_section, str):
+    section = raw_section.strip()
+  else:
+    section = str(raw_section).strip()
+  return section or None
+
+
+def _normalize_cached_students(raw_students) -> list[dict]:
+  if not isinstance(raw_students, list):
+    return []
+
+  students = []
+  for entry in raw_students:
+    if not isinstance(entry, dict):
+      continue
+    name = str(entry.get("name") or "").strip()
+    try:
+      user_id = int(entry.get("user_id"))
+    except (TypeError, ValueError):
+      continue
+    if not name:
+      continue
+    students.append({
+      "user_id": user_id,
+      "name": name,
+      "section": _normalize_section_label(entry.get("section")),
+    })
+  return students
+
+
+def _collect_student_sections(course) -> dict[int, str]:
+  """Build a user_id -> section label mapping from Canvas enrollments."""
+  section_names_by_id: dict[int, str] = {}
+  user_sections_by_id: dict[int, str] = {}
+
+  try:
+    for section in course.get_sections():
+      section_name = _normalize_section_label(getattr(section, "name", None))
+      section_id = getattr(section, "id", None)
+      if section_name is None or section_id is None:
+        continue
+      try:
+        section_names_by_id[int(section_id)] = section_name
+      except (TypeError, ValueError):
+        continue
+  except Exception as exc:
+    log.debug("Could not load Canvas sections for roster labeling: %s", exc)
+
+  try:
+    for enrollment in course.get_enrollments(type=["StudentEnrollment"],
+                                             state=["active"]):
+      user_id = getattr(enrollment, "user_id", None)
+      section_id = getattr(enrollment, "course_section_id", None)
+      if user_id is None or section_id is None:
+        continue
+      try:
+        user_id_int = int(user_id)
+        section_id_int = int(section_id)
+      except (TypeError, ValueError):
+        continue
+      section_name = section_names_by_id.get(section_id_int)
+      if section_name:
+        user_sections_by_id[user_id_int] = section_name
+  except Exception as exc:
+    log.debug("Could not load Canvas enrollments for roster labeling: %s", exc)
+
+  return user_sections_by_id
+
+
+def _load_canvas_students_with_sections(session_id: int,
+                                        session) -> list[dict]:
+  """Fetch Canvas students and section labels, caching the result on success."""
+  session_repo = SessionRepository()
+  canvas_interface = CanvasInterface(
+    prod=session.use_prod_canvas,
+    privacy_mode="none",
+  )
+  course = canvas_interface.get_course(session.course_id)
+  assignment = course.get_assignment(session.assignment_id)
+  students = assignment.get_students(include_names=True)
+  student_sections_by_id = _collect_student_sections(course)
+
+  normalized = [{
+    "user_id": s.user_id,
+    "name": s.name,
+    "section": student_sections_by_id.get(s.user_id),
+  } for s in students]
+
+  metadata = session_repo.get_metadata(session_id) or {}
+  metadata["cached_canvas_students"] = normalized
+  metadata.pop("canvas_roster_error", None)
+  session_repo.update_metadata(session_id, metadata)
+  return normalized
+
+
+def _cached_canvas_section_lookup(session_id: int) -> tuple[dict[int, str], list[str]]:
+  """
+  Load cached Canvas student section data for a session.
+
+  Returns:
+    Tuple of (user_id -> section label, sorted unique section labels).
+  """
+  session_repo = SessionRepository()
+  metadata = session_repo.get_metadata(session_id) or {}
+  raw_students = metadata.get("cached_canvas_students")
+  section_lookup: dict[int, str] = {}
+  section_values: set[str] = set()
+  if isinstance(raw_students, list):
+    for entry in raw_students:
+      if not isinstance(entry, dict):
+        continue
+      section = _normalize_section_label(entry.get("section"))
+      if section is None:
+        continue
+      try:
+        user_id = int(entry.get("user_id"))
+      except (TypeError, ValueError):
+        continue
+      section_lookup[user_id] = section
+      section_values.add(section)
+
+  if section_lookup:
+    return section_lookup, sorted(section_values)
+
+  session = session_repo.get_by_id(session_id)
+  if not session or session.metadata and session.metadata.get("mock_roster"):
+    return {}, []
+
+  try:
+    live_students = _load_canvas_students_with_sections(session_id, session)
+  except Exception as exc:
+    metadata = session_repo.get_metadata(session_id) or {}
+    metadata["canvas_roster_error"] = str(exc)
+    session_repo.update_metadata(session_id, metadata)
+    return {}, []
+
+  for entry in live_students:
+    try:
+      user_id = int(entry.get("user_id"))
+    except (TypeError, ValueError):
+      continue
+    section = _normalize_section_label(entry.get("section"))
+    if section is None:
+      continue
+    section_lookup[user_id] = section
+    section_values.add(section)
+
+  return section_lookup, sorted(section_values)
+
+
+def _canvas_user_ids_for_section(section_lookup: dict[int, str],
+                                 section: Optional[str]) -> Optional[list[int]]:
+  normalized_section = _normalize_section_label(section)
+  if normalized_section is None:
+    return None
+  return [
+    user_id for user_id, user_section in section_lookup.items()
+    if user_section == normalized_section
+  ]
+
+
 def mock_roster_enabled() -> bool:
   return os.getenv(MOCK_ROSTER_ENV, "").lower() in ("1", "true", "yes")
 
@@ -533,6 +697,7 @@ async def list_sessions(current_user: dict = Depends(get_current_user)):
 @router.get("/{session_id}/stats", response_model=SessionStatsResponse)
 async def get_session_stats(
   session_id: int,
+  section: Optional[str] = None,
   current_user: dict = Depends(require_session_access())
 ):
   """Get grading statistics for a session (requires session access)"""
@@ -541,10 +706,15 @@ async def get_session_stats(
 
   problem_repo = ProblemRepository()
   metadata_repo = ProblemMetadataRepository()
+  section_lookup, _ = _cached_canvas_section_lookup(session_id)
+  section_user_ids = _canvas_user_ids_for_section(section_lookup, section)
   log = logging.getLogger(__name__)
 
   # Get overall stats
-  overall_stats = problem_repo.get_session_overall_stats(session_id)
+  overall_stats = problem_repo.get_session_overall_stats(
+    session_id,
+    canvas_user_ids=section_user_ids,
+  )
   if overall_stats["total_problems"] == 0:
     session_repo = SessionRepository()
     if not session_repo.exists(session_id):
@@ -566,13 +736,19 @@ async def get_session_stats(
   progress = (problems_graded / total_problems * 100) if total_problems > 0 else 0
 
   # Get per-problem stats
-  problem_numbers = problem_repo.get_distinct_problem_numbers(session_id)
+  problem_numbers = problem_repo.get_distinct_problem_numbers(
+    session_id,
+    canvas_user_ids=section_user_ids,
+  )
   problem_stats = []
 
   for problem_num in problem_numbers:
     # Get scores and blank count
     scores, num_blank = problem_repo.get_problem_scores_and_blanks(
-      session_id, problem_num)
+      session_id,
+      problem_num,
+      canvas_user_ids=section_user_ids,
+    )
 
     # Get max_points for this problem (default to 8 if not set)
     max_points = metadata_repo.get_max_points(session_id, problem_num)
@@ -580,9 +756,16 @@ async def get_session_stats(
       max_points = 8.0
 
     # Get counts
-    counts = problem_repo.get_counts_for_problem_number(session_id, problem_num)
+    counts = problem_repo.get_counts_for_problem_number(
+      session_id,
+      problem_num,
+      canvas_user_ids=section_user_ids,
+    )
     manual_blank_counts = problem_repo.get_manual_blank_counts_for_problem_number(
-      session_id, problem_num)
+      session_id,
+      problem_num,
+      canvas_user_ids=section_user_ids,
+    )
     num_total = counts["total"]
     num_graded = counts["graded"]
     num_blank_ungraded = manual_blank_counts["ungraded_manual_blank"]
@@ -655,12 +838,22 @@ async def get_problem_numbers(
 @router.get("/{session_id}/student-scores")
 async def get_student_scores(
   session_id: int,
+  section: Optional[str] = None,
   current_user: dict = Depends(require_session_access())
 ):
   """Get aggregated scores for all students in a session (requires session access)"""
   submission_repo = SubmissionRepository()
-  students = submission_repo.get_student_scores(session_id)
-  return {"students": students}
+  section_lookup, section_values = _cached_canvas_section_lookup(session_id)
+  section_user_ids = _canvas_user_ids_for_section(section_lookup, section)
+  students = submission_repo.get_student_scores(
+    session_id,
+    canvas_user_ids=section_user_ids,
+    section_lookup=section_lookup,
+  )
+  return {
+    "students": students,
+    "available_sections": section_values,
+  }
 
 
 @router.get("/{session_id}/submissions/{submission_id}/exam-pdf")

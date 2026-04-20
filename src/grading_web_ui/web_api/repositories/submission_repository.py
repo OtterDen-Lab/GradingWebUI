@@ -468,7 +468,10 @@ class SubmissionRepository(BaseRepository[Submission]):
       )
       return cursor.fetchone()[0]
 
-  def get_student_scores(self, session_id: int) -> List[Dict]:
+  def get_student_scores(self,
+                         session_id: int,
+                         canvas_user_ids: List[int] | None = None,
+                         section_lookup: Dict[int, str] | None = None) -> List[Dict]:
     """
     Get aggregated scores for all students in a session.
 
@@ -483,8 +486,15 @@ class SubmissionRepository(BaseRepository[Submission]):
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
+      canvas_user_filter = ""
+      if canvas_user_ids is not None:
+        if not canvas_user_ids:
+          canvas_user_filter = " AND 1 = 0"
+        else:
+          placeholders = ", ".join("?" for _ in canvas_user_ids)
+          canvas_user_filter = f" AND s.canvas_user_id IN ({placeholders})"
       cursor.execute(
-        """
+        f"""
         SELECT
           s.id as submission_id,
           s.document_id,
@@ -501,20 +511,29 @@ class SubmissionRepository(BaseRepository[Submission]):
         FROM submissions s
         LEFT JOIN problems p ON p.submission_id = s.id
         WHERE s.session_id = ?
+        {canvas_user_filter}
         GROUP BY s.id
         ORDER BY s.student_name
-        """, (session_id,)
+        """, (session_id, *canvas_user_ids) if canvas_user_ids else (session_id,)
       )
 
       students = []
       for row in cursor.fetchall():
+        canvas_user_id = row["canvas_user_id"]
+        section = None
+        if section_lookup and canvas_user_id is not None:
+          try:
+            section = section_lookup.get(int(canvas_user_id))
+          except (TypeError, ValueError):
+            section = None
         students.append({
           "submission_id": row["submission_id"],
           "document_id": row["document_id"],
           "approximate_name": row["approximate_name"],
           "display_name": row["display_name"],
           "student_name": row["student_name"],
-          "canvas_user_id": row["canvas_user_id"],
+          "canvas_user_id": canvas_user_id,
+          "section": section,
           "original_filename": row["original_filename"],
           "has_exam_pdf": bool(row["has_exam_pdf"]),
           "total_problems": row["total_problems"],

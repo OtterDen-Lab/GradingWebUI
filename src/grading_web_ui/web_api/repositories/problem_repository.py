@@ -64,6 +64,27 @@ class ProblemRepository(BaseRepository[Problem]):
       transcription_cached_at=transcription_cached_at
     )
 
+  def _canvas_user_filter_clause(self,
+                                 canvas_user_ids: Optional[List[int]],
+                                 alias: str = "s") -> tuple[str, tuple]:
+    """
+    Build an optional SQL filter for a set of Canvas user IDs.
+
+    Args:
+      canvas_user_ids: Filter values or None to disable filtering.
+      alias: Table alias for the submissions table.
+
+    Returns:
+      Tuple of (sql_fragment, params).
+    """
+    if canvas_user_ids is None:
+      return "", ()
+    if not canvas_user_ids:
+      return " AND 1 = 0", ()
+
+    placeholders = ", ".join("?" for _ in canvas_user_ids)
+    return f" AND {alias}.canvas_user_id IN ({placeholders})", tuple(canvas_user_ids)
+
   def get_by_id(self, problem_id: int) -> Optional[Problem]:
     """
     Get problem by ID.
@@ -708,7 +729,8 @@ class ProblemRepository(BaseRepository[Problem]):
       """, (problem_id,))
 
   def get_counts_for_problem_number(self, session_id: int,
-                                   problem_number: int) -> Dict[str, int]:
+                                   problem_number: int,
+                                   canvas_user_ids: Optional[List[int]] = None) -> Dict[str, int]:
     """
     Get various counts for a problem number.
 
@@ -723,15 +745,17 @@ class ProblemRepository(BaseRepository[Problem]):
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
-      cursor.execute("""
+      filter_sql, filter_params = self._canvas_user_filter_clause(canvas_user_ids)
+      cursor.execute(f"""
         SELECT
           COUNT(*) as total,
           SUM(CASE WHEN graded = 1 THEN 1 ELSE 0 END) as graded,
           SUM(CASE WHEN graded = 0 AND is_blank = 1 THEN 1 ELSE 0 END) as ungraded_blank,
           SUM(CASE WHEN graded = 0 AND is_blank = 0 THEN 1 ELSE 0 END) as ungraded_nonblank
-        FROM problems
-        WHERE session_id = ? AND problem_number = ?
-      """, (session_id, problem_number))
+        FROM problems p
+        JOIN submissions s ON s.id = p.submission_id
+        WHERE p.session_id = ? AND p.problem_number = ?{filter_sql}
+      """, (session_id, problem_number, *filter_params))
 
       row = cursor.fetchone()
       return {
@@ -911,7 +935,9 @@ class ProblemRepository(BaseRepository[Problem]):
       """, (session_id,))
       return {row["submission_id"] for row in cursor.fetchall()}
 
-  def get_distinct_problem_numbers(self, session_id: int) -> List[int]:
+  def get_distinct_problem_numbers(self,
+                                   session_id: int,
+                                   canvas_user_ids: Optional[List[int]] = None) -> List[int]:
     """
     Get list of all problem numbers in session.
 
@@ -923,12 +949,14 @@ class ProblemRepository(BaseRepository[Problem]):
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
-      cursor.execute("""
+      filter_sql, filter_params = self._canvas_user_filter_clause(canvas_user_ids)
+      cursor.execute(f"""
         SELECT DISTINCT problem_number
-        FROM problems
-        WHERE session_id = ?
+        FROM problems p
+        JOIN submissions s ON s.id = p.submission_id
+        WHERE p.session_id = ?{filter_sql}
         ORDER BY problem_number
-      """, (session_id,))
+      """, (session_id, *filter_params))
       return [row["problem_number"] for row in cursor.fetchall()]
 
   def update_max_points_bulk(self, session_id: int, problem_number: int,
@@ -955,7 +983,8 @@ class ProblemRepository(BaseRepository[Problem]):
       """, (max_points, session_id, problem_number))
       return cursor.rowcount
 
-  def get_session_overall_stats(self, session_id: int) -> Dict:
+  def get_session_overall_stats(self, session_id: int,
+                                canvas_user_ids: Optional[List[int]] = None) -> Dict:
     """
     Get overall statistics for a session.
 
@@ -969,14 +998,16 @@ class ProblemRepository(BaseRepository[Problem]):
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
-      cursor.execute("""
+      filter_sql, filter_params = self._canvas_user_filter_clause(canvas_user_ids)
+      cursor.execute(f"""
         SELECT
-          COUNT(DISTINCT submission_id) as total_submissions,
+          COUNT(DISTINCT s.id) as total_submissions,
           COUNT(*) as total_problems,
-          SUM(CASE WHEN graded = 1 THEN 1 ELSE 0 END) as problems_graded
-        FROM problems
-        WHERE session_id = ?
-      """, (session_id,))
+          SUM(CASE WHEN p.graded = 1 THEN 1 ELSE 0 END) as problems_graded
+        FROM problems p
+        JOIN submissions s ON s.id = p.submission_id
+        WHERE p.session_id = ?{filter_sql}
+      """, (session_id, *filter_params))
 
       row = cursor.fetchone()
       return {
@@ -985,7 +1016,8 @@ class ProblemRepository(BaseRepository[Problem]):
         "problems_graded": row["problems_graded"] or 0
       }
 
-  def get_problem_scores_and_blanks(self, session_id: int, problem_number: int) -> tuple[List[float], int]:
+  def get_problem_scores_and_blanks(self, session_id: int, problem_number: int,
+                                    canvas_user_ids: Optional[List[int]] = None) -> tuple[List[float], int]:
     """
     Get scores and manual blank count for a specific problem.
 
@@ -998,11 +1030,13 @@ class ProblemRepository(BaseRepository[Problem]):
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
-      cursor.execute("""
+      filter_sql, filter_params = self._canvas_user_filter_clause(canvas_user_ids)
+      cursor.execute(f"""
         SELECT score, is_blank, blank_method, blank_reasoning
-        FROM problems
-        WHERE session_id = ? AND problem_number = ? AND graded = 1
-      """, (session_id, problem_number))
+        FROM problems p
+        JOIN submissions s ON s.id = p.submission_id
+        WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 1{filter_sql}
+      """, (session_id, problem_number, *filter_params))
 
       results = cursor.fetchall()
       scores = [row["score"] for row in results if row["score"] is not None]
@@ -1017,7 +1051,8 @@ class ProblemRepository(BaseRepository[Problem]):
       return (scores, num_manual_blank)
 
   def get_manual_blank_counts_for_problem_number(self, session_id: int,
-                                                 problem_number: int) -> Dict[str, int]:
+                                                 problem_number: int,
+                                                 canvas_user_ids: Optional[List[int]] = None) -> Dict[str, int]:
     """
     Get graded/ungraded manual blank counts for a problem number.
 
@@ -1025,7 +1060,8 @@ class ProblemRepository(BaseRepository[Problem]):
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
-      cursor.execute("""
+      filter_sql, filter_params = self._canvas_user_filter_clause(canvas_user_ids)
+      cursor.execute(f"""
         SELECT
           SUM(
             CASE
@@ -1055,9 +1091,10 @@ class ProblemRepository(BaseRepository[Problem]):
               THEN 1 ELSE 0
             END
           ) as ungraded_manual_blank
-        FROM problems
-        WHERE session_id = ? AND problem_number = ?
-      """, (session_id, problem_number))
+        FROM problems p
+        JOIN submissions s ON s.id = p.submission_id
+        WHERE p.session_id = ? AND p.problem_number = ?{filter_sql}
+      """, (session_id, problem_number, *filter_params))
 
       row = cursor.fetchone()
       return {

@@ -1843,6 +1843,7 @@ def test_student_scores_include_submission_metadata(client):
     "display_name": "Ada Lovelace",
     "student_name": "Ada Lovelace",
     "canvas_user_id": None,
+    "section": None,
     "original_filename": "ada_exam.pdf",
     "has_exam_pdf": True,
     "total_problems": 1,
@@ -1914,6 +1915,7 @@ def test_delete_submission_removes_exam_and_refreshes_session_counts(client):
     "display_name": "Keep Me",
     "student_name": "Keep Me",
     "canvas_user_id": None,
+    "section": None,
     "original_filename": None,
     "has_exam_pdf": False,
     "total_problems": 1,
@@ -1945,6 +1947,160 @@ def test_delete_submission_removes_exam_and_refreshes_session_counts(client):
     cursor.execute("SELECT COUNT(*) AS count FROM problems WHERE submission_id = ?",
                    (deleted_submission_id, ))
     assert cursor.fetchone()["count"] == 0
+
+
+def test_section_filtered_statistics_only_include_matching_students(client):
+  """Stats endpoints should filter to one Canvas section when requested."""
+  session_id = create_test_session(client, "Section Filter Stats Test")
+  SessionRepository().update_metadata(
+    session_id,
+    {
+      "cached_canvas_students": [
+        {"user_id": 101, "name": "Section One Student", "section": "01"},
+        {"user_id": 202, "name": "Section Two Student", "section": "02"},
+      ]
+    },
+  )
+
+  section_one_submission_id, _ = seed_submission_with_problem(
+    session_id,
+    document_id=1,
+    student_name="Section One Student",
+    canvas_user_id=101,
+    graded=True,
+    score=5.0,
+    max_points=10.0,
+  )
+  seed_submission_with_problem(
+    session_id,
+    document_id=2,
+    student_name="Section Two Student",
+    canvas_user_id=202,
+    graded=True,
+    score=3.0,
+    max_points=10.0,
+  )
+
+  stats_response = client.get(f"/api/sessions/{session_id}/stats?section=01")
+  assert stats_response.status_code == 200
+  stats_payload = stats_response.json()
+  assert stats_payload["total_submissions"] == 1
+  assert stats_payload["total_problems"] == 1
+  assert stats_payload["problems_graded"] == 1
+  assert len(stats_payload["problem_stats"]) == 1
+  assert stats_payload["problem_stats"][0]["avg_score"] == 5.0
+  assert stats_payload["problem_stats"][0]["num_total"] == 1
+
+  scores_response = client.get(f"/api/sessions/{session_id}/student-scores?section=01")
+  assert scores_response.status_code == 200
+  scores_payload = scores_response.json()
+  assert scores_payload["available_sections"] == ["01", "02"]
+  assert scores_payload["students"] == [{
+    "submission_id": section_one_submission_id,
+    "document_id": 1,
+    "approximate_name": None,
+    "display_name": "Section One Student",
+    "student_name": "Section One Student",
+    "canvas_user_id": 101,
+    "section": "01",
+    "original_filename": None,
+    "has_exam_pdf": False,
+    "total_problems": 1,
+    "graded_problems": 1,
+    "total_score": 5.0,
+    "total_max_points": 10.0,
+    "is_complete": True,
+  }]
+
+
+def test_section_filtered_statistics_can_load_sections_from_canvas(
+    client, monkeypatch):
+  """Stats endpoints should be able to discover sections on demand from Canvas."""
+  from grading_web_ui.web_api.routes import sessions as sessions_routes
+
+  session_id = create_test_session(client, "Section Fallback Stats Test")
+
+  class FakeStudent:
+
+    def __init__(self, user_id, name):
+      self.user_id = user_id
+      self.name = name
+
+  class FakeAssignment:
+
+    def get_students(self, include_names=True):
+      return [
+        FakeStudent(101, "Section One Student"),
+        FakeStudent(202, "Section Two Student"),
+      ]
+
+  class FakeSection:
+
+    def __init__(self, section_id, name):
+      self.id = section_id
+      self.name = name
+
+  class FakeEnrollment:
+
+    def __init__(self, user_id, course_section_id):
+      self.user_id = user_id
+      self.course_section_id = course_section_id
+
+  class FakeCourse:
+
+    def get_assignment(self, assignment_id):
+      return FakeAssignment()
+
+    def get_sections(self):
+      return [FakeSection(11, "01"), FakeSection(12, "02")]
+
+    def get_enrollments(self, **kwargs):
+      return [
+        FakeEnrollment(101, 11),
+        FakeEnrollment(202, 12),
+      ]
+
+  class FakeCanvasInterface:
+
+    def __init__(self, prod=False, privacy_mode="none"):
+      pass
+
+    def get_course(self, course_id):
+      return FakeCourse()
+
+  monkeypatch.setattr(sessions_routes, "CanvasInterface", FakeCanvasInterface)
+
+  seed_submission_with_problem(
+    session_id,
+    document_id=1,
+    student_name="Section One Student",
+    canvas_user_id=101,
+    graded=True,
+    score=5.0,
+    max_points=10.0,
+  )
+  seed_submission_with_problem(
+    session_id,
+    document_id=2,
+    student_name="Section Two Student",
+    canvas_user_id=202,
+    graded=True,
+    score=3.0,
+    max_points=10.0,
+  )
+
+  stats_response = client.get(f"/api/sessions/{session_id}/stats?section=01")
+  assert stats_response.status_code == 200
+  stats_payload = stats_response.json()
+  assert stats_payload["total_submissions"] == 1
+  assert stats_payload["total_problems"] == 1
+  assert stats_payload["problem_stats"][0]["avg_score"] == 5.0
+
+  scores_response = client.get(f"/api/sessions/{session_id}/student-scores?section=01")
+  assert scores_response.status_code == 200
+  scores_payload = scores_response.json()
+  assert scores_payload["available_sections"] == ["01", "02"]
+  assert scores_payload["students"][0]["section"] == "01"
 
 
 def test_delete_submission_prunes_upload_metadata_and_source_file(client, tmp_path):
