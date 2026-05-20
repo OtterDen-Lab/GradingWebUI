@@ -4174,6 +4174,7 @@ async function openFinalizeUploadDialog() {
     }));
 
     document.getElementById('finalize-clobber-feedback').checked = false;
+    document.getElementById('finalize-suppress-feedback').checked = false;
     await populateCanvasTargetControls('finalize', canvasInfo);
     renderFinalizeUploadStudents();
 
@@ -4348,6 +4349,7 @@ document.getElementById('finalize-upload-confirm-btn').onclick = async () => {
         await startFinalization({
             clobber_feedback: document.getElementById('finalize-clobber-feedback').checked,
             keep_previous_best: true,
+            suppress_feedback: document.getElementById('finalize-suppress-feedback').checked,
             submission_ids: selectedSubmissionIds,
         });
     } catch (error) {

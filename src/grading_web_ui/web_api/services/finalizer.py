@@ -42,6 +42,7 @@ class FinalizationService:
   def __init__(self, session_id: int, temp_dir: Path, stream_id: str,
                event_loop, *, keep_previous_best: bool = True,
                clobber_feedback: bool = False,
+               suppress_feedback: bool = False,
                selected_submission_ids: List[int] | None = None):
     self.session_id = session_id
     self.temp_dir = temp_dir
@@ -49,6 +50,7 @@ class FinalizationService:
     self.event_loop = event_loop  # Store event loop reference for thread communication
     self.keep_previous_best = keep_previous_best
     self.clobber_feedback = clobber_feedback
+    self.suppress_feedback = suppress_feedback
     self.selected_submission_ids = (set(selected_submission_ids)
                                     if selected_submission_ids is not None
                                     else None)
@@ -57,8 +59,8 @@ class FinalizationService:
     self.assignment = None
     self.total_submissions = 0
     self.current_submission = 0
-    # Step-based progress tracking (3 steps per submission: PDF, comments, upload)
-    self.steps_per_submission = 3
+    # Step-based progress tracking (2 steps when feedback is skipped, otherwise 3).
+    self.steps_per_submission = 2 if self.suppress_feedback else 3
     self.total_steps = 0
     self.current_step = 0
     self.last_persisted_step = 0
@@ -89,23 +91,36 @@ class FinalizationService:
       submission_label = self._submission_label(submission)
 
       try:
-        # Generate annotated PDF
-        self._update_progress(
-          f"Processing {i}/{len(submissions)}: Generating PDF for {submission_label}"
-        )
-        pdf_path = self._create_annotated_pdf(submission)
+        comments = ""
+        pdf_path = None
+        if self.suppress_feedback:
+          self._update_progress(
+            f"Processing {i}/{len(submissions)}: Preparing grade-only upload for {submission_label}"
+          )
+        else:
+          # Generate annotated PDF
+          self._update_progress(
+            f"Processing {i}/{len(submissions)}: Generating PDF for {submission_label}"
+          )
+          pdf_path = self._create_annotated_pdf(submission)
 
-        # Generate comments
-        self._update_progress(
-          f"Processing {i}/{len(submissions)}: Preparing comments for {submission_label}"
-        )
-        comments = self._generate_comments(submission)
+          # Generate comments
+          self._update_progress(
+            f"Processing {i}/{len(submissions)}: Preparing comments for {submission_label}"
+          )
+          comments = self._generate_comments(submission)
 
         # Upload to Canvas
         self._update_progress(
           f"Processing {i}/{len(submissions)}: Uploading to Canvas for {submission_label}"
         )
-        self._upload_to_canvas(submission, pdf_path, comments)
+        self._upload_to_canvas(
+          submission,
+          pdf_path,
+          comments,
+          include_feedback=not self.suppress_feedback,
+          include_pdf=not self.suppress_feedback,
+        )
 
         log.info(
           f"Successfully uploaded submission {i}/{len(submissions)} for {submission_label}"
@@ -671,28 +686,39 @@ class FinalizationService:
     updated = re.sub(r"(<img[^>]+src=')([^']*)(')", replace_single, updated, flags=re.IGNORECASE)
     return updated
 
-  def _upload_to_canvas(self, submission: Dict, pdf_path: Path, comments: str):
+  def _upload_to_canvas(self,
+                        submission: Dict,
+                        pdf_path: Path | None,
+                        comments: str,
+                        *,
+                        include_feedback: bool = True,
+                        include_pdf: bool = True):
     """Upload graded exam and comments to Canvas"""
-    # Route HTML feedback through normal attachments so Canvas sees the intended
-    # filename instead of the temp-path name generated inside lms-interface.
     feedback_attachments = []
     canvas_comments = comments
-    if comments and self._looks_like_html(comments):
+    if include_feedback and comments and self._looks_like_html(comments):
+      # Route HTML feedback through normal attachments so Canvas sees the intended
+      # filename instead of the temp-path name generated inside lms-interface.
       feedback_file = io.BytesIO(comments.encode("utf-8"))
       feedback_file.name = f"feedback_submission_{submission['id']}.html"
       feedback_attachments.append(feedback_file)
       canvas_comments = ""
+    elif not include_feedback:
+      canvas_comments = ""
 
-    with open(pdf_path, 'rb') as f:
-      pdf_bytes = f.read()
+    attachments = list(feedback_attachments)
+    if include_pdf and pdf_path is not None:
+      with open(pdf_path, 'rb') as f:
+        pdf_bytes = f.read()
 
-    pdf_file = io.BytesIO(pdf_bytes)
-    pdf_file.name = f"graded_exam_submission_{submission['id']}.pdf"
+      pdf_file = io.BytesIO(pdf_bytes)
+      pdf_file.name = f"graded_exam_submission_{submission['id']}.pdf"
+      attachments.append(pdf_file)
 
     self.assignment.push_feedback(score=sum(p["score"]
                                             for p in submission["problems"]),
                                   comments=canvas_comments,
-                                  attachments=[*feedback_attachments, pdf_file],
+                                  attachments=attachments,
                                   user_id=submission["canvas_user_id"],
                                   keep_previous_best=self.keep_previous_best,
                                   clobber_feedback=self.clobber_feedback)

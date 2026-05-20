@@ -2484,6 +2484,7 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
     captured["stream_id"] = stream_id
     captured["keep_previous_best"] = options.keep_previous_best
     captured["clobber_feedback"] = options.clobber_feedback
+    captured["suppress_feedback"] = options.suppress_feedback
     captured["submission_ids"] = options.submission_ids
     workflow_locks.release("finalize", target_session_id)
 
@@ -2493,6 +2494,7 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
                          json={
                            "keep_previous_best": False,
                            "clobber_feedback": True,
+                           "suppress_feedback": True,
                            "submission_ids": [submission_id],
                          })
 
@@ -2502,6 +2504,7 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
     "stream_id": f"finalize_{session_id}",
     "keep_previous_best": False,
     "clobber_feedback": True,
+    "suppress_feedback": True,
     "submission_ids": [submission_id],
   }
   assert workflow_locks.is_active("finalize", session_id) is False

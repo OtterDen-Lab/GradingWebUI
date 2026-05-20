@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 class FinalizeOptions(BaseModel):
   keep_previous_best: bool = True
   clobber_feedback: bool = False
+  suppress_feedback: bool = False
   submission_ids: list[int] | None = None
 
 
@@ -220,6 +221,7 @@ async def run_finalization(session_id: int, stream_id: str,
         loop,
         keep_previous_best=finalization_options.keep_previous_best,
         clobber_feedback=finalization_options.clobber_feedback,
+        suppress_feedback=finalization_options.suppress_feedback,
         selected_submission_ids=finalization_options.submission_ids,
       )
 
