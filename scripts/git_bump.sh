@@ -9,10 +9,12 @@ Usage:
 Behavior:
   1. Run test command (unless --skip-tests)
   2. Bump version via `uv version --bump <kind>`
-  3. Stage `pyproject.toml` and `uv.lock`
-  4. Commit (unless --no-commit)
-  5. Create tag `v<version>` by default (disable with --no-tag)
-  6. Push branch and tag by default (disable with --no-push)
+  3. Refresh dependency resolution via `uv lock --upgrade`
+  4. Re-run test command against the upgraded lockfile (unless --skip-tests)
+  5. Stage `pyproject.toml` and `uv.lock`
+  6. Commit (unless --no-commit)
+  7. Create tag `v<version>` by default (disable with --no-tag)
+  8. Push branch and tag by default (disable with --no-push)
 
 Notes:
   - Requires a clean index and working tree (tracked files).
@@ -134,6 +136,11 @@ if [[ "$SKIP_TESTS" != "1" ]] && [[ -n "$TEST_COMMAND" ]]; then
 fi
 
 run uv version --bump "$BUMP_KIND"
+run uv lock --upgrade
+if [[ "$SKIP_TESTS" != "1" ]] && [[ -n "$TEST_COMMAND" ]]; then
+  echo "Re-running tests after dependency refresh: $TEST_COMMAND"
+  run bash -lc "$TEST_COMMAND"
+fi
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1)"
 run git add pyproject.toml uv.lock
 
