@@ -585,7 +585,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "fuzzywuzzy" },
     { name = "lms-interface" },
-    { name = "ollama" },
     { name = "openai" },
     { name = "opencv-python" },
     { name = "pandas" },
@@ -620,7 +619,6 @@ requires-dist = [
     { name = "fuzzywuzzy", specifier = "~=0.18.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = "~=0.28.1" },
     { name = "lms-interface", git = "https://github.com/OtterDen-Lab/LMSInterface.git?rev=v0.6.0" },
-    { name = "ollama", specifier = "~=0.6.1" },
     { name = "openai", specifier = "~=2.14.0" },
     { name = "opencv-python", specifier = "~=4.12.0.88" },
     { name = "pandas", specifier = "~=2.3.3" },
@@ -629,15 +627,15 @@ requires-dist = [
     { name = "pydantic", specifier = "~=2.12.5" },
     { name = "pymupdf", specifier = "~=1.26.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3,<10" },
-    { name = "python-dotenv", specifier = "~=1.0.1" },
+    { name = "python-dotenv", specifier = "~=1.2.2" },
     { name = "python-levenshtein", specifier = "~=0.27.3" },
     { name = "python-multipart", specifier = "~=0.0.26" },
     { name = "pyyaml", specifier = "~=6.0.3" },
     { name = "pyzbar", specifier = "~=0.1.9" },
-    { name = "quizgenerator", specifier = "~=0.25.2" },
+    { name = "quizgenerator", specifier = "~=0.27.3" },
     { name = "requests", specifier = ">=2.32.4,<3" },
     { name = "scikit-learn", specifier = "~=1.8.0" },
-    { name = "urllib3", specifier = "~=2.6.3" },
+    { name = "urllib3", specifier = "~=2.7.0" },
     { name = "uvicorn", extras = ["standard"], specifier = "~=0.40.0" },
 ]
 provides-extras = ["dev"]
@@ -1159,19 +1157,6 @@ wheels = [
 ]
 
 [[package]]
-name = "ollama"
-version = "0.6.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pydantic" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fc/72/5f12423b6b39ca8430fbe56f77fcf4ef60f63067c7c4a2e30e200ed9ec16/ollama-0.6.2.tar.gz", hash = "sha256:936d55daa684f474364c098611c933626f8d6c7d67065c5b7ae0c477b508b07f", size = 53145, upload-time = "2026-04-29T21:21:15.018Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c4/ab/d6722beeb2d10f7a3b9ff49375708904fde18f82b5609a0bc4aeb5996a4d/ollama-0.6.2-py3-none-any.whl", hash = "sha256:3ad7daab28e5a973445c36a73882a3ef698c2ebb00e21e308652741577509f7d", size = 15115, upload-time = "2026-04-29T21:21:13.794Z" },
-]
-
-[[package]]
 name = "openai"
 version = "2.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1598,11 +1583,11 @@ wheels = [
 
 [[package]]
 name = "python-dotenv"
-version = "1.0.1"
+version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/bc/57/e84d88dfe0aec03b7a2d4327012c1627ab5f03652216c63d49846d7a6c58/python-dotenv-1.0.1.tar.gz", hash = "sha256:e324ee90a023d808f1959c46bcbc04446a10ced277783dc6ee09987c37ec10ca", size = 39115, upload-time = "2024-01-23T06:33:00.505Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3", size = 50135, upload-time = "2026-03-01T16:00:26.196Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/3e/b68c118422ec867fa7ab88444e1274aa40681c606d59ac27de5a5588f082/python_dotenv-1.0.1-py3-none-any.whl", hash = "sha256:f7b63ef50f1b690dddf550d03497b66d609393b40b564ed0d674909a68ebf16a", size = 19863, upload-time = "2024-01-23T06:32:58.246Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
 ]
 
 [[package]]
@@ -1693,7 +1678,7 @@ wheels = [
 
 [[package]]
 name = "quizgenerator"
-version = "0.25.6"
+version = "0.27.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "canvasapi" },
@@ -1701,7 +1686,6 @@ dependencies = [
     { name = "markdown" },
     { name = "matplotlib" },
     { name = "numpy" },
-    { name = "pydantic" },
     { name = "pypandoc" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1710,9 +1694,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3c/05/334aa976e800324d26ac97c2db036b954c7f0dbb8fba0b771353fb9fad72/quizgenerator-0.25.6.tar.gz", hash = "sha256:b45c02561ed7cf23dccf52bec8ea45695dfa624f46a1db5b0713c4853f8607b4", size = 234341, upload-time = "2026-05-06T17:01:01.819Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/99/33/a28c0afbd83fae8cf6e1853f2e27eef7e8510650d9040aa4041c500600a9/quizgenerator-0.27.3.tar.gz", hash = "sha256:bb097c8b2260e5d8dd7eb956127f84f2628c0ef0bd4c0be843a9049d115fd097", size = 249278, upload-time = "2026-05-20T18:46:33.31Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/f4/84ec571853f961f6e5c45a9cdfa0b44747b0238423fe8fdcd0ee20f5a652/quizgenerator-0.25.6-py3-none-any.whl", hash = "sha256:79431aeb7ee1d4da93b99ffce49c6fd8a9929a89f7ac5e527000b27e107e23eb", size = 263479, upload-time = "2026-05-06T17:01:03.194Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/9b/cf224e45c445236fd587429a4129d369c429ec0b99c37a9fe4a3af361e52/quizgenerator-0.27.3-py3-none-any.whl", hash = "sha256:dff5bed4432a0015fc97ac48321db1a30f7150471f3ac901007606cac87a6de9", size = 279436, upload-time = "2026-05-20T18:46:34.788Z" },
 ]
 
 [[package]]
@@ -2112,11 +2096,11 @@ wheels = [
 
 [[package]]
 name = "urllib3"
-version = "2.6.3"
+version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6661c76461e25f024d5a38a46f04aaca912426a2b1d3/urllib3-2.6.3.tar.gz", hash = "sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed", size = 435556, upload-time = "2026-01-07T16:24:43.925Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
 ]
 
 [[package]]

@@ -241,11 +241,6 @@ def _is_truthy(raw_value: str) -> bool:
   return (raw_value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def _ollama_transcription_enabled() -> bool:
-  # Disabled by default due operational reliability issues.
-  return _is_truthy(os.getenv("ENABLE_OLLAMA_DECIPHER", "false"))
-
-
 def _get_subjective_settings(session_id: int, problem_number: int) -> tuple[str, list[dict]]:
   metadata_repo = ProblemMetadataRepository()
   grading_mode = metadata_repo.get_grading_mode(session_id, problem_number)
@@ -1164,7 +1159,7 @@ async def decipher_handwriting(
 
     Args:
         problem_id: ID of the problem to transcribe
-        model: AI model to use ("default", "sonnet", "opus", "ollama")
+        model: AI model to use ("default", "sonnet", "opus")
                "default" uses Anthropic Sonnet-family candidates
     """
   problem_repo = ProblemRepository()
@@ -1220,24 +1215,10 @@ async def decipher_handwriting(
       response, usage = ai.query_ai(query, attachments=[("png", image_base64)])
       transcription = response
       model_name = f"Anthropic ({usage.get('model', 'unknown')})"
-    elif selected_model == "ollama":
-      if not _ollama_transcription_enabled():
-        raise HTTPException(
-          status_code=400,
-          detail=(
-            "Ollama transcription is disabled. Use 'default' (Anthropic) or "
-            "'sonnet'/'opus' instead."
-          )
-        )
-
-      ai = ai_helper.AI_Helper__Ollama()
-      response, usage = ai.query_ai(query, attachments=[("png", image_base64)])
-      transcription = response
-      model_name = f"Ollama ({usage.get('model', os.getenv('OLLAMA_MODEL', 'qwen3-vl:2b'))})"
     else:
       raise HTTPException(
         status_code=400,
-        detail="Unknown model. Expected one of: default, sonnet, opus, ollama"
+        detail="Unknown model. Expected one of: default, sonnet, opus"
       )
 
     # Validate transcription is not empty
@@ -1246,11 +1227,6 @@ async def decipher_handwriting(
       log.warning(
         f"Empty transcription from {model_name} for problem {problem_id}")
       raise HTTPException(status_code=500, detail=error_msg)
-
-    # Cache Ollama results for future use (to avoid repeated slow requests)
-    if model == "ollama":
-      problem_repo.update_transcription(problem_id, transcription.strip(), model_name)
-      log.info(f"Cached Ollama transcription for problem {problem_id}")
 
     return {
       "problem_id": problem_id,

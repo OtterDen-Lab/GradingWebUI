@@ -57,7 +57,7 @@ class ExamProcessor:
         Args:
             name_rect: Rectangle coordinates for name detection
                       {x, y, width, height} in pixels
-            ai_provider: AI provider to use ("anthropic", "openai", or "ollama")
+            ai_provider: AI provider to use ("anthropic" or "openai")
         """
     self.name_rect = name_rect or {
       "x": 350,
@@ -95,11 +95,9 @@ class ExamProcessor:
       self.ai_helper_class = ai_helper.AI_Helper__Anthropic
     elif self.ai_provider == "openai":
       self.ai_helper_class = ai_helper.AI_Helper__OpenAI
-    elif self.ai_provider == "ollama":
-      self.ai_helper_class = ai_helper.AI_Helper__Ollama
     else:
       log.warning(
-        f"Unknown AI provider '{ai_provider}', defaulting to Anthropic")
+          f"Unknown AI provider '{ai_provider}', defaulting to Anthropic")
       self.ai_helper_class = ai_helper.AI_Helper__Anthropic
   
   def process_exams(
