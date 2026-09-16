@@ -266,13 +266,21 @@ docker exec "$container_id" python -c \
 
 ### Restore or migrate to a new Docker host
 
-1. Deploy a compatible or newer application image on the new host, then stop
-   the `web` container.
-2. Copy the saved `.db` into the new container at `/data/grading.db` (or into
-   the named volume) and start the container. The application will migrate an
-   older supported schema automatically and creates a pre-migration backup.
-3. Sign in and verify a known session, submission PDF, and score before retiring
-   the old server. Preserve the old backup until that check succeeds.
+On the new host, create its protected environment file first, then run:
+
+```bash
+make deploy-from-backup v0.10.1 \
+  DEPLOY_ENV_FILE=/etc/grading-web/web.env \
+  BACKUP_FILE=/path/to/grading-backup-YYYYMMDDTHHMMSSZ.db
+```
+
+This deploys the release, stops its newly created `web` container, replaces only
+the fresh database and SQLite WAL sidecars in its volume, verifies
+`PRAGMA integrity_check`, and starts it again. The application will migrate an
+older supported schema automatically and creates a pre-migration backup.
+
+Sign in and verify a known session, submission PDF, and score before retiring
+the old server. Preserve the old backup until that check succeeds.
 
 The instructor account records are in this database. Canvas/API credentials are
 not: recreate the protected env file on the new host.

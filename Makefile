@@ -32,14 +32,14 @@ ifneq ($(filter publish,$(firstword $(MAKECMDGOALS))),)
     $(eval $(word 2,$(MAKECMDGOALS)):;@:)
   endif
 endif
-ifneq ($(filter deploy,$(firstword $(MAKECMDGOALS))),)
+ifneq ($(filter deploy deploy-from-backup,$(firstword $(MAKECMDGOALS))),)
   ifneq ($(word 2,$(MAKECMDGOALS)),)
     DEPLOY_TAG := $(word 2,$(MAKECMDGOALS))
     $(eval $(word 2,$(MAKECMDGOALS)):;@:)
   endif
 endif
 
-.PHONY: help debug dev run image publish deploy validate-env backup-db backup
+.PHONY: help debug dev run image publish deploy validate-env backup-db backup deploy-from-backup
 
 help:
 	@echo "Targets:"
@@ -59,6 +59,8 @@ help:
 	@echo "    Create a verified SQLite backup from DB_PATH (for non-Docker installs)."
 	@echo "  make backup BACKUP_DIR=/absolute/path/outside-the-server"
 	@echo "    Snapshot the running Docker database and copy it to external storage."
+	@echo "  make deploy-from-backup BACKUP_FILE=/path/to/grading-backup.db [vX.Y.Z]"
+	@echo "    Deploy a release, replace its fresh database with a verified backup, and start it."
 
 debug:
 	@mkdir -p $(DB_DIR)
@@ -104,6 +106,14 @@ deploy:
 	GRADING_WEB_IMAGE=$(REGISTRY_IMAGE):$(DEPLOY_TAG) GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE) $(DOCKER_COMPOSE) pull
 	GRADING_WEB_IMAGE=$(REGISTRY_IMAGE):$(DEPLOY_TAG) GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE) $(DOCKER_COMPOSE) up -d
 	GRADING_WEB_IMAGE=$(REGISTRY_IMAGE):$(DEPLOY_TAG) GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE) $(DOCKER_COMPOSE) ps
+
+deploy-from-backup:
+	@if [ -z "$(BACKUP_FILE)" ]; then \
+		echo "Missing BACKUP_FILE=/path/to/grading-backup.db"; \
+		exit 1; \
+	fi
+	@$(MAKE) deploy DEPLOY_TAG="$(DEPLOY_TAG)" DEPLOY_ENV_FILE="$(DEPLOY_ENV_FILE)"
+	GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE) scripts/restore_docker_backup.sh --backup-file "$(BACKUP_FILE)"
 
 backup-db:
 	@if [ -z "$(BACKUP_FILE)" ]; then \
