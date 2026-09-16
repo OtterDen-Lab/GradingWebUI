@@ -39,7 +39,7 @@ ifneq ($(filter deploy,$(firstword $(MAKECMDGOALS))),)
   endif
 endif
 
-.PHONY: help debug dev run image publish deploy validate-env backup-db
+.PHONY: help debug dev run image publish deploy validate-env backup-db backup
 
 help:
 	@echo "Targets:"
@@ -57,6 +57,8 @@ help:
 	@echo "    Build local Docker image only."
 	@echo "  make backup-db BACKUP_FILE=/absolute/path/grading-YYYYMMDD.db"
 	@echo "    Create a verified SQLite backup from DB_PATH (for non-Docker installs)."
+	@echo "  make backup BACKUP_DIR=/absolute/path/outside-the-server"
+	@echo "    Snapshot the running Docker database and copy it to external storage."
 
 debug:
 	@mkdir -p $(DB_DIR)
@@ -109,3 +111,10 @@ backup-db:
 		exit 1; \
 	fi
 	GRADING_DB_PATH=$(DB_PATH) $(PYTHON) scripts/backup_db.py --output "$(BACKUP_FILE)"
+
+backup:
+	@if [ -z "$(BACKUP_DIR)" ]; then \
+		echo "Missing BACKUP_DIR=/absolute/path/on-external-or-synced-storage"; \
+		exit 1; \
+	fi
+	GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE) scripts/backup_docker.sh --backup-dir "$(BACKUP_DIR)"

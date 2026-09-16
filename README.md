@@ -218,7 +218,15 @@ check.
 Run this from the repository on the server. Replace `/srv/grading-backups` with
 a directory on storage that will survive the server (mounted backup disk or a
 synced off-server directory). The copy step is deliberately outside Docker's
-named volume.
+named volume:
+
+```bash
+make backup BACKUP_DIR=/srv/grading-backups
+```
+
+This is a host-side command; it invokes Docker to run the snapshot utility in
+the container, then copies the resulting database and manifest to `BACKUP_DIR`.
+If you need the equivalent individual commands, they are:
 
 ```bash
 backup_dir=/srv/grading-backups
