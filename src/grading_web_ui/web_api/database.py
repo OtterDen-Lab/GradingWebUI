@@ -4,6 +4,8 @@ Database connection and schema management.
 import sqlite3
 import os
 import shutil
+import hashlib
+import json
 from pathlib import Path
 from typing import Optional
 from contextlib import contextmanager
@@ -89,6 +91,58 @@ def _create_pre_migration_backup(db_path: Path, from_version: int) -> Optional[P
     source_conn.close()
   log.warning("Created pre-migration backup at %s", backup_path)
   return backup_path
+
+
+def create_database_backup(source_path: Path, destination_path: Path) -> dict:
+  """Create and verify a consistent SQLite snapshot.
+
+  This uses SQLite's backup API rather than copying the database file.  It is
+  therefore safe while the application is running in WAL mode: committed WAL
+  changes are included in the resulting standalone database.
+  """
+  source_path = Path(source_path)
+  destination_path = Path(destination_path)
+  if not source_path.is_file():
+    raise FileNotFoundError(f"Database does not exist: {source_path}")
+  if destination_path.exists():
+    raise FileExistsError(f"Refusing to overwrite existing backup: {destination_path}")
+
+  destination_path.parent.mkdir(parents=True, exist_ok=True)
+  temporary_path = destination_path.with_suffix(destination_path.suffix + ".partial")
+  if temporary_path.exists():
+    raise FileExistsError(
+      f"Temporary backup path already exists: {temporary_path}. Remove it after inspection.")
+
+  source_conn = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+  destination_conn = sqlite3.connect(str(temporary_path))
+  try:
+    source_conn.backup(destination_conn)
+    destination_conn.commit()
+    integrity_result = destination_conn.execute("PRAGMA integrity_check").fetchone()[0]
+    if integrity_result != "ok":
+      raise RuntimeError(f"Backup integrity check failed: {integrity_result}")
+    schema_version = get_schema_version(destination_conn.cursor())
+  except Exception:
+    destination_conn.close()
+    source_conn.close()
+    temporary_path.unlink(missing_ok=True)
+    raise
+  else:
+    destination_conn.close()
+    source_conn.close()
+
+  temporary_path.replace(destination_path)
+  checksum = hashlib.sha256()
+  with destination_path.open("rb") as backup_file:
+    for chunk in iter(lambda: backup_file.read(1024 * 1024), b""):
+      checksum.update(chunk)
+  return {
+    "database": str(destination_path),
+    "created_at": datetime.now().astimezone().isoformat(),
+    "schema_version": schema_version,
+    "sha256": checksum.hexdigest(),
+    "size_bytes": destination_path.stat().st_size,
+  }
 
 
 def _get_busy_timeout_ms() -> int:

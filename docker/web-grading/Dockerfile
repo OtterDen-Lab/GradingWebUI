@@ -23,6 +23,9 @@ WORKDIR /app
 # Copy package source
 COPY src /app/src
 
+# Copy runtime backup utility with the package source.
+COPY scripts/backup_db.py /app/scripts/backup_db.py
+
 # Copy pyproject.toml, LICENSE, and README
 COPY pyproject.toml /app/
 COPY LICENSE /app/

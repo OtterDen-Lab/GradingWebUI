@@ -39,7 +39,7 @@ ifneq ($(filter deploy,$(firstword $(MAKECMDGOALS))),)
   endif
 endif
 
-.PHONY: help debug dev run image publish deploy validate-env
+.PHONY: help debug dev run image publish deploy validate-env backup-db
 
 help:
 	@echo "Targets:"
@@ -55,6 +55,8 @@ help:
 	@echo "    Pull and run REGISTRY_IMAGE tag (defaults to :latest)."
 	@echo "  make image [RUN_IMAGE=autograder-web-grading:local]"
 	@echo "    Build local Docker image only."
+	@echo "  make backup-db BACKUP_FILE=/absolute/path/grading-YYYYMMDD.db"
+	@echo "    Create a verified SQLite backup from DB_PATH (for non-Docker installs)."
 
 debug:
 	@mkdir -p $(DB_DIR)
@@ -100,3 +102,10 @@ deploy:
 	GRADING_WEB_IMAGE=$(REGISTRY_IMAGE):$(DEPLOY_TAG) GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE) $(DOCKER_COMPOSE) pull
 	GRADING_WEB_IMAGE=$(REGISTRY_IMAGE):$(DEPLOY_TAG) GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE) $(DOCKER_COMPOSE) up -d
 	GRADING_WEB_IMAGE=$(REGISTRY_IMAGE):$(DEPLOY_TAG) GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE) $(DOCKER_COMPOSE) ps
+
+backup-db:
+	@if [ -z "$(BACKUP_FILE)" ]; then \
+		echo "Missing BACKUP_FILE=/absolute/path/grading-YYYYMMDD.db"; \
+		exit 1; \
+	fi
+	GRADING_DB_PATH=$(DB_PATH) $(PYTHON) scripts/backup_db.py --output "$(BACKUP_FILE)"

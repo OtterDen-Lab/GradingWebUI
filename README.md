@@ -204,6 +204,83 @@ During dependency updates, review upstream changelogs for FastAPI, Pydantic, Uvi
 
 ## Database Migration Runbook
 
+## Full backups, migration, and analysis
+
+All persistent grading data—including submission PDFs, scores, feedback, and
+session configuration—is stored in the SQLite database. For a complete move or
+backup, use a **database snapshot**, not the per-session JSON export in the UI.
+The snapshot is a self-contained `.db` file and can be made while the app is
+running; it includes committed WAL data and is verified with SQLite's integrity
+check.
+
+### Docker server: make a backup before decommissioning
+
+Run this from the repository on the server. Replace `/srv/grading-backups` with
+a directory on storage that will survive the server (mounted backup disk or a
+synced off-server directory). The copy step is deliberately outside Docker's
+named volume.
+
+```bash
+backup_dir=/srv/grading-backups
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$backup_dir"
+
+docker compose -f docker/web-grading/docker-compose.prod.yml exec -T web \
+  python /app/scripts/backup_db.py --output "/data/grading-backup-$stamp.db"
+
+container_id=$(docker compose -f docker/web-grading/docker-compose.prod.yml ps -q web)
+docker cp "$container_id:/data/grading-backup-$stamp.db" "$backup_dir/"
+docker cp "$container_id:/data/grading-backup-$stamp.db.json" "$backup_dir/"
+sha256sum "$backup_dir/grading-backup-$stamp.db"
+```
+
+The command prints the database SHA-256 and schema version, and writes the same
+information to its adjacent JSON manifest. Keep both files. After copying, test
+the backup on another machine with `sqlite3 backup.db 'PRAGMA integrity_check;'`;
+the answer must be `ok`.
+
+For regular backups, schedule the same commands with cron or your backup system
+and retain several dated copies. The destination must be outside the Docker
+volume and preferably on a different host/storage account; a backup only in
+`grading-data` will be lost with the server.
+
+If the running server has an older image that does not yet contain
+`/app/scripts/backup_db.py`, use this one-time equivalent before upgrading it.
+It also uses SQLite's consistent backup API; check that it prints `ok` before
+copying the `.db` file with `docker cp` and recording its `sha256sum`.
+
+```bash
+container_id=$(docker compose -f docker/web-grading/docker-compose.prod.yml ps -q web)
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+docker exec "$container_id" python -c \
+  "import sqlite3; source=sqlite3.connect('file:/data/grading.db?mode=ro', uri=True); target=sqlite3.connect('/data/grading-backup-$stamp.db'); source.backup(target); target.commit(); print(target.execute('PRAGMA integrity_check').fetchone()[0]); target.close(); source.close()"
+```
+
+### Restore or migrate to a new Docker host
+
+1. Deploy a compatible or newer application image on the new host, then stop
+   the `web` container.
+2. Copy the saved `.db` into the new container at `/data/grading.db` (or into
+   the named volume) and start the container. The application will migrate an
+   older supported schema automatically and creates a pre-migration backup.
+3. Sign in and verify a known session, submission PDF, and score before retiring
+   the old server. Preserve the old backup until that check succeeds.
+
+The instructor account records are in this database. Canvas/API credentials are
+not: recreate the protected env file on the new host.
+
+### Analysis
+
+The backup is a standard SQLite database, so it can be opened read-only with
+SQLite, DB Browser for SQLite, Python/pandas, or exported to CSV later without
+touching the live grading system. For example:
+
+```bash
+sqlite3 -readonly grading-backup-YYYYMMDDTHHMMSSZ.db '.tables'
+sqlite3 -readonly grading-backup-YYYYMMDDTHHMMSSZ.db \
+  'SELECT session_id, problem_number, score, feedback FROM problems;' > problems.tsv
+```
+
 Run migrations explicitly before deployment cutovers:
 
 ```bash
