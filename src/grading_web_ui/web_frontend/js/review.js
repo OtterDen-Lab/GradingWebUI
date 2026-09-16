@@ -204,7 +204,7 @@ async function loadReviewProblem(index) {
 
         // Populate form
         document.getElementById('review-score-input').value = problem.score;
-        document.getElementById('review-feedback-input').value = problem.feedback || '';
+        document.getElementById('review-feedback-input').value = problem.response_specific_feedback || '';
 
         // Store current problem ID for saving
         document.getElementById('review-save-btn').dataset.problemId = problem.id;
@@ -269,6 +269,7 @@ document.getElementById('review-save-btn').addEventListener('click', async () =>
         // Update local cache
         reviewProblems[reviewCurrentIndex].score = score;
         reviewProblems[reviewCurrentIndex].feedback = feedback;
+        reviewProblems[reviewCurrentIndex].response_specific_feedback = feedback;
 
         // Update display
         document.getElementById('review-current-score').textContent = score;

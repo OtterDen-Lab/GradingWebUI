@@ -27,6 +27,14 @@ const prefetchedNextProblems = [];
 let prefetchQueueInFlight = false;
 let prefetchQueueProblemNumber = null;
 let lastSessionStats = null;
+let statsLoadedSessionId = null;
+let statsSectionFilter = 'all';
+let statsAvailableSections = [];
+let statsCompareMode = false;
+let statsCompareSectionFilter = 'all';
+let statsProblemComparisonSortColumn = 'problem';
+let statsProblemComparisonSortDirection = 'asc';
+let problemComparisonSortListenerBound = false;
 
 const DEFAULT_SUBJECTIVE_BUCKETS = [
     { id: 'above_beyond', label: 'Above and beyond', color: '#16a34a' },
@@ -1841,7 +1849,7 @@ function displayCurrentProblem() {
     if (currentProblem.graded) {
         // Already graded - show existing grade
         document.getElementById('score-input').value = currentProblem.score != null ? currentProblem.score : '';
-        document.getElementById('feedback-input').value = currentProblem.feedback || '';
+        document.getElementById('feedback-input').value = currentProblem.response_specific_feedback || '';
 
         // Remove blank indicator
         const oldBlankIndicator = document.getElementById('blank-indicator');
@@ -1853,7 +1861,7 @@ function displayCurrentProblem() {
     } else if (currentProblem.score != null && !currentProblem.graded) {
         // AI-graded suggestion should override heuristic blank flag
         document.getElementById('score-input').value = currentProblem.score != null ? currentProblem.score : '';
-        document.getElementById('feedback-input').value = currentProblem.feedback || '';
+        document.getElementById('feedback-input').value = currentProblem.response_specific_feedback || '';
 
         // Remove blank indicator
         const oldBlankIndicator = document.getElementById('blank-indicator');
@@ -1885,15 +1893,11 @@ function displayCurrentProblem() {
             indicatorContainer.appendChild(aiIndicator);
         }
     } else if (currentProblem.is_blank) {
-        const isAiBlank = currentProblem.blank_method === 'ai' || currentProblem.feedback;
-        if (isAiBlank) {
-            document.getElementById('score-input').value = '-';
-            document.getElementById('feedback-input').value = currentProblem.feedback || '';
-        } else {
-            // Don't auto-populate score for heuristically detected blanks - let user verify
-            document.getElementById('score-input').value = '';
-            document.getElementById('feedback-input').value = '';
-        }
+        // Keep the score field empty for blanks so the grader can decide whether
+        // to enter a numeric score or explicitly type '-' for a blank.
+        document.getElementById('score-input').value = '';
+        document.getElementById('feedback-input').value =
+            currentProblem.response_specific_feedback || '';
 
         // Show blank detection indicator
         const blankIndicator = document.createElement('div');
@@ -2915,90 +2919,680 @@ function closeStudentFeedbackModal() {
     studentFeedbackLoading.style.display = 'block';
 }
 
-// Load statistics
-async function loadStatistics() {
+function normalizeStatsSection(section) {
+    const raw = section === undefined || section === null ? '' : String(section).trim();
+    return raw || 'all';
+}
+
+function buildStatsQuery(section) {
+    const normalized = normalizeStatsSection(section);
+    const params = new URLSearchParams();
+    if (normalized !== 'all') {
+        params.set('section', normalized);
+    }
+    return {
+        normalized,
+        suffix: params.toString() ? `?${params.toString()}` : '',
+    };
+}
+
+async function fetchStatsBundle(section) {
+    const { normalized, suffix } = buildStatsQuery(section);
+    const [statsResponse, scoresResponse] = await Promise.all([
+        fetch(`${API_BASE}/sessions/${currentSession.id}/stats${suffix}`),
+        fetch(`${API_BASE}/sessions/${currentSession.id}/student-scores${suffix}`)
+    ]);
+
+    const stats = await statsResponse.json();
+    const scoresData = await scoresResponse.json();
+
+    return {
+        section: normalized,
+        stats,
+        scoresData,
+        availableSections: Array.isArray(scoresData.available_sections)
+            ? Array.from(new Set(scoresData.available_sections.map(value => String(value).trim()).filter(Boolean)))
+            : [],
+    };
+}
+
+function summarizeStatsBundle(bundle) {
+    const stats = bundle.stats || {};
+    const scoresData = bundle.scoresData || {};
+    const students = Array.isArray(scoresData.students) ? scoresData.students : [];
+    const studentsWithGrades = students.filter(s => s.total_score !== null && s.graded_problems > 0);
+
+    let summary = {
+        studentCount: studentsWithGrades.length,
+        totalSubmissions: stats.total_submissions ?? 0,
+        totalProblems: stats.total_problems ?? 0,
+        problemsGraded: stats.problems_graded ?? 0,
+        progressPercentage: stats.progress_percentage ?? 0,
+        rawAvg: null,
+        rawStddev: null,
+        rawMin: null,
+        rawMax: null,
+        normAvg: null,
+        normStddev: null,
+        blankRate: null,
+        blankStddev: null,
+    };
+
+    if (studentsWithGrades.length === 0) {
+        return summary;
+    }
+
+    const rawScores = studentsWithGrades.map(s => s.total_score);
+    const rawMin = Math.min(...rawScores);
+    const rawMax = Math.max(...rawScores);
+    const rawAvg = rawScores.reduce((sum, score) => sum + score, 0) / rawScores.length;
+    const rawVariance = rawScores.reduce((sum, score) => sum + Math.pow(score - rawAvg, 2), 0) / rawScores.length;
+    const rawStddev = Math.sqrt(rawVariance);
+
+    const normalizedScores = studentsWithGrades.map(student => {
+        const problemsGraded = student.graded_problems;
+        let maxPossibleForStudent = 0;
+        const gradedProblemStats = (stats.problem_stats || []).slice(0, problemsGraded);
+        gradedProblemStats.forEach(ps => {
+            maxPossibleForStudent += (ps.max_points ?? 8);
+        });
+        return maxPossibleForStudent > 0 ? (student.total_score / maxPossibleForStudent) * 100 : 0;
+    });
+    const normAvg = normalizedScores.reduce((sum, score) => sum + score, 0) / normalizedScores.length;
+    const normVariance = normalizedScores.reduce((sum, score) => sum + Math.pow(score - normAvg, 2), 0) / normalizedScores.length;
+    const normStddev = Math.sqrt(normVariance);
+
+    const totalBlankProblems = (stats.problem_stats || []).reduce((sum, ps) => sum + (ps.num_blank || 0), 0);
+    const totalGradedProblems = (stats.problem_stats || []).reduce((sum, ps) => sum + (ps.num_graded || 0), 0);
+    const blankRate = totalGradedProblems > 0 ? (totalBlankProblems / totalGradedProblems) * 100 : null;
+    const problemBlankPcts = (stats.problem_stats || [])
+        .filter(ps => ps.num_graded > 0)
+        .map(ps => ((ps.num_blank || 0) / ps.num_graded) * 100);
+    const blankStddev = problemBlankPcts.length > 1
+        ? Math.sqrt(problemBlankPcts.reduce((sum, pct) => sum + Math.pow(pct - (blankRate || 0), 2), 0) / problemBlankPcts.length)
+        : 0;
+
+    summary.rawMin = rawMin;
+    summary.rawMax = rawMax;
+    summary.rawAvg = rawAvg;
+    summary.rawStddev = rawStddev;
+    summary.normAvg = normAvg;
+    summary.normStddev = normStddev;
+    summary.blankRate = blankRate;
+    summary.blankStddev = blankStddev;
+    return summary;
+}
+
+function formatStatValue(value, digits = 2) {
+    return value === null || value === undefined ? 'N/A' : Number(value).toFixed(digits);
+}
+
+function formatSignedDelta(value, digits = 2) {
+    if (value === null || value === undefined) {
+        return 'N/A';
+    }
+    const rounded = Number(value).toFixed(digits);
+    return Number(value) >= 0 ? `+${rounded}` : rounded;
+}
+
+function buildComparisonSummaryTable(leftBundle, rightBundle, leftSummary, rightSummary) {
+    const leftLabel = escapeHtml(leftBundle.section === 'all' ? 'All sections' : leftBundle.section);
+    const rightLabel = escapeHtml(rightBundle.section === 'all' ? 'All sections' : rightBundle.section);
+    const deltaValue = (leftValue, rightValue) => (
+        leftValue === null || leftValue === undefined || rightValue === null || rightValue === undefined
+            ? null
+            : rightValue - leftValue
+    );
+
+    const rows = [
+        ['Students with grades', leftSummary.studentCount, rightSummary.studentCount, deltaValue(leftSummary.studentCount, rightSummary.studentCount), 0],
+        ['Total submissions', leftSummary.totalSubmissions, rightSummary.totalSubmissions, deltaValue(leftSummary.totalSubmissions, rightSummary.totalSubmissions), 0],
+        ['Problems graded', `${leftSummary.problemsGraded} / ${leftSummary.totalProblems}`, `${rightSummary.problemsGraded} / ${rightSummary.totalProblems}`, deltaValue(leftSummary.problemsGraded, rightSummary.problemsGraded), 0],
+        ['Overall progress', leftSummary.progressPercentage, rightSummary.progressPercentage, deltaValue(leftSummary.progressPercentage, rightSummary.progressPercentage), 1],
+        ['Average score', leftSummary.rawAvg, rightSummary.rawAvg, deltaValue(leftSummary.rawAvg, rightSummary.rawAvg), 2],
+        ['Normalized average', leftSummary.normAvg, rightSummary.normAvg, deltaValue(leftSummary.normAvg, rightSummary.normAvg), 1],
+        ['Blank rate', leftSummary.blankRate, rightSummary.blankRate, deltaValue(leftSummary.blankRate, rightSummary.blankRate), 1],
+    ];
+
+    return `
+        <table class="student-scores-table" style="margin-bottom: 20px;">
+            <thead>
+                <tr>
+                    <th>Metric</th>
+                    <th>${leftLabel}</th>
+                    <th>${rightLabel}</th>
+                    <th>Delta</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${rows.map(([label, leftValue, rightValue, deltaValue, digits]) => `
+                    <tr>
+                        <td><strong>${escapeHtml(label)}</strong></td>
+                        <td>${label === 'Problems graded' ? escapeHtml(leftValue) : formatStatValue(leftValue, digits)}</td>
+                        <td>${label === 'Problems graded' ? escapeHtml(rightValue) : formatStatValue(rightValue, digits)}</td>
+                        <td>${label === 'Problems graded' ? formatSignedDelta(deltaValue, 0) : formatSignedDelta(deltaValue, digits)}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+function normalizeProblemComparisonSortValue(value) {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function compareProblemComparisonValues(aValue, bValue, direction = 'asc') {
+    const ascending = direction !== 'desc';
+    const aNull = aValue === null || aValue === undefined;
+    const bNull = bValue === null || bValue === undefined;
+    if (aNull && bNull) return 0;
+    if (aNull) return 1;
+    if (bNull) return -1;
+    return ascending ? (aValue - bValue) : (bValue - aValue);
+}
+
+function isNumericComparisonValue(value) {
+    return value !== null && value !== undefined && Number.isFinite(Number(value));
+}
+
+function clamp01(value) {
+    return Math.max(0, Math.min(1, value));
+}
+
+function getComparisonHeatmapRange(values) {
+    const numericValues = values.filter(isNumericComparisonValue).map(Number);
+    if (numericValues.length === 0) {
+        return null;
+    }
+    return {
+        min: Math.min(...numericValues),
+        max: Math.max(...numericValues),
+    };
+}
+
+function getComparisonHeatmapColor(score) {
+    const clamped = clamp01(score);
+    const hue = 24 + (166 - 24) * clamped;
+    const saturation = 54;
+    const lightness = 94 - (18 * clamped);
+    return `hsl(${hue.toFixed(0)} ${saturation}% ${lightness.toFixed(0)}%)`;
+}
+
+function getComparisonHeatmapStyle(value, range, higherIsBetter = true) {
+    if (!isNumericComparisonValue(value)) {
+        return 'background-color: #f3f4f6;';
+    }
+
+    const numericValue = Number(value);
+    if (!range || range.max === range.min) {
+        return `background-color: ${getComparisonHeatmapColor(0.5)};`;
+    }
+
+    const t = (numericValue - range.min) / (range.max - range.min);
+    const score = higherIsBetter ? t : 1 - t;
+    return `background-color: ${getComparisonHeatmapColor(score)};`;
+}
+
+function getProblemComparisonSortIndicator(column) {
+    if (statsProblemComparisonSortColumn !== column) {
+        return '';
+    }
+    return statsProblemComparisonSortDirection === 'asc' ? ' ▲' : ' ▼';
+}
+
+function sortProblemComparisonTable(column) {
+    if (statsProblemComparisonSortColumn === column) {
+        statsProblemComparisonSortDirection = statsProblemComparisonSortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        statsProblemComparisonSortColumn = column;
+        statsProblemComparisonSortDirection = 'asc';
+    }
+
+    void loadStatistics(statsSectionFilter);
+}
+
+function bindProblemComparisonSortControls() {
+    if (problemComparisonSortListenerBound) {
+        return;
+    }
+
+    document.addEventListener('click', (event) => {
+        const header = event.target.closest('#problem-comparison-table th[data-sort]');
+        if (!header) {
+            return;
+        }
+        const column = header.dataset.sort;
+        if (column) {
+            sortProblemComparisonTable(column);
+        }
+    }, true);
+
+    problemComparisonSortListenerBound = true;
+}
+
+function buildProblemComparisonTable(leftBundle, rightBundle) {
+    const leftStats = Array.isArray(leftBundle.stats.problem_stats) ? leftBundle.stats.problem_stats : [];
+    const rightStats = Array.isArray(rightBundle.stats.problem_stats) ? rightBundle.stats.problem_stats : [];
+    const rightByProblem = new Map(rightStats.map(ps => [ps.problem_number, ps]));
+    const problemNumbers = Array.from(new Set([
+        ...leftStats.map(ps => ps.problem_number),
+        ...rightStats.map(ps => ps.problem_number),
+    ])).sort((a, b) => a - b);
+
+    const leftLabel = leftBundle.section === 'all' ? 'All sections' : leftBundle.section;
+    const rightLabel = rightBundle.section === 'all' ? 'All sections' : rightBundle.section;
+    const deltaValue = (leftValue, rightValue) => (
+        leftValue === null || leftValue === undefined || rightValue === null || rightValue === undefined
+            ? null
+            : rightValue - leftValue
+    );
+
+    const rows = problemNumbers.map((problemNumber) => {
+        const leftPs = leftStats.find(ps => ps.problem_number === problemNumber) || {};
+        const rightPs = rightByProblem.get(problemNumber) || {};
+        const leftAvg = leftPs.avg_score ?? null;
+        const rightAvg = rightPs.avg_score ?? null;
+        const leftNormalized = leftPs.mean_normalized ?? null;
+        const rightNormalized = rightPs.mean_normalized ?? null;
+        const leftBlank = leftPs.pct_blank ?? null;
+        const rightBlank = rightPs.pct_blank ?? null;
+        const leftTotal = leftPs.num_total ?? 0;
+        const rightTotal = rightPs.num_total ?? 0;
+        const avgDelta = deltaValue(leftAvg, rightAvg);
+        const normDelta = deltaValue(leftNormalized, rightNormalized);
+        const blankDelta = deltaValue(leftBlank, rightBlank);
+
+        return {
+            problemNumber,
+            leftAvg,
+            rightAvg,
+            leftNormalized,
+            rightNormalized,
+            avgDelta,
+            normDelta,
+            leftBlank,
+            rightBlank,
+            blankDelta,
+            leftTotal,
+            rightTotal,
+        };
+    });
+
+    const heatmapRanges = {
+        leftAvg: getComparisonHeatmapRange(rows.map(row => row.leftAvg)),
+        rightAvg: getComparisonHeatmapRange(rows.map(row => row.rightAvg)),
+        leftNormalized: getComparisonHeatmapRange(rows.map(row => row.leftNormalized)),
+        rightNormalized: getComparisonHeatmapRange(rows.map(row => row.rightNormalized)),
+        avgDelta: getComparisonHeatmapRange(rows.map(row => row.avgDelta)),
+        normDelta: getComparisonHeatmapRange(rows.map(row => row.normDelta)),
+        leftBlank: getComparisonHeatmapRange(rows.map(row => row.leftBlank)),
+        rightBlank: getComparisonHeatmapRange(rows.map(row => row.rightBlank)),
+        blankDelta: getComparisonHeatmapRange(rows.map(row => row.blankDelta)),
+    };
+
+    rows.sort((a, b) => {
+        const sortColumn = statsProblemComparisonSortColumn;
+        const sortDirection = statsProblemComparisonSortDirection;
+        let aValue;
+        let bValue;
+
+        switch (sortColumn) {
+            case 'left_avg':
+                aValue = a.leftAvg;
+                bValue = b.leftAvg;
+                break;
+            case 'right_avg':
+                aValue = a.rightAvg;
+                bValue = b.rightAvg;
+                break;
+            case 'left_normalized':
+                aValue = a.leftNormalized;
+                bValue = b.leftNormalized;
+                break;
+            case 'right_normalized':
+                aValue = a.rightNormalized;
+                bValue = b.rightNormalized;
+                break;
+            case 'avg_delta':
+                aValue = a.avgDelta;
+                bValue = b.avgDelta;
+                break;
+            case 'norm_delta':
+                aValue = a.normDelta;
+                bValue = b.normDelta;
+                break;
+            case 'left_blank':
+                aValue = a.leftBlank;
+                bValue = b.leftBlank;
+                break;
+            case 'right_blank':
+                aValue = a.rightBlank;
+                bValue = b.rightBlank;
+                break;
+            case 'blank_delta':
+                aValue = a.blankDelta;
+                bValue = b.blankDelta;
+                break;
+            case 'problem':
+            default:
+                aValue = a.problemNumber;
+                bValue = b.problemNumber;
+                break;
+        }
+
+        let comparison = compareProblemComparisonValues(aValue, bValue, sortDirection);
+        if (comparison !== 0) {
+            return comparison;
+        }
+        return compareProblemComparisonValues(a.problemNumber, b.problemNumber, 'asc');
+    });
+
+    const formatPct = (value) => value === null || value === undefined ? 'N/A' : `${Number(value).toFixed(1)}%`;
+    const formatScore = (value) => value === null || value === undefined ? 'N/A' : Number(value).toFixed(2);
+
+    return `
+        <h3 style="margin-top: 24px;">Per-Problem Comparison</h3>
+        <table class="student-scores-table" id="problem-comparison-table">
+            <thead>
+                <tr>
+                    <th class="sortable" data-sort="problem" onclick="sortProblemComparisonTable('problem')" title="Click to sort by problem number">
+                        Problem <span class="sort-indicator">${getProblemComparisonSortIndicator('problem')}</span>
+                    </th>
+                    <th class="sortable" data-sort="left_avg" onclick="sortProblemComparisonTable('left_avg')" title="Click to sort by ${escapeHtml(leftLabel)} average">
+                        ${escapeHtml(leftLabel)} Avg <span class="sort-indicator">${getProblemComparisonSortIndicator('left_avg')}</span>
+                    </th>
+                    <th class="sortable" data-sort="right_avg" onclick="sortProblemComparisonTable('right_avg')" title="Click to sort by ${escapeHtml(rightLabel)} average">
+                        ${escapeHtml(rightLabel)} Avg <span class="sort-indicator">${getProblemComparisonSortIndicator('right_avg')}</span>
+                    </th>
+                    <th class="sortable" data-sort="avg_delta" onclick="sortProblemComparisonTable('avg_delta')" title="Click to sort by average delta">
+                        Avg Delta <span class="sort-indicator">${getProblemComparisonSortIndicator('avg_delta')}</span>
+                    </th>
+                    <th class="sortable" data-sort="left_normalized" onclick="sortProblemComparisonTable('left_normalized')" title="Click to sort by ${escapeHtml(leftLabel)} normalized score">
+                        ${escapeHtml(leftLabel)} Norm <span class="sort-indicator">${getProblemComparisonSortIndicator('left_normalized')}</span>
+                    </th>
+                    <th class="sortable" data-sort="right_normalized" onclick="sortProblemComparisonTable('right_normalized')" title="Click to sort by ${escapeHtml(rightLabel)} normalized score">
+                        ${escapeHtml(rightLabel)} Norm <span class="sort-indicator">${getProblemComparisonSortIndicator('right_normalized')}</span>
+                    </th>
+                    <th class="sortable" data-sort="norm_delta" onclick="sortProblemComparisonTable('norm_delta')" title="Click to sort by normalized delta">
+                        Norm Delta <span class="sort-indicator">${getProblemComparisonSortIndicator('norm_delta')}</span>
+                    </th>
+                    <th class="sortable" data-sort="left_blank" onclick="sortProblemComparisonTable('left_blank')" title="Click to sort by ${escapeHtml(leftLabel)} blank rate">
+                        ${escapeHtml(leftLabel)} Blank <span class="sort-indicator">${getProblemComparisonSortIndicator('left_blank')}</span>
+                    </th>
+                    <th class="sortable" data-sort="right_blank" onclick="sortProblemComparisonTable('right_blank')" title="Click to sort by ${escapeHtml(rightLabel)} blank rate">
+                        ${escapeHtml(rightLabel)} Blank <span class="sort-indicator">${getProblemComparisonSortIndicator('right_blank')}</span>
+                    </th>
+                    <th class="sortable" data-sort="blank_delta" onclick="sortProblemComparisonTable('blank_delta')" title="Click to sort by blank-rate delta">
+                        Blank Delta <span class="sort-indicator">${getProblemComparisonSortIndicator('blank_delta')}</span>
+                    </th>
+                </tr>
+            </thead>
+            <tbody id="problem-comparison-tbody">
+                ${rows.map((row) => `
+                    <tr style="cursor: pointer;"
+                        data-problem-number="${row.problemNumber}"
+                        data-left-avg="${row.leftAvg ?? ''}"
+                        data-right-avg="${row.rightAvg ?? ''}"
+                        data-avg-delta="${row.avgDelta ?? ''}"
+                        data-left-normalized="${row.leftNormalized ?? ''}"
+                        data-right-normalized="${row.rightNormalized ?? ''}"
+                        data-norm-delta="${row.normDelta ?? ''}"
+                        data-left-blank="${row.leftBlank ?? ''}"
+                        data-right-blank="${row.rightBlank ?? ''}"
+                        data-blank-delta="${row.blankDelta ?? ''}"
+                        onclick="reviewProblemFromStats(${row.problemNumber})">
+                        <td><strong>Problem ${row.problemNumber}</strong></td>
+                        <td style="${getComparisonHeatmapStyle(row.leftAvg, heatmapRanges.leftAvg, true)}">${formatScore(row.leftAvg)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.rightAvg, heatmapRanges.rightAvg, true)}">${formatScore(row.rightAvg)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.avgDelta, heatmapRanges.avgDelta, true)}">${formatSignedDelta(row.avgDelta, 2)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.leftNormalized, heatmapRanges.leftNormalized, true)}">${formatScore(row.leftNormalized, 3)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.rightNormalized, heatmapRanges.rightNormalized, true)}">${formatScore(row.rightNormalized, 3)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.normDelta, heatmapRanges.normDelta, true)}">${formatSignedDelta(row.normDelta, 3)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.leftBlank, heatmapRanges.leftBlank, false)}">${formatPct(row.leftBlank)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.rightBlank, heatmapRanges.rightBlank, false)}">${formatPct(row.rightBlank)}</td>
+                        <td style="${getComparisonHeatmapStyle(row.blankDelta, heatmapRanges.blankDelta, false)}">${formatSignedDelta(row.blankDelta, 1)}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+function buildComparisonControlsHtml() {
+    if (statsAvailableSections.length === 0) {
+        return `
+            <div style="margin: 0 0 16px 0; padding: 12px 14px; background: #fff7ed; border: 1px solid #fdba74; border-radius: 8px; color: #9a3412;">
+                <div style="font-weight: 600; margin-bottom: 6px;">Section comparison is not available yet</div>
+                <div style="font-size: 13px; line-height: 1.4; margin-bottom: 10px;">
+                    This session does not currently have cached section labels. If Canvas is available, you can fetch them now.
+                </div>
+                <button id="refresh-stats-sections-btn" class="btn btn-secondary btn-small" type="button">
+                    Refresh sections from Canvas
+                </button>
+            </div>
+        `;
+    }
+
+    if (statsAvailableSections.length === 1) {
+        return `
+            <div style="margin: 0 0 16px 0; padding: 12px 14px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 8px; color: #1d4ed8;">
+                <div style="font-weight: 600; margin-bottom: 6px;">Only one section is available</div>
+                <div style="font-size: 13px; line-height: 1.4; margin-bottom: 10px;">
+                    Comparison needs at least two section labels. You can still filter the stats to this section, and you can try refreshing from Canvas if you expected more sections.
+                </div>
+                <button id="refresh-stats-sections-btn" class="btn btn-secondary btn-small" type="button">
+                    Refresh sections from Canvas
+                </button>
+            </div>
+        `;
+    }
+
+    const compareSectionOptions = ['all', ...statsAvailableSections];
+    const compareSectionValid = compareSectionOptions.includes(statsCompareSectionFilter)
+        ? statsCompareSectionFilter
+        : 'all';
+
+    return `
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 0 0 16px 0; padding: 12px 14px; background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 8px;">
+            <label for="stats-section-filter" style="font-size: 14px; font-weight: 600; color: var(--gray-700);">
+                Section
+            </label>
+            <select id="stats-section-filter" style="min-width: 180px; padding: 8px; border-radius: 4px; border: 1px solid var(--gray-300);">
+                <option value="all" ${statsSectionFilter === 'all' ? 'selected' : ''}>All sections</option>
+                ${statsAvailableSections.map((section) => `
+                    <option value="${escapeHtml(section)}" ${statsSectionFilter === section ? 'selected' : ''}>
+                        ${escapeHtml(section)}
+                    </option>
+                `).join('')}
+            </select>
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; color: var(--gray-700);">
+                <input type="checkbox" id="stats-compare-toggle" ${statsCompareMode ? 'checked' : ''}>
+                Compare sections
+            </label>
+            <div id="stats-compare-controls" style="display: ${statsCompareMode ? 'flex' : 'none'}; flex-wrap: wrap; gap: 10px; align-items: center;">
+                <span style="font-size: 13px; color: var(--gray-600);">Against</span>
+                <select id="stats-compare-section-filter" style="min-width: 180px; padding: 8px; border-radius: 4px; border: 1px solid var(--gray-300);">
+                    <option value="all" ${compareSectionValid === 'all' ? 'selected' : ''}>All sections</option>
+                    ${statsAvailableSections.map((section) => `
+                        <option value="${escapeHtml(section)}" ${compareSectionValid === section ? 'selected' : ''}>
+                            ${escapeHtml(section)}
+                        </option>
+                    `).join('')}
+                </select>
+            </div>
+            <div style="font-size: 13px; color: var(--gray-600);">
+                Viewing: <strong>${escapeHtml(statsSectionFilter === 'all' ? 'All sections' : statsSectionFilter)}</strong>
+            </div>
+        </div>
+    `;
+}
+
+async function refreshStatsSectionsFromCanvas() {
+    if (!currentSession) return;
+
+    const button = document.getElementById('refresh-stats-sections-btn');
+    if (button) {
+        button.disabled = true;
+        button.textContent = 'Refreshing...';
+    }
+
     try {
-        const [statsResponse, scoresResponse] = await Promise.all([
-            fetch(`${API_BASE}/sessions/${currentSession.id}/stats`),
-            fetch(`${API_BASE}/sessions/${currentSession.id}/student-scores`)
-        ]);
+        const response = await fetch(`${API_BASE}/matching/${currentSession.id}/students?reveal_names=false`);
+        if (!response.ok) {
+            const message = await response.text();
+            throw new Error(message || 'Failed to refresh section roster');
+        }
 
-        const stats = await statsResponse.json();
-        const scoresData = await scoresResponse.json();
+        statsLoadedSessionId = null;
+        await loadStatistics(statsSectionFilter);
+    } catch (error) {
+        console.error('Failed to refresh section roster:', error);
+        alert(`Could not refresh sections from Canvas: ${error.message}`);
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = 'Refresh sections from Canvas';
+        }
+    }
+}
 
+// Load statistics
+async function loadStatistics(sectionFilter) {
+    try {
+        const sessionId = Number(currentSession.id);
+        if (statsLoadedSessionId !== sessionId) {
+            statsLoadedSessionId = sessionId;
+            statsSectionFilter = 'all';
+            statsAvailableSections = [];
+            statsCompareMode = false;
+            statsCompareSectionFilter = 'all';
+        }
+
+        const requestedSectionFilter = sectionFilter === undefined ? statsSectionFilter : sectionFilter;
+        const normalizedSectionFilter = requestedSectionFilter && requestedSectionFilter !== 'all'
+            ? requestedSectionFilter
+            : 'all';
+        const primaryBundle = await fetchStatsBundle(normalizedSectionFilter);
+        const stats = primaryBundle.stats;
+        const scoresData = primaryBundle.scoresData;
         const container = document.getElementById('stats-container');
+
+        statsAvailableSections = primaryBundle.availableSections;
+
+        if (
+            normalizedSectionFilter !== 'all' &&
+            statsAvailableSections.length > 0 &&
+            !statsAvailableSections.includes(normalizedSectionFilter)
+        ) {
+            statsSectionFilter = 'all';
+            return loadStatistics('all');
+        }
+
+        statsSectionFilter = normalizedSectionFilter;
+        const activeSectionLabel = statsSectionFilter === 'all' ? 'All sections' : statsSectionFilter;
+        let sectionFilterHtml = buildComparisonControlsHtml();
+        const bindStatsControls = () => {
+            const sectionFilterSelect = document.getElementById('stats-section-filter');
+            if (sectionFilterSelect) {
+                sectionFilterSelect.addEventListener('change', () => {
+                    statsSectionFilter = sectionFilterSelect.value || 'all';
+                    loadStatistics(statsSectionFilter);
+                });
+            }
+
+            const compareToggle = document.getElementById('stats-compare-toggle');
+            if (compareToggle) {
+                compareToggle.addEventListener('change', () => {
+                    statsCompareMode = compareToggle.checked;
+                    loadStatistics(statsSectionFilter);
+                });
+            }
+
+            const compareSectionSelect = document.getElementById('stats-compare-section-filter');
+            if (compareSectionSelect) {
+                compareSectionSelect.addEventListener('change', () => {
+                    statsCompareSectionFilter = compareSectionSelect.value || 'all';
+                    loadStatistics(statsSectionFilter);
+                });
+            }
+
+            const sectionRefreshButton = document.getElementById('refresh-stats-sections-btn');
+            if (sectionRefreshButton) {
+                sectionRefreshButton.addEventListener('click', refreshStatsSectionsFromCanvas);
+            }
+        };
+
+        if (statsCompareMode && statsAvailableSections.length > 1) {
+            let compareSection = normalizeStatsSection(statsCompareSectionFilter);
+            if (compareSection === statsSectionFilter || (compareSection !== 'all' && !statsAvailableSections.includes(compareSection))) {
+                compareSection = statsSectionFilter === 'all'
+                    ? statsAvailableSections[0]
+                    : (statsAvailableSections.find(section => section !== statsSectionFilter) || 'all');
+            }
+            statsCompareSectionFilter = compareSection;
+            sectionFilterHtml = buildComparisonControlsHtml();
+
+            const compareBundle = await fetchStatsBundle(compareSection);
+            const compareLeftSummary = summarizeStatsBundle(primaryBundle);
+            const compareRightSummary = summarizeStatsBundle(compareBundle);
+            const compareLeftLabel = statsSectionFilter === 'all' ? 'All sections' : statsSectionFilter;
+            const compareRightLabel = compareSection === 'all' ? 'All sections' : compareSection;
+
+            container.innerHTML = sectionFilterHtml + `
+                <h3>Section Comparison</h3>
+                <p style="margin-top: 0; color: var(--gray-700);">
+                    Comparing <strong>${escapeHtml(compareLeftLabel)}</strong> and <strong>${escapeHtml(compareRightLabel)}</strong>.
+                </p>
+                ${buildComparisonSummaryTable(primaryBundle, compareBundle, compareLeftSummary, compareRightSummary)}
+                ${buildProblemComparisonTable(primaryBundle, compareBundle)}
+                <div style="margin-top: 20px; padding: 12px 14px; background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 8px; color: var(--gray-700); font-size: 13px;">
+                    Switch off compare mode to return to the single-section student table view.
+                </div>
+            `; 
+            bindStatsControls();
+            lastSessionStats = primaryBundle.stats;
+            statsLoadedSessionId = sessionId;
+            return;
+        }
 
         // Calculate overall statistics based on what's been graded so far
         let examStatsHtml = '';
         const studentsWithGrades = scoresData.students.filter(s => s.total_score !== null && s.graded_problems > 0);
 
         if (studentsWithGrades.length > 0) {
-            // Get raw scores
             const rawScores = studentsWithGrades.map(s => s.total_score);
             const rawMin = Math.min(...rawScores);
             const rawMax = Math.max(...rawScores);
             const rawAvg = rawScores.reduce((sum, s) => sum + s, 0) / rawScores.length;
 
-            // Calculate raw standard deviation
             const rawVariance = rawScores.reduce((sum, s) => sum + Math.pow(s - rawAvg, 2), 0) / rawScores.length;
             const rawStddev = Math.sqrt(rawVariance);
 
-            // Calculate normalized scores (percentage of points earned out of points graded)
             const normalizedScores = studentsWithGrades.map(s => {
-                // Calculate max possible points for problems this student has been graded on
-                // We need to figure out which problems they've been graded on
-                // For now, approximate using their graded_problems count
                 const problemsGraded = s.graded_problems;
-
-                // Get the actual max points for problems based on graded count
-                // Assume problems are graded in order (1, 2, 3, etc.)
                 let maxPossibleForStudent = 0;
                 const gradedProblemStats = stats.problem_stats.slice(0, problemsGraded);
                 gradedProblemStats.forEach(ps => {
                     maxPossibleForStudent += (ps.max_points ?? 8);
                 });
-
-                // Return normalized score as percentage
                 return maxPossibleForStudent > 0 ? (s.total_score / maxPossibleForStudent) * 100 : 0;
             });
 
             const normAvg = normalizedScores.reduce((sum, s) => sum + s, 0) / normalizedScores.length;
-
-            // Calculate normalized standard deviation
             const normVariance = normalizedScores.reduce((sum, s) => sum + Math.pow(s - normAvg, 2), 0) / normalizedScores.length;
             const normStddev = Math.sqrt(normVariance);
 
-            // Calculate total possible points across all problems
-            const totalPossible = stats.problem_stats.reduce((sum, ps) => {
-                return sum + (ps.max_points ?? 8);
-            }, 0);
+            const canvasPercentage = rawAvg;
 
-            // Calculate Canvas grade (raw score out of 100)
-            const canvasAvg = rawAvg; // Canvas grade is the raw score (out of 100)
-            const canvasPercentage = canvasAvg; // Since it's out of 100, the score IS the percentage
-
-            // Calculate blank percentage statistics per student
-            const blankPercentages = studentsWithGrades.map(student => {
-                // Find all graded problems for this student
-                const studentProblems = stats.problem_stats.filter(ps => ps.num_graded > 0);
-                if (studentProblems.length === 0) return 0;
-
-                // Count how many problems this student left blank
-                // We don't have per-student blank data easily accessible, so we'll calculate from problem_stats
-                // For now, use the overall blank percentage as an approximation
-                // A better approach would require additional API endpoint for per-student blank counts
-                const totalBlankProblems = stats.problem_stats.reduce((sum, ps) => sum + (ps.num_blank || 0), 0);
-                const totalGradedProblems = stats.problem_stats.reduce((sum, ps) => sum + ps.num_graded, 0);
-
-                return totalGradedProblems > 0 ? (totalBlankProblems / totalGradedProblems) * 100 : 0;
-            });
-
-            // Calculate average blank percentage across all graded problems
             const totalBlankProblems = stats.problem_stats.reduce((sum, ps) => sum + (ps.num_blank || 0), 0);
             const totalGradedProblems = stats.problem_stats.reduce((sum, ps) => sum + ps.num_graded, 0);
             const avgBlankPct = totalGradedProblems > 0 ? (totalBlankProblems / totalGradedProblems) * 100 : 0;
 
-            // Calculate stddev of blank percentages per problem
             const problemBlankPcts = stats.problem_stats
                 .filter(ps => ps.num_graded > 0)
                 .map(ps => ((ps.num_blank || 0) / ps.num_graded) * 100);
@@ -3038,7 +3632,7 @@ async function loadStatistics() {
             `;
         }
 
-        container.innerHTML = examStatsHtml + `
+        container.innerHTML = sectionFilterHtml + examStatsHtml + `
             <h3>Grading Progress</h3>
             <div class="overall-stats">
                 <div class="stat-card">
@@ -3064,27 +3658,18 @@ async function loadStatistics() {
             container.innerHTML += '<h3 style="margin-top: 30px;">Per-Problem Statistics <small style="font-size: 14px; font-weight: normal; color: var(--gray-600);">(click a card to open in grading)</small></h3>';
             const problemStatsHtml = stats.problem_stats.map(ps => {
                 const problemProgress = ps.num_total > 0 ? (ps.num_graded / ps.num_total * 100) : 0;
-
-                // Format statistics with fallbacks
                 const avgText = ps.avg_score !== null && ps.avg_score !== undefined ? ps.avg_score.toFixed(2) : 'N/A';
                 const minText = ps.min_score !== null && ps.min_score !== undefined ? ps.min_score.toFixed(2) : 'N/A';
                 const maxText = ps.max_score !== null && ps.max_score !== undefined ? ps.max_score.toFixed(2) : 'N/A';
                 const medianText = ps.median_score !== null && ps.median_score !== undefined ? ps.median_score.toFixed(2) : 'N/A';
-                const stddevText = ps.stddev_score !== null && ps.stddev_score !== undefined ? ps.stddev_score.toFixed(2) : 'N/A';
-
-                // Format mean ± stddev
                 const meanPlusMinusText = (ps.avg_score !== null && ps.avg_score !== undefined && ps.stddev_score !== null && ps.stddev_score !== undefined)
                     ? `${ps.avg_score.toFixed(2)} ± ${ps.stddev_score.toFixed(2)}`
                     : 'N/A';
-
-                // Format normalized mean ± normalized stddev (as percentages)
                 const meanNormPlusMinusText = (ps.mean_normalized !== null && ps.mean_normalized !== undefined && ps.stddev_normalized !== null && ps.stddev_normalized !== undefined)
                     ? `${(ps.mean_normalized * 100).toFixed(1)}% ± ${(ps.stddev_normalized * 100).toFixed(1)}%`
                     : 'N/A';
-
                 const maxPointsText = ps.max_points !== null && ps.max_points !== undefined ? ps.max_points.toFixed(1) : 'N/A';
 
-                // Format blank % with highlight if high skip rate
                 let pctBlankDisplay;
                 const hasHighSkipRate = ps.pct_blank !== null && ps.pct_blank !== undefined && ps.pct_blank > 25;
                 if (ps.pct_blank !== null && ps.pct_blank !== undefined) {
@@ -3098,27 +3683,21 @@ async function loadStatistics() {
                     pctBlankDisplay = '<div style="color: var(--gray-600); font-size: 12px; margin-bottom: 2px;">Blank %</div><div style="font-weight: 600; font-size: 16px;">N/A</div>';
                 }
 
-                // Determine CSS classes for visual indicators
                 let cssClasses = 'stat-card';
-
-                // Completion indicator - add 'fully-graded' class if all problems graded
                 if (ps.num_graded >= ps.num_total && ps.num_total > 0) {
                     cssClasses += ' fully-graded';
                 }
-
-                // Performance indicator - add class based on normalized mean
-                // Only add if we have valid data
                 if (ps.mean_normalized !== null && ps.mean_normalized !== undefined) {
                     if (ps.mean_normalized >= 0.9) {
-                        cssClasses += ' performance-excellent';  // 90%+
+                        cssClasses += ' performance-excellent';
                     } else if (ps.mean_normalized >= 0.75) {
-                        cssClasses += ' performance-good';       // 75-89%
+                        cssClasses += ' performance-good';
                     } else if (ps.mean_normalized >= 0.6) {
-                        cssClasses += ' performance-moderate';   // 60-74%
+                        cssClasses += ' performance-moderate';
                     } else if (ps.mean_normalized >= 0.5) {
-                        cssClasses += ' performance-poor';       // 50-59%
+                        cssClasses += ' performance-poor';
                     } else {
-                        cssClasses += ' performance-verypoor';   // <50%
+                        cssClasses += ' performance-verypoor';
                     }
                 }
 
@@ -3185,7 +3764,6 @@ async function loadStatistics() {
                     <span id="student-scores-toggle">▶</span> Student Scores (${scoresData.students.length})
                 </h3>
             `;
-            // Check if current user is a TA for anonymous grading
             const isTA = currentUser && currentUser.role === 'ta';
             const canDeleteSubmissions = currentUser && currentUser.role === 'instructor';
 
@@ -3273,10 +3851,14 @@ async function loadStatistics() {
             });
         }
 
+        bindStatsControls();
+
         // Load TA assignments for instructors
         if (typeof loadSessionAssignments === 'function') {
             await loadSessionAssignments();
         }
+        lastSessionStats = stats;
+        statsLoadedSessionId = sessionId;
     } catch (error) {
         console.error('Failed to load statistics:', error);
     }
@@ -3592,6 +4174,7 @@ async function openFinalizeUploadDialog() {
     }));
 
     document.getElementById('finalize-clobber-feedback').checked = false;
+    document.getElementById('finalize-suppress-feedback').checked = false;
     await populateCanvasTargetControls('finalize', canvasInfo);
     renderFinalizeUploadStudents();
 
@@ -3766,6 +4349,7 @@ document.getElementById('finalize-upload-confirm-btn').onclick = async () => {
         await startFinalization({
             clobber_feedback: document.getElementById('finalize-clobber-feedback').checked,
             keep_previous_best: true,
+            suppress_feedback: document.getElementById('finalize-suppress-feedback').checked,
             submission_ids: selectedSubmissionIds,
         });
     } catch (error) {

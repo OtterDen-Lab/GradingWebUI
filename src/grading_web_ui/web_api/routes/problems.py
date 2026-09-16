@@ -20,7 +20,10 @@ from ..repositories import (ProblemRepository, SubmissionRepository,
                             SessionRepository, ProblemMetadataRepository,
                             SubjectiveTriageRepository)
 from ..services.problem_service import ProblemService
-from ..services.feedback_text import merge_general_feedback
+from ..services.feedback_text import (
+  merge_general_feedback,
+  extract_response_specific_feedback,
+)
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from ..services.qr_scanner import qr_matches_problem_number
 from ..auth import require_session_access, get_current_user
@@ -54,6 +57,16 @@ _DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
 TAG_SIGNATURE_DELIMITER = "|"
+
+
+def _display_feedback(problem) -> Optional[str]:
+  metadata_repo = ProblemMetadataRepository()
+  default_feedback_row = metadata_repo.get_default_feedback(
+    problem.session_id,
+    problem.problem_number,
+  )
+  default_feedback = default_feedback_row[0] if default_feedback_row else None
+  return merge_general_feedback(default_feedback, problem.feedback)
 
 
 def _cache_key_for_regeneration(problem, quiz_yaml_text: Optional[str]) -> tuple:
@@ -226,11 +239,6 @@ def _parse_model_csv(raw_value: str) -> list[str]:
 
 def _is_truthy(raw_value: str) -> bool:
   return (raw_value or "").strip().lower() in ("1", "true", "yes", "on")
-
-
-def _ollama_transcription_enabled() -> bool:
-  # Disabled by default due operational reliability issues.
-  return _is_truthy(os.getenv("ENABLE_OLLAMA_DECIPHER", "false"))
 
 
 def _get_subjective_settings(session_id: int, problem_number: int) -> tuple[str, list[dict]]:
@@ -588,7 +596,8 @@ async def get_next_problem(
     submission_id=problem.submission_id,
     image_data=image_data,
     score=problem.score,
-    feedback=problem.feedback,
+    feedback=_display_feedback(problem),
+    response_specific_feedback=problem.feedback,
     graded=problem.graded,
     max_points=problem.max_points,
     current_index=current_index,
@@ -666,7 +675,8 @@ async def get_previous_problem(
     submission_id=problem.submission_id,
     image_data=image_data,
     score=problem.score,
-    feedback=problem.feedback,
+    feedback=_display_feedback(problem),
+    response_specific_feedback=problem.feedback,
     graded=problem.graded,
     max_points=problem.max_points,
     current_index=current_index,
@@ -752,7 +762,8 @@ async def get_next_problem_in_bucket(
     submission_id=problem.submission_id,
     image_data=image_data,
     score=problem.score,
-    feedback=problem.feedback,
+    feedback=_display_feedback(problem),
+    response_specific_feedback=problem.feedback,
     graded=problem.graded,
     max_points=problem.max_points,
     current_index=current_index,
@@ -838,7 +849,8 @@ async def get_previous_problem_in_bucket(
     submission_id=problem.submission_id,
     image_data=image_data,
     score=problem.score,
-    feedback=problem.feedback,
+    feedback=_display_feedback(problem),
+    response_specific_feedback=problem.feedback,
     graded=problem.graded,
     max_points=problem.max_points,
     current_index=current_index,
@@ -923,7 +935,8 @@ async def get_sample_problem_in_bucket(
     submission_id=problem.submission_id,
     image_data=image_data,
     score=problem.score,
-    feedback=problem.feedback,
+    feedback=_display_feedback(problem),
+    response_specific_feedback=problem.feedback,
     graded=problem.graded,
     max_points=problem.max_points,
     current_index=current_index,
@@ -978,11 +991,14 @@ async def grade_problem(
     problem.session_id, problem.problem_number
   )
   default_feedback = default_feedback_row[0] if default_feedback_row else None
-  merged_feedback = merge_general_feedback(default_feedback, grade.feedback)
+  stored_feedback = extract_response_specific_feedback(
+    default_feedback,
+    grade.feedback
+  )
 
   if is_manual_blank:
     # Mark as blank with score 0
-    problem_repo.mark_as_blank(problem_id, merged_feedback)
+    problem_repo.mark_as_blank(problem_id, stored_feedback)
   else:
     # Normal grading - convert score to float and save
     try:
@@ -993,7 +1009,7 @@ async def grade_problem(
         detail=f"Invalid score value: {grade.score}. Must be a number or '-' for blank."
       )
 
-    problem_repo.update_grade(problem_id, score_value, merged_feedback)
+    problem_repo.update_grade(problem_id, score_value, stored_feedback)
 
   # If this response had a subjective triage assignment, clear it now that
   # the response is explicitly graded.
@@ -1048,7 +1064,8 @@ async def get_problem(
     submission_id=problem.submission_id,
     image_data=image_data,
     score=problem.score,
-    feedback=problem.feedback,
+    feedback=_display_feedback(problem),
+    response_specific_feedback=problem.feedback,
     graded=problem.graded,
     current_index=counts["graded"] + 1,
     total_count=counts["total"],
@@ -1142,7 +1159,7 @@ async def decipher_handwriting(
 
     Args:
         problem_id: ID of the problem to transcribe
-        model: AI model to use ("default", "sonnet", "opus", "ollama")
+        model: AI model to use ("default", "sonnet", "opus")
                "default" uses Anthropic Sonnet-family candidates
     """
   problem_repo = ProblemRepository()
@@ -1198,24 +1215,10 @@ async def decipher_handwriting(
       response, usage = ai.query_ai(query, attachments=[("png", image_base64)])
       transcription = response
       model_name = f"Anthropic ({usage.get('model', 'unknown')})"
-    elif selected_model == "ollama":
-      if not _ollama_transcription_enabled():
-        raise HTTPException(
-          status_code=400,
-          detail=(
-            "Ollama transcription is disabled. Use 'default' (Anthropic) or "
-            "'sonnet'/'opus' instead."
-          )
-        )
-
-      ai = ai_helper.AI_Helper__Ollama()
-      response, usage = ai.query_ai(query, attachments=[("png", image_base64)])
-      transcription = response
-      model_name = f"Ollama ({usage.get('model', os.getenv('OLLAMA_MODEL', 'qwen3-vl:2b'))})"
     else:
       raise HTTPException(
         status_code=400,
-        detail="Unknown model. Expected one of: default, sonnet, opus, ollama"
+        detail="Unknown model. Expected one of: default, sonnet, opus"
       )
 
     # Validate transcription is not empty
@@ -1224,11 +1227,6 @@ async def decipher_handwriting(
       log.warning(
         f"Empty transcription from {model_name} for problem {problem_id}")
       raise HTTPException(status_code=500, detail=error_msg)
-
-    # Cache Ollama results for future use (to avoid repeated slow requests)
-    if model == "ollama":
-      problem_repo.update_transcription(problem_id, transcription.strip(), model_name)
-      log.info(f"Cached Ollama transcription for problem {problem_id}")
 
     return {
       "problem_id": problem_id,

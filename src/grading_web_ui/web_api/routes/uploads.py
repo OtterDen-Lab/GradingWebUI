@@ -59,7 +59,7 @@ class SplitPointsSubmission(BaseModel):
   split_points: Dict[str, List[int]]
   skip_first_region: bool = True  # Default to skipping first region (header/title)
   last_page_blank: bool = False  # Default to not skipping last page
-  ai_provider: str = "anthropic"  # AI provider for name extraction (anthropic, openai, ollama)
+  ai_provider: str = "anthropic"  # AI provider for name extraction (anthropic, openai)
 
 
 class NameBoxSelectionSubmission(BaseModel):

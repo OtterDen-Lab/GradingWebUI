@@ -1,7 +1,7 @@
 """
 Session management endpoints.
 """
-from fastapi import APIRouter, HTTPException, Response, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, Response, UploadFile, File, Depends, Request
 from fastapi.responses import StreamingResponse
 from typing import List, Optional
 import json
@@ -19,7 +19,11 @@ from ..services.quiz_encryption import (
   set_runtime_encryption_key,
   get_question_qrcode_class,
 )
-from ..services.feedback_text import merge_general_feedback, join_feedback_parts
+from ..services.feedback_text import (
+  merge_general_feedback,
+  join_feedback_parts,
+  extract_response_specific_feedback,
+)
 
 from ..models import (
   SessionCreate,
@@ -67,6 +71,184 @@ DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
 TAG_SIGNATURE_DELIMITER = "|"
+
+
+def _display_feedback(problem) -> Optional[str]:
+  metadata_repo = ProblemMetadataRepository()
+  default_feedback_row = metadata_repo.get_default_feedback(
+    problem.session_id,
+    problem.problem_number,
+  )
+  default_feedback = default_feedback_row[0] if default_feedback_row else None
+  return merge_general_feedback(default_feedback, problem.feedback)
+
+
+def _stored_feedback(problem, default_feedback: Optional[str]) -> Optional[str]:
+  return extract_response_specific_feedback(default_feedback, problem.feedback)
+
+
+def _normalize_section_label(raw_section) -> Optional[str]:
+  if raw_section is None:
+    return None
+  if isinstance(raw_section, str):
+    section = raw_section.strip()
+  else:
+    section = str(raw_section).strip()
+  return section or None
+
+
+def _normalize_cached_students(raw_students) -> list[dict]:
+  if not isinstance(raw_students, list):
+    return []
+
+  students = []
+  for entry in raw_students:
+    if not isinstance(entry, dict):
+      continue
+    name = str(entry.get("name") or "").strip()
+    try:
+      user_id = int(entry.get("user_id"))
+    except (TypeError, ValueError):
+      continue
+    if not name:
+      continue
+    students.append({
+      "user_id": user_id,
+      "name": name,
+      "section": _normalize_section_label(entry.get("section")),
+    })
+  return students
+
+
+def _collect_student_sections(course) -> dict[int, str]:
+  """Build a user_id -> section label mapping from Canvas enrollments."""
+  section_names_by_id: dict[int, str] = {}
+  user_sections_by_id: dict[int, str] = {}
+
+  try:
+    for section in course.get_sections():
+      section_name = _normalize_section_label(getattr(section, "name", None))
+      section_id = getattr(section, "id", None)
+      if section_name is None or section_id is None:
+        continue
+      try:
+        section_names_by_id[int(section_id)] = section_name
+      except (TypeError, ValueError):
+        continue
+  except Exception as exc:
+    log.debug("Could not load Canvas sections for roster labeling: %s", exc)
+
+  try:
+    for enrollment in course.get_enrollments(type=["StudentEnrollment"],
+                                             state=["active"]):
+      user_id = getattr(enrollment, "user_id", None)
+      section_id = getattr(enrollment, "course_section_id", None)
+      if user_id is None or section_id is None:
+        continue
+      try:
+        user_id_int = int(user_id)
+        section_id_int = int(section_id)
+      except (TypeError, ValueError):
+        continue
+      section_name = section_names_by_id.get(section_id_int)
+      if section_name:
+        user_sections_by_id[user_id_int] = section_name
+  except Exception as exc:
+    log.debug("Could not load Canvas enrollments for roster labeling: %s", exc)
+
+  return user_sections_by_id
+
+
+def _load_canvas_students_with_sections(session_id: int,
+                                        session) -> list[dict]:
+  """Fetch Canvas students and section labels, caching the result on success."""
+  session_repo = SessionRepository()
+  canvas_interface = CanvasInterface(
+    prod=session.use_prod_canvas,
+    privacy_mode="none",
+  )
+  course = canvas_interface.get_course(session.course_id)
+  assignment = course.get_assignment(session.assignment_id)
+  students = assignment.get_students(include_names=True)
+  student_sections_by_id = _collect_student_sections(course)
+
+  normalized = [{
+    "user_id": s.user_id,
+    "name": s.name,
+    "section": student_sections_by_id.get(s.user_id),
+  } for s in students]
+
+  metadata = session_repo.get_metadata(session_id) or {}
+  metadata["cached_canvas_students"] = normalized
+  metadata.pop("canvas_roster_error", None)
+  session_repo.update_metadata(session_id, metadata)
+  return normalized
+
+
+def _cached_canvas_section_lookup(session_id: int) -> tuple[dict[int, str], list[str]]:
+  """
+  Load cached Canvas student section data for a session.
+
+  Returns:
+    Tuple of (user_id -> section label, sorted unique section labels).
+  """
+  session_repo = SessionRepository()
+  metadata = session_repo.get_metadata(session_id) or {}
+  raw_students = metadata.get("cached_canvas_students")
+  section_lookup: dict[int, str] = {}
+  section_values: set[str] = set()
+  if isinstance(raw_students, list):
+    for entry in raw_students:
+      if not isinstance(entry, dict):
+        continue
+      section = _normalize_section_label(entry.get("section"))
+      if section is None:
+        continue
+      try:
+        user_id = int(entry.get("user_id"))
+      except (TypeError, ValueError):
+        continue
+      section_lookup[user_id] = section
+      section_values.add(section)
+
+  if section_lookup:
+    return section_lookup, sorted(section_values)
+
+  session = session_repo.get_by_id(session_id)
+  if not session or session.metadata and session.metadata.get("mock_roster"):
+    return {}, []
+
+  try:
+    live_students = _load_canvas_students_with_sections(session_id, session)
+  except Exception as exc:
+    metadata = session_repo.get_metadata(session_id) or {}
+    metadata["canvas_roster_error"] = str(exc)
+    session_repo.update_metadata(session_id, metadata)
+    return {}, []
+
+  for entry in live_students:
+    try:
+      user_id = int(entry.get("user_id"))
+    except (TypeError, ValueError):
+      continue
+    section = _normalize_section_label(entry.get("section"))
+    if section is None:
+      continue
+    section_lookup[user_id] = section
+    section_values.add(section)
+
+  return section_lookup, sorted(section_values)
+
+
+def _canvas_user_ids_for_section(section_lookup: dict[int, str],
+                                 section: Optional[str]) -> Optional[list[int]]:
+  normalized_section = _normalize_section_label(section)
+  if normalized_section is None:
+    return None
+  return [
+    user_id for user_id, user_section in section_lookup.items()
+    if user_section == normalized_section
+  ]
 
 
 def mock_roster_enabled() -> bool:
@@ -515,6 +697,7 @@ async def list_sessions(current_user: dict = Depends(get_current_user)):
 @router.get("/{session_id}/stats", response_model=SessionStatsResponse)
 async def get_session_stats(
   session_id: int,
+  section: Optional[str] = None,
   current_user: dict = Depends(require_session_access())
 ):
   """Get grading statistics for a session (requires session access)"""
@@ -523,10 +706,15 @@ async def get_session_stats(
 
   problem_repo = ProblemRepository()
   metadata_repo = ProblemMetadataRepository()
+  section_lookup, _ = _cached_canvas_section_lookup(session_id)
+  section_user_ids = _canvas_user_ids_for_section(section_lookup, section)
   log = logging.getLogger(__name__)
 
   # Get overall stats
-  overall_stats = problem_repo.get_session_overall_stats(session_id)
+  overall_stats = problem_repo.get_session_overall_stats(
+    session_id,
+    canvas_user_ids=section_user_ids,
+  )
   if overall_stats["total_problems"] == 0:
     session_repo = SessionRepository()
     if not session_repo.exists(session_id):
@@ -548,13 +736,19 @@ async def get_session_stats(
   progress = (problems_graded / total_problems * 100) if total_problems > 0 else 0
 
   # Get per-problem stats
-  problem_numbers = problem_repo.get_distinct_problem_numbers(session_id)
+  problem_numbers = problem_repo.get_distinct_problem_numbers(
+    session_id,
+    canvas_user_ids=section_user_ids,
+  )
   problem_stats = []
 
   for problem_num in problem_numbers:
     # Get scores and blank count
     scores, num_blank = problem_repo.get_problem_scores_and_blanks(
-      session_id, problem_num)
+      session_id,
+      problem_num,
+      canvas_user_ids=section_user_ids,
+    )
 
     # Get max_points for this problem (default to 8 if not set)
     max_points = metadata_repo.get_max_points(session_id, problem_num)
@@ -562,9 +756,16 @@ async def get_session_stats(
       max_points = 8.0
 
     # Get counts
-    counts = problem_repo.get_counts_for_problem_number(session_id, problem_num)
+    counts = problem_repo.get_counts_for_problem_number(
+      session_id,
+      problem_num,
+      canvas_user_ids=section_user_ids,
+    )
     manual_blank_counts = problem_repo.get_manual_blank_counts_for_problem_number(
-      session_id, problem_num)
+      session_id,
+      problem_num,
+      canvas_user_ids=section_user_ids,
+    )
     num_total = counts["total"]
     num_graded = counts["graded"]
     num_blank_ungraded = manual_blank_counts["ungraded_manual_blank"]
@@ -637,12 +838,22 @@ async def get_problem_numbers(
 @router.get("/{session_id}/student-scores")
 async def get_student_scores(
   session_id: int,
+  section: Optional[str] = None,
   current_user: dict = Depends(require_session_access())
 ):
   """Get aggregated scores for all students in a session (requires session access)"""
   submission_repo = SubmissionRepository()
-  students = submission_repo.get_student_scores(session_id)
-  return {"students": students}
+  section_lookup, section_values = _cached_canvas_section_lookup(session_id)
+  section_user_ids = _canvas_user_ids_for_section(section_lookup, section)
+  students = submission_repo.get_student_scores(
+    session_id,
+    canvas_user_ids=section_user_ids,
+    section_lookup=section_lookup,
+  )
+  return {
+    "students": students,
+    "available_sections": section_values,
+  }
 
 
 @router.get("/{session_id}/submissions/{submission_id}/exam-pdf")
@@ -778,7 +989,8 @@ async def get_submission_problems(
         submission_id=problem.submission_id,
         image_data=problem_image_base64,
         score=problem.score,
-        feedback=problem.feedback,
+        feedback=_display_feedback(problem),
+        response_specific_feedback=problem.feedback,
         graded=problem.graded,
         is_blank=problem.is_blank,
         blank_confidence=problem.blank_confidence,
@@ -1152,23 +1364,19 @@ async def finalize_subjective_scores(
             )
           )
 
-      merged_feedback = merge_general_feedback(
-        default_feedback,
-        bucket_score.feedback
-      )
+      stored_feedback = join_feedback_parts(bucket_score.feedback)
+      visible_feedback = merge_general_feedback(default_feedback, stored_feedback)
       notes_by_problem_id = triage_repo.get_notes_for_problem_ids(problem_ids)
       has_response_specific_notes = any(
         (notes or "").strip() for notes in notes_by_problem_id.values()
       )
       if has_response_specific_notes:
-        general_feedback = join_feedback_parts(default_feedback, bucket_score.feedback)
         updated_rows = 0
         for problem_id in problem_ids:
           response_specific_notes = (notes_by_problem_id.get(problem_id) or "").strip()
-          per_problem_feedback = (
-            merge_general_feedback(general_feedback, response_specific_notes)
-            if response_specific_notes else
-            merged_feedback
+          per_problem_feedback = join_feedback_parts(
+            stored_feedback,
+            response_specific_notes
           )
           if is_dash_blank:
             repos.problems.mark_as_blank(problem_id, per_problem_feedback)
@@ -1178,20 +1386,20 @@ async def finalize_subjective_scores(
       elif is_dash_blank:
         updated_rows = repos.problems.bulk_mark_as_blank(
           problem_ids,
-          merged_feedback
+          stored_feedback
         )
       else:
         updated_rows = repos.problems.bulk_grade(
           problem_ids,
           score_value,
-          merged_feedback
+          stored_feedback
         )
       total_graded_now += updated_rows
       graded_updates.append({
         "bucket_id": bucket_id,
         "score": "-" if is_dash_blank else score_value,
         "is_blank": is_dash_blank,
-        "feedback": merged_feedback,
+        "feedback": visible_feedback,
         "has_response_specific_notes": has_response_specific_notes,
         "count": updated_rows
       })
@@ -1331,7 +1539,8 @@ async def update_ai_grading_notes(
 @router.put("/{session_id}/default-feedback")
 async def update_default_feedback(
   session_id: int,
-  problem_number: int,
+  request: Request,
+  problem_number: int = None,
   default_feedback: str = None,
   threshold: float = 100.0,
   current_user: dict = Depends(require_session_access())
@@ -1340,6 +1549,36 @@ async def update_default_feedback(
   session_repo = SessionRepository()
   if not session_repo.exists(session_id):
     raise HTTPException(status_code=404, detail="Session not found")
+
+  body_problem_number = None
+  body_default_feedback = None
+  body_threshold = None
+  content_type = request.headers.get("content-type", "")
+  if content_type.startswith("application/json"):
+    try:
+      payload = await request.json()
+    except Exception:
+      payload = None
+    if isinstance(payload, dict):
+      body_problem_number = payload.get("problem_number")
+      body_default_feedback = payload.get("default_feedback")
+      body_threshold = payload.get("threshold")
+
+  if body_problem_number is not None:
+    try:
+      problem_number = int(body_problem_number)
+    except (TypeError, ValueError):
+      raise HTTPException(status_code=400, detail="Invalid problem_number")
+  if problem_number is None:
+    raise HTTPException(status_code=400, detail="problem_number is required")
+
+  if body_default_feedback is not None:
+    default_feedback = body_default_feedback
+  if body_threshold is not None:
+    try:
+      threshold = float(body_threshold)
+    except (TypeError, ValueError):
+      raise HTTPException(status_code=400, detail="Invalid threshold")
 
   metadata_repo = ProblemMetadataRepository()
   metadata_repo.upsert_default_feedback(session_id, problem_number,
@@ -1439,6 +1678,13 @@ async def clone_session(
     for old_sub, new_sub in zip(submissions_list, created_subs):
       submission_map[old_sub.id] = new_sub.id
 
+    source_metadata = repos.metadata.list_by_session(session_id)
+    source_default_feedback_by_problem = {
+      row["problem_number"]: row.get("default_feedback")
+      for row in source_metadata
+      if isinstance(row, dict)
+    }
+
     new_problems = []
     for old_sub in submissions_list:
       problems_list = repos.problems.get_by_submission(old_sub.id)
@@ -1450,7 +1696,13 @@ async def clone_session(
             submission_id=submission_map[old_sub.id],
             problem_number=prob.problem_number,
             score=None if request.clear_scores else prob.score,
-            feedback=None if request.clear_scores else prob.feedback,
+            feedback=(
+              None if request.clear_scores else
+              _stored_feedback(
+                prob,
+                source_default_feedback_by_problem.get(prob.problem_number)
+              )
+            ),
             graded=False if request.clear_scores else prob.graded,
             graded_at=None if request.clear_scores else prob.graded_at,
             is_blank=prob.is_blank,
@@ -1469,7 +1721,6 @@ async def clone_session(
     if new_problems:
       repos.problems.bulk_create(new_problems)
 
-    source_metadata = repos.metadata.list_by_session(session_id)
     repos.metadata.bulk_insert_for_session(
       created_session.id,
       source_metadata,
@@ -1514,16 +1765,29 @@ async def export_session(
 
   # Get all submissions
   submissions_list = submission_repo.get_by_session(session_id)
+  metadata_rows = metadata_repo.list_by_session(session_id)
+  default_feedback_by_problem = {
+    row["problem_number"]: row.get("default_feedback")
+    for row in metadata_rows
+    if isinstance(row, dict)
+  }
   submissions = []
   for sub in submissions_list:
     sub_dict = asdict(sub)
     # Get all problems for this submission
     problems_list = problem_repo.get_by_submission(sub.id)
-    sub_dict["problems"] = [asdict(p) for p in problems_list]
+    sub_dict["problems"] = []
+    for problem in problems_list:
+      problem_dict = asdict(problem)
+      problem_dict["feedback"] = _stored_feedback(
+        problem,
+        default_feedback_by_problem.get(problem.problem_number)
+      )
+      sub_dict["problems"].append(problem_dict)
     submissions.append(sub_dict)
 
   problem_stats = problem_stats_repo.list_by_session(session_id)
-  problem_metadata = metadata_repo.list_by_session(session_id)
+  problem_metadata = metadata_rows
   feedback_tags = [asdict(tag) for tag in feedback_tag_repo.get_by_session(session_id)]
 
   # Build export structure

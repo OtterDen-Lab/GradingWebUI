@@ -3,12 +3,13 @@ from pathlib import Path
 from grading_web_ui.web_api.services.finalizer import FinalizationService
 
 
-def _service() -> FinalizationService:
+def _service(*, suppress_feedback: bool = False) -> FinalizationService:
   return FinalizationService(
     session_id=1,
     temp_dir=Path("."),
     stream_id="test",
     event_loop=None,
+    suppress_feedback=suppress_feedback,
   )
 
 
@@ -143,3 +144,29 @@ def test_upload_to_canvas_keeps_plain_text_in_comment_field(tmp_path):
   assert [attachment.name for attachment in call["attachments"]] == [
     "graded_exam_submission_8.pdf",
   ]
+
+
+def test_upload_to_canvas_skips_feedback_when_requested(tmp_path):
+  service = _service(suppress_feedback=True)
+  service.assignment = _FakeAssignment()
+
+  pdf_path = tmp_path / "graded.pdf"
+  pdf_path.write_bytes(b"%PDF-1.4\n")
+  submission = {
+    "id": 9,
+    "canvas_user_id": 789,
+    "problems": [{"score": 5.0}],
+  }
+
+  service._upload_to_canvas(
+    submission,
+    None,
+    "",
+    include_feedback=False,
+    include_pdf=False,
+  )
+
+  assert len(service.assignment.calls) == 1
+  call = service.assignment.calls[0]
+  assert call["comments"] == ""
+  assert call["attachments"] == []

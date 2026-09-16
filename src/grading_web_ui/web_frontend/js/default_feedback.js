@@ -10,6 +10,7 @@ let currentDefaultFeedback = {
     applyOnThreshold: true
 };
 const defaultFeedbackCache = new Map(); // key=sessionId:problemNumber -> {text, threshold}
+const MAX_DEFAULT_FEEDBACK_IMAGE_BYTES = 5 * 1024 * 1024;
 
 // =============================================================================
 // LOAD AND DISPLAY DEFAULT FEEDBACK
@@ -77,9 +78,18 @@ function displayDefaultFeedback() {
         placeholder.className = 'default-feedback-placeholder';
         placeholder.textContent = 'No default feedback set.';
         display.appendChild(placeholder);
+    } else if (defaultFeedbackLooksLikeHtml(currentDefaultFeedback.text)) {
+        const preview = document.createElement('div');
+        preview.className = 'default-feedback-html-preview';
+        preview.innerHTML = currentDefaultFeedback.text;
+        display.appendChild(preview);
     } else {
         display.textContent = currentDefaultFeedback.text;
     }
+}
+
+function defaultFeedbackLooksLikeHtml(text) {
+    return /<(img|p|div|br|strong|em|ul|ol|li|span|table|h[1-6])[\s/>]/i.test(text || '');
 }
 
 // =============================================================================
@@ -120,6 +130,67 @@ function clearDefaultFeedback() {
     document.getElementById('threshold-percentage').value = 100.0;
 }
 
+function insertTextAtCursor(textArea, text) {
+    const start = textArea.selectionStart ?? textArea.value.length;
+    const end = textArea.selectionEnd ?? textArea.value.length;
+    const before = textArea.value.slice(0, start);
+    const after = textArea.value.slice(end);
+    textArea.value = `${before}${text}${after}`;
+
+    const nextPosition = start + text.length;
+    textArea.selectionStart = nextPosition;
+    textArea.selectionEnd = nextPosition;
+    textArea.focus();
+}
+
+function escapeHtmlAttribute(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+async function insertDefaultFeedbackImageFromFile(file) {
+    const textArea = document.getElementById('default-feedback-text');
+    if (!textArea || !file) return;
+
+    if (!file.type || !file.type.startsWith('image/')) {
+        alert('Please choose an image file.');
+        return;
+    }
+
+    if (file.size > MAX_DEFAULT_FEEDBACK_IMAGE_BYTES) {
+        alert('Image is too large. Please use a smaller image.');
+        return;
+    }
+
+    const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Failed to read image file'));
+        reader.readAsDataURL(file);
+    });
+
+    const altText = escapeHtmlAttribute(file.name);
+    const imageMarkup = `<img src="${dataUrl}" alt="${altText}" style="max-width: 100%; height: auto;" />`;
+    const wrappedMarkup = textArea.value.trim() ? `\n\n${imageMarkup}\n\n` : imageMarkup;
+    insertTextAtCursor(textArea, wrappedMarkup);
+}
+
+async function handleDefaultFeedbackImageSelected(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+        await insertDefaultFeedbackImageFromFile(file);
+    } catch (error) {
+        console.error('Failed to insert default feedback image:', error);
+        alert(error.message || 'Failed to insert image.');
+    }
+}
+
 async function saveDefaultFeedback() {
     const textArea = document.getElementById('default-feedback-text');
     const thresholdInput = document.getElementById('threshold-percentage');
@@ -131,13 +202,6 @@ async function saveDefaultFeedback() {
 
     const feedbackText = textArea.value.trim();
     const threshold = parseFloat(thresholdInput.value) || 100.0;
-
-    // Validate
-    if (feedbackText && feedbackText.length > 2000) {
-        alert('Default feedback must be 2000 characters or less');
-        textArea.focus();
-        return;
-    }
 
     if (threshold < 0 || threshold > 100) {
         alert('Threshold must be between 0 and 100');
@@ -151,17 +215,16 @@ async function saveDefaultFeedback() {
         saveBtn.disabled = true;
         saveBtn.textContent = 'Saving...';
 
-        const params = new URLSearchParams({
-            problem_number: currentProblemNumber,
-            threshold: threshold
-        });
-
-        if (feedbackText) {
-            params.append('default_feedback', feedbackText);
-        }
-
-        const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/default-feedback?${params}`, {
-            method: 'PUT'
+        const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/default-feedback`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                problem_number: currentProblemNumber,
+                default_feedback: feedbackText || null,
+                threshold
+            })
         });
 
         if (!response.ok) {
@@ -329,3 +392,12 @@ document.getElementById('default-feedback-text')?.addEventListener('keydown', (e
         saveDefaultFeedback();
     }
 });
+
+document.getElementById('insert-default-feedback-image-btn')?.addEventListener('click', () => {
+    document.getElementById('default-feedback-image-input')?.click();
+});
+
+document.getElementById('default-feedback-image-input')?.addEventListener(
+    'change',
+    handleDefaultFeedbackImageSelected
+);

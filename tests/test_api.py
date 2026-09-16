@@ -1143,7 +1143,7 @@ def test_next_problem_supports_exclude_problem_ids(client, monkeypatch):
 
 
 def test_decipher_default_uses_anthropic(client, monkeypatch):
-  """Default decipher should use Anthropic helper, not Ollama."""
+  """Default decipher should use Anthropic helper."""
   from grading_web_ui.web_api.routes import problems as problems_routes
 
   session_id = create_test_session(client, "Decipher Default")
@@ -1162,39 +1162,13 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
     def query_ai(cls, *args, **kwargs):
       return ("transcribed text", {"model": "claude-sonnet-4-5"})
 
-  class _FakeOllama:
-    @classmethod
-    def query_ai(cls, *args, **kwargs):
-      raise AssertionError("Ollama should not be called for default decipher")
-
   monkeypatch.setattr(problems_routes.ai_helper, "AI_Helper__Anthropic", _FakeAnthropic)
-  monkeypatch.setattr(problems_routes.ai_helper, "AI_Helper__Ollama", _FakeOllama)
 
   response = client.post(f"/api/problems/{problem_id}/decipher?model=default")
   assert response.status_code == 200
   payload = response.json()
   assert payload["transcription"] == "transcribed text"
   assert payload["model"] == "Anthropic (claude-sonnet-4-5)"
-
-
-def test_decipher_ollama_disabled_by_default(client, monkeypatch):
-  """Ollama decipher should be rejected unless explicitly enabled."""
-  from grading_web_ui.web_api.routes import problems as problems_routes
-
-  session_id = create_test_session(client, "Decipher Ollama Disabled")
-  _, problem_id = seed_submission_with_problem(
-    session_id, document_id=1, problem_number=9
-  )
-
-  monkeypatch.setattr(
-    problems_routes,
-    "get_problem_image_data",
-    lambda problem, submission_repo=None: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
-  )
-
-  response = client.post(f"/api/problems/{problem_id}/decipher?model=ollama")
-  assert response.status_code == 400
-  assert "disabled" in response.json()["detail"].lower()
 
 
 def test_subjective_finalize_applies_bucket_scores(client):
@@ -1353,10 +1327,10 @@ def test_subjective_finalize_supports_dash_blank_score(client):
     assert rows[problem_id_numeric]["is_blank"] in (0, None)
 
 
-def test_grade_problem_includes_general_feedback_section(client):
-  """Manual grading should persist default feedback as a general section."""
+def test_grade_problem_applies_default_feedback_without_persisting_it(client):
+  """Manual grading should store only response-specific feedback."""
   session_id = create_test_session(client, "General Feedback Grade")
-  _, problem_id = seed_submission_with_problem(
+  submission_id, problem_id = seed_submission_with_problem(
     session_id, document_id=1, problem_number=12, max_points=8.0
   )
 
@@ -1384,18 +1358,54 @@ def test_grade_problem_includes_general_feedback_section(client):
     cursor.execute("SELECT feedback FROM problems WHERE id = ?", (problem_id,))
     row = cursor.fetchone()
     assert row is not None
-    assert row["feedback"] == (
-      "General feedback:\n"
-      "Show all intermediate steps and include units.\n\n"
-      "Response-specific feedback:\n"
-      "Sign error in the second line."
-    )
+    assert row["feedback"] == "Sign error in the second line."
+
+  preview_response = client.get(
+    f"/api/finalize/{session_id}/submissions/{submission_id}/feedback-preview"
+  )
+  assert preview_response.status_code == 200
+  assert "General feedback:" in preview_response.text
+  assert "Show all intermediate steps and include units." in preview_response.text
+  assert "Response-specific feedback:" in preview_response.text
+  assert "Sign error in the second line." in preview_response.text
 
 
-def test_subjective_finalize_includes_general_feedback_section(client):
-  """Subjective finalize should append default feedback to bucket feedback."""
+def test_default_feedback_accepts_json_body_with_image_markup(client):
+  """Default feedback save should accept JSON payloads for embedded HTML/images."""
+  session_id = create_test_session(client, "Default Feedback JSON Test")
+  submission_id, _ = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=9, max_points=8.0
+  )
+
+  response = client.put(
+    f"/api/sessions/{session_id}/default-feedback",
+    json={
+      "problem_number": 9,
+      "default_feedback": '<p><img src="data:image/png;base64,AAA" alt="chart" /></p>',
+      "threshold": 100.0,
+    }
+  )
+  assert response.status_code == 200
+
+  with get_db_connection() as conn:
+    row = conn.execute(
+      "SELECT default_feedback FROM problem_metadata WHERE session_id = ? AND problem_number = ?",
+      (session_id, 9),
+    ).fetchone()
+    assert row is not None
+    assert row["default_feedback"].startswith("<p><img src=\"data:image/png;base64,AAA\"")
+
+  preview_response = client.get(
+    f"/api/finalize/{session_id}/submissions/{submission_id}/feedback-preview"
+  )
+  assert preview_response.status_code == 200
+  assert "data:image/png;base64,AAA" in preview_response.text
+
+
+def test_subjective_finalize_applies_default_feedback_without_persisting_it(client):
+  """Subjective finalize should store only bucket-specific feedback."""
   session_id = create_test_session(client, "General Feedback Subjective")
-  _, problem_id_a = seed_submission_with_problem(
+  submission_id_a, problem_id_a = seed_submission_with_problem(
     session_id, document_id=1, problem_number=13, max_points=8.0
   )
   _, problem_id_b = seed_submission_with_problem(
@@ -1453,18 +1463,22 @@ def test_subjective_finalize_includes_general_feedback_section(client):
     rows = cursor.fetchall()
     assert len(rows) == 2
     for row in rows:
-      assert row["feedback"] == (
-        "General feedback:\n"
-        "State assumptions clearly.\n\n"
-        "Response-specific feedback:\n"
-        "Reasoning is mostly correct."
-      )
+      assert row["feedback"] == "Reasoning is mostly correct."
+
+  preview_response = client.get(
+    f"/api/finalize/{session_id}/submissions/{submission_id_a}/feedback-preview"
+  )
+  assert preview_response.status_code == 200
+  assert "General feedback:" in preview_response.text
+  assert "State assumptions clearly." in preview_response.text
+  assert "Response-specific feedback:" in preview_response.text
+  assert "Reasoning is mostly correct." in preview_response.text
 
 
 def test_subjective_finalize_appends_triage_notes_as_response_specific_feedback(client):
   """Per-response subjective notes should become student-facing specific feedback on finalize."""
   session_id = create_test_session(client, "Subjective Notes Feedback")
-  _, problem_id_a = seed_submission_with_problem(
+  submission_id_a, problem_id_a = seed_submission_with_problem(
     session_id, document_id=1, problem_number=17, max_points=8.0
   )
   _, problem_id_b = seed_submission_with_problem(
@@ -1521,12 +1535,17 @@ def test_subjective_finalize_appends_triage_notes_as_response_specific_feedback(
     rows = {row["id"]: row["feedback"] for row in cursor.fetchall()}
 
     assert rows[problem_id_a] == (
-      "General feedback:\n"
       "Reasoning is mostly correct.\n\n"
-      "Response-specific feedback:\n"
       "You justified the sign incorrectly."
     )
     assert rows[problem_id_b] == "Reasoning is mostly correct."
+
+  preview_response = client.get(
+    f"/api/finalize/{session_id}/submissions/{submission_id_a}/feedback-preview"
+  )
+  assert preview_response.status_code == 200
+  assert "Reasoning is mostly correct." in preview_response.text
+  assert "You justified the sign incorrectly." in preview_response.text
 
 
 def test_subjective_reopen_restores_triaged_state(client):
@@ -1798,6 +1817,7 @@ def test_student_scores_include_submission_metadata(client):
     "display_name": "Ada Lovelace",
     "student_name": "Ada Lovelace",
     "canvas_user_id": None,
+    "section": None,
     "original_filename": "ada_exam.pdf",
     "has_exam_pdf": True,
     "total_problems": 1,
@@ -1869,6 +1889,7 @@ def test_delete_submission_removes_exam_and_refreshes_session_counts(client):
     "display_name": "Keep Me",
     "student_name": "Keep Me",
     "canvas_user_id": None,
+    "section": None,
     "original_filename": None,
     "has_exam_pdf": False,
     "total_problems": 1,
@@ -1900,6 +1921,160 @@ def test_delete_submission_removes_exam_and_refreshes_session_counts(client):
     cursor.execute("SELECT COUNT(*) AS count FROM problems WHERE submission_id = ?",
                    (deleted_submission_id, ))
     assert cursor.fetchone()["count"] == 0
+
+
+def test_section_filtered_statistics_only_include_matching_students(client):
+  """Stats endpoints should filter to one Canvas section when requested."""
+  session_id = create_test_session(client, "Section Filter Stats Test")
+  SessionRepository().update_metadata(
+    session_id,
+    {
+      "cached_canvas_students": [
+        {"user_id": 101, "name": "Section One Student", "section": "01"},
+        {"user_id": 202, "name": "Section Two Student", "section": "02"},
+      ]
+    },
+  )
+
+  section_one_submission_id, _ = seed_submission_with_problem(
+    session_id,
+    document_id=1,
+    student_name="Section One Student",
+    canvas_user_id=101,
+    graded=True,
+    score=5.0,
+    max_points=10.0,
+  )
+  seed_submission_with_problem(
+    session_id,
+    document_id=2,
+    student_name="Section Two Student",
+    canvas_user_id=202,
+    graded=True,
+    score=3.0,
+    max_points=10.0,
+  )
+
+  stats_response = client.get(f"/api/sessions/{session_id}/stats?section=01")
+  assert stats_response.status_code == 200
+  stats_payload = stats_response.json()
+  assert stats_payload["total_submissions"] == 1
+  assert stats_payload["total_problems"] == 1
+  assert stats_payload["problems_graded"] == 1
+  assert len(stats_payload["problem_stats"]) == 1
+  assert stats_payload["problem_stats"][0]["avg_score"] == 5.0
+  assert stats_payload["problem_stats"][0]["num_total"] == 1
+
+  scores_response = client.get(f"/api/sessions/{session_id}/student-scores?section=01")
+  assert scores_response.status_code == 200
+  scores_payload = scores_response.json()
+  assert scores_payload["available_sections"] == ["01", "02"]
+  assert scores_payload["students"] == [{
+    "submission_id": section_one_submission_id,
+    "document_id": 1,
+    "approximate_name": None,
+    "display_name": "Section One Student",
+    "student_name": "Section One Student",
+    "canvas_user_id": 101,
+    "section": "01",
+    "original_filename": None,
+    "has_exam_pdf": False,
+    "total_problems": 1,
+    "graded_problems": 1,
+    "total_score": 5.0,
+    "total_max_points": 10.0,
+    "is_complete": True,
+  }]
+
+
+def test_section_filtered_statistics_can_load_sections_from_canvas(
+    client, monkeypatch):
+  """Stats endpoints should be able to discover sections on demand from Canvas."""
+  from grading_web_ui.web_api.routes import sessions as sessions_routes
+
+  session_id = create_test_session(client, "Section Fallback Stats Test")
+
+  class FakeStudent:
+
+    def __init__(self, user_id, name):
+      self.user_id = user_id
+      self.name = name
+
+  class FakeAssignment:
+
+    def get_students(self, include_names=True):
+      return [
+        FakeStudent(101, "Section One Student"),
+        FakeStudent(202, "Section Two Student"),
+      ]
+
+  class FakeSection:
+
+    def __init__(self, section_id, name):
+      self.id = section_id
+      self.name = name
+
+  class FakeEnrollment:
+
+    def __init__(self, user_id, course_section_id):
+      self.user_id = user_id
+      self.course_section_id = course_section_id
+
+  class FakeCourse:
+
+    def get_assignment(self, assignment_id):
+      return FakeAssignment()
+
+    def get_sections(self):
+      return [FakeSection(11, "01"), FakeSection(12, "02")]
+
+    def get_enrollments(self, **kwargs):
+      return [
+        FakeEnrollment(101, 11),
+        FakeEnrollment(202, 12),
+      ]
+
+  class FakeCanvasInterface:
+
+    def __init__(self, prod=False, privacy_mode="none"):
+      pass
+
+    def get_course(self, course_id):
+      return FakeCourse()
+
+  monkeypatch.setattr(sessions_routes, "CanvasInterface", FakeCanvasInterface)
+
+  seed_submission_with_problem(
+    session_id,
+    document_id=1,
+    student_name="Section One Student",
+    canvas_user_id=101,
+    graded=True,
+    score=5.0,
+    max_points=10.0,
+  )
+  seed_submission_with_problem(
+    session_id,
+    document_id=2,
+    student_name="Section Two Student",
+    canvas_user_id=202,
+    graded=True,
+    score=3.0,
+    max_points=10.0,
+  )
+
+  stats_response = client.get(f"/api/sessions/{session_id}/stats?section=01")
+  assert stats_response.status_code == 200
+  stats_payload = stats_response.json()
+  assert stats_payload["total_submissions"] == 1
+  assert stats_payload["total_problems"] == 1
+  assert stats_payload["problem_stats"][0]["avg_score"] == 5.0
+
+  scores_response = client.get(f"/api/sessions/{session_id}/student-scores?section=01")
+  assert scores_response.status_code == 200
+  scores_payload = scores_response.json()
+  assert scores_payload["available_sections"] == ["01", "02"]
+  assert scores_payload["students"][0]["section"] == "01"
 
 
 def test_delete_submission_prunes_upload_metadata_and_source_file(client, tmp_path):
@@ -2283,6 +2458,7 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
     captured["stream_id"] = stream_id
     captured["keep_previous_best"] = options.keep_previous_best
     captured["clobber_feedback"] = options.clobber_feedback
+    captured["suppress_feedback"] = options.suppress_feedback
     captured["submission_ids"] = options.submission_ids
     workflow_locks.release("finalize", target_session_id)
 
@@ -2292,6 +2468,7 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
                          json={
                            "keep_previous_best": False,
                            "clobber_feedback": True,
+                           "suppress_feedback": True,
                            "submission_ids": [submission_id],
                          })
 
@@ -2301,6 +2478,7 @@ def test_finalize_accepts_options_payload(client, monkeypatch):
     "stream_id": f"finalize_{session_id}",
     "keep_previous_best": False,
     "clobber_feedback": True,
+    "suppress_feedback": True,
     "submission_ids": [submission_id],
   }
   assert workflow_locks.is_active("finalize", session_id) is False

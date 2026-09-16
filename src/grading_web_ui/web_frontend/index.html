@@ -442,7 +442,6 @@
                         <select id="global-ai-provider-select" style="flex: 1; max-width: 300px; padding: 8px; border-radius: 4px; border: 1px solid #d1d5db;">
                             <option value="anthropic" selected>Anthropic (Claude) - Default</option>
                             <option value="openai">OpenAI (GPT)</option>
-                            <option value="ollama">Ollama (Local)</option>
                         </select>
                     </label>
                     <small style="display: block; margin-top: 8px; color: var(--gray-600);">
@@ -870,8 +869,12 @@
 
             <label style="display: block; margin-bottom: 20px;">
                 <strong>Default Feedback Text:</strong>
-                <textarea id="default-feedback-text" rows="5" maxlength="2000" placeholder="e.g., The correct answer is..." style="display: block; width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--gray-300); border-radius: 4px; resize: vertical;"></textarea>
-                <small style="color: var(--gray-600);">This will be appended after tags and manual feedback</small>
+                <textarea id="default-feedback-text" rows="5" placeholder="e.g., The correct answer is..." style="display: block; width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--gray-300); border-radius: 4px; resize: vertical;"></textarea>
+                <small style="color: var(--gray-600); display: block; margin-top: 4px;">This can include text, HTML, and embedded images.</small>
+                <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
+                    <button id="insert-default-feedback-image-btn" type="button" class="btn btn-secondary">Add Image</button>
+                    <input id="default-feedback-image-input" type="file" accept="image/*" style="display: none;">
+                </div>
             </label>
 
             <label style="display: block; margin-bottom: 20px;">
@@ -1073,6 +1076,13 @@
                         <span>
                             <strong>Clobber existing Canvas feedback</strong><br>
                             <span style="color: var(--gray-700); font-size: 13px;">Delete prior comments before uploading new grades and attachments.</span>
+                        </span>
+                    </label>
+                    <label style="display: flex; align-items: flex-start; gap: 10px; margin-top: 12px;">
+                        <input id="finalize-suppress-feedback" type="checkbox" style="margin-top: 3px;">
+                        <span>
+                            <strong>Upload grade only</strong><br>
+                            <span style="color: var(--gray-700); font-size: 13px;">Skip student feedback and attachments, and upload only the grade.</span>
                         </span>
                     </label>
                 </div>

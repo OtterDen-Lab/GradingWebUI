@@ -7,6 +7,26 @@ GENERAL_FEEDBACK_HEADER = "General feedback:"
 SPECIFIC_FEEDBACK_HEADER = "Response-specific feedback:"
 
 
+def _split_structured_feedback(
+  feedback_text: Optional[str]
+) -> tuple[Optional[str], Optional[str]] | None:
+  """Parse the canonical merged feedback structure, if present."""
+  text = (feedback_text or "").strip()
+  if not text.startswith(f"{GENERAL_FEEDBACK_HEADER}\n"):
+    return None
+
+  remainder = text[len(GENERAL_FEEDBACK_HEADER) + 1:]
+  structured_marker = f"\n\n{SPECIFIC_FEEDBACK_HEADER}\n"
+  if structured_marker in remainder:
+    general_text, specific_text = remainder.split(structured_marker, 1)
+    return (
+      general_text.strip() or None,
+      specific_text.strip() or None,
+    )
+
+  return (remainder.strip() or None, None)
+
+
 def join_feedback_parts(*parts: Optional[str]) -> Optional[str]:
   """Join non-empty feedback fragments with paragraph spacing."""
   normalized = [(part or "").strip() for part in parts if (part or "").strip()]
@@ -35,6 +55,16 @@ def merge_general_feedback(
 
   if not general:
     return specific or None
+
+  structured = _split_structured_feedback(specific)
+  if structured is not None:
+    _, structured_specific = structured
+    if structured_specific is None:
+      return f"{GENERAL_FEEDBACK_HEADER}\n{general}"
+    return (
+      f"{GENERAL_FEEDBACK_HEADER}\n{general}\n\n"
+      f"{SPECIFIC_FEEDBACK_HEADER}\n{structured_specific}"
+    )
 
   general_section = f"{GENERAL_FEEDBACK_HEADER}\n{general}"
 
@@ -66,3 +96,37 @@ def merge_general_feedback(
     f"{general_section}\n\n"
     f"{SPECIFIC_FEEDBACK_HEADER}\n{specific}"
   )
+
+
+def extract_response_specific_feedback(
+  general_feedback: Optional[str],
+  combined_feedback: Optional[str]
+) -> Optional[str]:
+  """Strip a structured general-feedback section from stored feedback."""
+  general = (general_feedback or "").strip()
+  combined = (combined_feedback or "").strip()
+
+  if not combined:
+    return None
+  if not general:
+    return combined
+
+  structured = _split_structured_feedback(combined)
+  if structured is not None:
+    _, structured_specific = structured
+    return structured_specific
+
+  general_section = f"{GENERAL_FEEDBACK_HEADER}\n{general}"
+  if combined == general_section:
+    return None
+
+  structured_prefix = (
+    f"{general_section}\n\n"
+    f"{SPECIFIC_FEEDBACK_HEADER}\n"
+  )
+  if combined.startswith(structured_prefix):
+    return combined[len(structured_prefix):].strip() or None
+
+  # Preserve freeform text when it does not match the canonical structured
+  # format. This keeps legacy manual edits intact instead of guessing.
+  return combined
