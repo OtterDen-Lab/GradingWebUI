@@ -1,0 +1,10 @@
+[Unit]
+Description=Create a verified GradingWebUI database backup
+RequiresMountsFor=__STATE_DIR__
+ConditionPathIsMountPoint=__STATE_DIR__
+ConditionPathExists=__STATE_DIR__/config/backup.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=__STATE_DIR__/config/backup.env
+ExecStart=/bin/sh -c 'exec __APP_DIR__/scripts/backup_lxc.sh --app-dir __APP_DIR__ --state-dir __STATE_DIR__ --backup-dir "$${GRADING_BACKUP_DIR}"'

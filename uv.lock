@@ -706,9 +706,9 @@ dependencies = [
     { name = "canvasapi" },
     { name = "fastapi" },
     { name = "fuzzywuzzy" },
-    { name = "lms-interface" },
     { name = "openai" },
     { name = "opencv-python" },
+    { name = "otterden-lms-interface" },
     { name = "pandas" },
     { name = "pillow" },
     { name = "pydantic" },
@@ -740,9 +740,9 @@ requires-dist = [
     { name = "fastapi", specifier = "~=0.127.1" },
     { name = "fuzzywuzzy", specifier = "~=0.18.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = "~=0.28.1" },
-    { name = "lms-interface", git = "https://github.com/OtterDen-Lab/LMSInterface.git?rev=v0.6.0" },
     { name = "openai", specifier = "~=2.14.0" },
     { name = "opencv-python", specifier = "~=4.12.0.88" },
+    { name = "otterden-lms-interface", specifier = "~=0.7.3" },
     { name = "pandas", specifier = "~=2.3.3" },
     { name = "pillow", specifier = "~=12.2.0" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.9.0,<3" },
@@ -1160,18 +1160,6 @@ wheels = [
 ]
 
 [[package]]
-name = "lms-interface"
-version = "0.6.0"
-source = { git = "https://github.com/OtterDen-Lab/LMSInterface.git?rev=v0.6.0#7d9cfe7bdea2c7b4375845cf88b7e944c65b2a22" }
-dependencies = [
-    { name = "canvasapi" },
-    { name = "pytest" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "requests" },
-]
-
-[[package]]
 name = "markdown"
 version = "3.10.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1417,6 +1405,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/68/1f/795e7f4aa2eacc59afa4fb61a2e35e510d06414dd5a802b51a012d691b37/opencv_python-4.12.0.88-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:092c16da4c5a163a818f120c22c5e4a2f96e0db4f24e659c701f1fe629a690f9", size = 67041680, upload-time = "2025-07-07T09:14:01.995Z" },
     { url = "https://files.pythonhosted.org/packages/02/96/213fea371d3cb2f1d537612a105792aa0a6659fb2665b22cad709a75bd94/opencv_python-4.12.0.88-cp37-abi3-win32.whl", hash = "sha256:ff554d3f725b39878ac6a2e1fa232ec509c36130927afc18a1719ebf4fbf4357", size = 30284131, upload-time = "2025-07-07T09:14:08.819Z" },
     { url = "https://files.pythonhosted.org/packages/fa/80/eb88edc2e2b11cd2dd2e56f1c80b5784d11d6e6b7f04a1145df64df40065/opencv_python-4.12.0.88-cp37-abi3-win_amd64.whl", hash = "sha256:d98edb20aa932fd8ebd276a72627dad9dc097695b3d435a4257557bbb49a79d2", size = 39000307, upload-time = "2025-07-07T09:14:16.641Z" },
+]
+
+[[package]]
+name = "otterden-lms-interface"
+version = "0.7.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "canvasapi" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/0b/12d137730e27e1eeadfc21806bfc4bb940e5744a155f47261be7a0485d12/otterden_lms_interface-0.7.3.tar.gz", hash = "sha256:65ea7c60b941553620d9b1f645df6760cffe42061b428932033e4abc4432c08a", size = 278676, upload-time = "2026-09-13T20:34:53.607Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/03/8a/e240a3bf8fef3b24a67617e3db6cd0b6116a03ec6b12aea7370dc35c65be/otterden_lms_interface-0.7.3-py3-none-any.whl", hash = "sha256:df4dee4b5efd60714bd08f7e3a8139804ab1ae654ccc8c4030197fbe6a7e5b83", size = 77886, upload-time = "2026-09-13T20:34:52.594Z" },
 ]
 
 [[package]]

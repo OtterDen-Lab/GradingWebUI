@@ -28,7 +28,15 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 3
+    networks:
+      caddy_proxy:
+        aliases:
+          - grader
 
 volumes:
   grading-data:
     driver: local
+
+networks:
+  caddy_proxy:
+    external: true

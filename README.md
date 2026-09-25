@@ -16,8 +16,9 @@ Install local hooks and the `git bump` alias:
 bash scripts/install_git_hooks.sh
 ```
 
-LMSInterface is consumed as a pinned dependency in `pyproject.toml`:
-`lms-interface @ git+https://github.com/OtterDen-Lab/LMSInterface.git@v0.5.0`
+LMSInterface is consumed from PyPI as the pinned
+[`otterden-lms-interface`](https://pypi.org/project/otterden-lms-interface/)
+dependency in `pyproject.toml`.
 
 Bump version + test + commit:
 
@@ -149,6 +150,103 @@ GRADING_WEB_IMAGE=samogden/webgraderui:v0.8.1 \
 GRADING_WEB_ENV_FILE=/etc/grading-web/web.env \
 docker compose -f docker/web-grading/docker-compose.prod.yml up -d
 ```
+
+### Deploy natively in a Proxmox LXC
+
+The LXC deployment is designed so the container and application checkout are
+replaceable while one detachable Proxmox mount point holds all durable state.
+Use a local Proxmox/ZFS/ext4-backed volume (not SMB/NFS/FUSE) and attach it in
+the LXC at `/srv/grading-web`. The service refuses to start if that mount is
+missing, preventing an accidental empty database on the LXC root filesystem.
+
+Inside a Debian/Ubuntu LXC with Python 3.12 or newer, clone this repository at
+`/opt/grading-web`, attach the storage volume at `/srv/grading-web`, and run:
+
+```bash
+cd /opt/grading-web
+make lxc-install
+sudoedit /srv/grading-web/config/web.env
+sudo systemctl start grading-web
+```
+
+In a minimal LXC where you are already root and `sudo` is not installed, use
+`editor` (or `vi`/`nano`) instead of `sudoedit` and run `systemctl` directly.
+The native Make targets detect root and do not invoke `sudo` in that case. The
+web process itself still runs as the dedicated unprivileged `grading-web` user.
+
+The installer creates this state layout on the mounted volume:
+
+```text
+/srv/grading-web/
+├── config/web.env       # secrets and service configuration, mode 0600
+├── data/grading.db      # grading records, users, scores, and submission PDFs
+├── logs/                 # application and error logs, owned by grading-web
+├── tmp/                 # in-progress upload/alignment files
+└── backup-staging/      # optional local staging only
+```
+
+The repository and virtual environment remain at `/opt/grading-web`; changing
+or replacing them does not alter the state volume. By default, the native
+service binds only to the current Tailscale IPv4 address, discovered with
+`tailscale ip -4`. A reverse proxy on another Tailnet host can therefore target
+that address without exposing the service on the LXC's LAN interface. Restrict
+access further with Tailscale ACLs.
+
+Override the bind policy in `config/web.env` only when needed:
+
+```ini
+# Default when omitted: tailnet (the address reported by `tailscale ip -4`)
+GRADING_BIND_HOST=tailnet
+# Alternatives: localhost, all, or an explicit IPv4/IPv6 address
+# GRADING_BIND_HOST=localhost
+GRADING_BIND_PORT=8765
+```
+
+Configure Caddy/nginx for HTTPS to the chosen address and keep
+`AUTH_COOKIE_SECURE=true`. For a temporary HTTP-only internal deployment, set
+`AUTH_COOKIE_SECURE=false` explicitly.
+
+For an upgrade, update the checkout using your normal Git/release process, then
+run `make lxc-deploy`. To create a consistent database snapshot, run:
+
+```bash
+make lxc-backup BACKUP_DIR=/mnt/off-host-backups/grading-web
+```
+
+`BACKUP_DIR` must itself be the mount point of separate storage (or be copied
+off-host afterward); the detachable state volume protects against LXC
+replacement, not disk failure.
+
+To schedule a daily backup, create the protected backup destination setting and
+enable the supplied systemd timer:
+
+```bash
+sudo cp /srv/grading-web/config/backup.env.example /srv/grading-web/config/backup.env
+sudoedit /srv/grading-web/config/backup.env
+make lxc-enable-backups
+```
+
+Set `GRADING_BACKUP_DIR` to a separate mounted disk or directory synchronized
+off-host. Check recent executions with `systemctl status grading-web-backup.timer`
+and `journalctl -u grading-web-backup.service`.
+
+To restore into a freshly attached state volume after installing the service:
+
+```bash
+make lxc-restore BACKUP_FILE=/path/to/grading-backup-YYYYMMDDTHHMMSSZ.db
+```
+
+Do not start `grading-web` before this restore command; the installer enables
+the service but does not start it, so the fresh state volume has no database to
+replace. The restore command refuses to overwrite a database that already
+exists. This is intentional. On a non-empty destination, make a current backup
+first, then use `scripts/restore_lxc_backup.sh --replace-existing` only after
+confirming the target paths.
+
+For an unprivileged LXC, configure the Proxmox mount point's UID/GID mapping so
+the `grading-web` service user can write `/srv/grading-web/data` and `tmp`.
+Verify this before installation with `sudo -u grading-web touch
+/srv/grading-web/data/.write-test`, then remove the test file.
 
 ## Features
 

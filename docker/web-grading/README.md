@@ -363,7 +363,7 @@ volumes:
 All Python dependencies are managed through `pyproject.toml` in the repository root. The Docker image automatically installs:
 
 - **Core dependencies**: FastAPI, uvicorn, PyMuPDF, Pillow, opencv-python
-- **LMS integration**: lms-interface (local path dependency)
+- **LMS integration**: otterden-lms-interface (PyPI dependency)
 - **AI services**: anthropic, openai
 - **Database**: aiosqlite for async SQLite
 - **Image processing**: opencv-python, pyzbar, Pillow

@@ -1,6 +1,11 @@
 SHELL := /bin/sh
 
 PYTHON ?= python3
+ifeq ($(shell id -u),0)
+  SUDO ?=
+else
+  SUDO ?= sudo
+endif
 APP_MODULE ?= grading_web_ui.web_api.main:app
 HOST ?= 127.0.0.1
 PORT ?= 8765
@@ -22,6 +27,9 @@ DEPLOY_TAG ?= latest
 PUBLISH_PLATFORMS ?= linux/amd64
 DOCKER_COMPOSE ?= docker compose -f docker/web-grading/docker-compose.prod.yml
 DEPLOY_ENV_VALIDATOR ?= scripts/validate_deploy_env.py
+LXC_APP_DIR ?= /opt/grading-web
+LXC_STATE_DIR ?= /srv/grading-web
+LXC_SERVICE_USER ?= grading-web
 
 # Allow:
 #   make publish v0.8.1
@@ -39,7 +47,7 @@ ifneq ($(filter deploy deploy-from-backup,$(firstword $(MAKECMDGOALS))),)
   endif
 endif
 
-.PHONY: help debug dev run image publish deploy validate-env backup-db backup deploy-from-backup
+.PHONY: help debug dev run image publish deploy validate-env backup-db backup deploy-from-backup lxc-install lxc-deploy lxc-backup lxc-restore lxc-enable-backups
 
 help:
 	@echo "Targets:"
@@ -61,6 +69,16 @@ help:
 	@echo "    Snapshot the running Docker database and copy it to external storage."
 	@echo "  make deploy-from-backup BACKUP_FILE=/path/to/grading-backup.db [vX.Y.Z]"
 	@echo "    Deploy a release, replace its fresh database with a verified backup, and start it."
+	@echo "  make lxc-install"
+	@echo "    Install the native systemd service; requires a mounted LXC state volume."
+	@echo "  make lxc-deploy"
+	@echo "    Sync dependencies from the current native checkout and restart the service."
+	@echo "  make lxc-backup BACKUP_DIR=/path/on/off-host-storage"
+	@echo "    Create a verified backup from a native LXC installation."
+	@echo "  make lxc-restore BACKUP_FILE=/path/to/grading-backup.db"
+	@echo "    Restore into an empty native LXC state volume."
+	@echo "  make lxc-enable-backups"
+	@echo "    Enable the daily native backup timer after configuring backup.env."
 
 debug:
 	@mkdir -p $(DB_DIR)
@@ -128,3 +146,26 @@ backup:
 		exit 1; \
 	fi
 	GRADING_WEB_ENV_FILE=$(DEPLOY_ENV_FILE) scripts/backup_docker.sh --backup-dir "$(BACKUP_DIR)"
+
+lxc-install:
+	$(SUDO) scripts/install_lxc_service.sh --app-dir "$(LXC_APP_DIR)" --state-dir "$(LXC_STATE_DIR)" --service-user "$(LXC_SERVICE_USER)"
+
+lxc-deploy:
+	$(SUDO) scripts/deploy_lxc_service.sh --app-dir "$(LXC_APP_DIR)" --service-user "$(LXC_SERVICE_USER)"
+
+lxc-backup:
+	@if [ -z "$(BACKUP_DIR)" ]; then \
+		echo "Missing BACKUP_DIR=/path/on/off-host-storage"; \
+		exit 1; \
+	fi
+	$(SUDO) scripts/backup_lxc.sh --app-dir "$(LXC_APP_DIR)" --state-dir "$(LXC_STATE_DIR)" --backup-dir "$(BACKUP_DIR)"
+
+lxc-restore:
+	@if [ -z "$(BACKUP_FILE)" ]; then \
+		echo "Missing BACKUP_FILE=/path/to/grading-backup.db"; \
+		exit 1; \
+	fi
+	$(SUDO) scripts/restore_lxc_backup.sh --app-dir "$(LXC_APP_DIR)" --state-dir "$(LXC_STATE_DIR)" --service-user "$(LXC_SERVICE_USER)" --backup-file "$(BACKUP_FILE)"
+
+lxc-enable-backups:
+	$(SUDO) systemctl enable --now grading-web-backup.timer
