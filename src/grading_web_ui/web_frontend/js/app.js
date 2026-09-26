@@ -664,6 +664,13 @@ async function selectSession(sessionId) {
             await prepareAlignment();
             return;
         }
+        if (currentSession.status === 'preprocessing') {
+            navigateToSection('upload-section');
+            listenForStatusUpdates();
+            document.getElementById('upload-status').textContent =
+                currentSession.processing_message || 'Processing continues on the server...';
+            return;
+        }
         navigateToSection(getNextSectionForStatus(currentSession.status));
     } catch (error) {
         console.error('Failed to select session:', error);

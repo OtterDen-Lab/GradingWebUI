@@ -884,6 +884,33 @@ async def prepare_alignment(
   if not session_data or "file_paths" not in session_data:
     raise HTTPException(status_code=400, detail="No uploaded files found for this session")
 
+  # Composite creation can take a long time.  Persist its result so a browser
+  # refresh, reconnecting from another computer, or a lost HTTP response does
+  # not make the server scan every QR code again.
+  cached_alignment = session_data.get("alignment_assets")
+  if session.status == SessionStatus.AWAITING_ALIGNMENT and cached_alignment:
+    return {
+      "session_id": session_id,
+      "files_uploaded": len(session_data["file_paths"]),
+      "status": "awaiting_alignment",
+      "message": "Alignment ready. Please select split points.",
+      "composites": cached_alignment["composites"],
+      "page_dimensions": cached_alignment["page_dimensions"],
+      "num_exams": session.total_exams,
+      "suggested_split_points": cached_alignment.get("suggested_split_points"),
+      "auto_processed": False
+    }
+
+  if session_data.get("alignment_preparing"):
+    return {
+      "session_id": session_id,
+      "files_uploaded": len(session_data["file_paths"]),
+      "status": "processing",
+      "message": session.processing_message or "Preparing alignment on the server...",
+      "num_exams": session.total_exams,
+      "auto_processed": False
+    }
+
   mock_roster = bool(session_data.get("mock_roster"))
   if not mock_roster:
     submission_repo = SubmissionRepository()
@@ -935,6 +962,13 @@ async def prepare_alignment(
     }
 
   qr_positions_by_file = None
+  session_data["alignment_preparing"] = True
+  session_repo.update_metadata(session_id, session_data)
+  session_repo.update_status(
+    session_id,
+    SessionStatus.PREPROCESSING,
+    "Preparing alignment images and scanning QR codes..."
+  )
   qr_scanner = QRScanner()
   qr_scan_enabled, qr_scan_max_dpi, qr_scan_dpi_steps = _resolve_qr_scan_settings(
     session_data
@@ -1046,7 +1080,21 @@ async def prepare_alignment(
     )
     return composites, dimensions, transforms_by_file, suggested_split_points
 
-  composites, dimensions, transforms_by_file, suggested_split_points = await asyncio.to_thread(build_alignment_assets)
+  try:
+    composites, dimensions, transforms_by_file, suggested_split_points = await asyncio.to_thread(build_alignment_assets)
+  except Exception as exc:
+    log.error("Alignment preparation failed for session %s", session_id, exc_info=True)
+    failed_data = session_repo.get_metadata(session_id) or {}
+    failed_data.pop("alignment_preparing", None)
+    session_repo.update_metadata(session_id, failed_data)
+    session_repo.update_status(
+      session_id, SessionStatus.ERROR, f"Alignment preparation failed: {exc}"
+    )
+    await sse.send_event(stream_id, "error", {
+      "error": str(exc),
+      "message": f"Alignment preparation failed: {exc}"
+    })
+    raise HTTPException(status_code=500, detail=f"Alignment preparation failed: {exc}") from exc
 
   composite_dimensions = {
     str(page_num): [dims[0], dims[1]]
@@ -1066,14 +1114,26 @@ async def prepare_alignment(
       str(page_num): data for page_num, data in transforms.items()
     }
   session_data["page_transforms"] = page_transforms
-  session_repo.update_metadata(session_id, session_data)
-  session_repo.update_status(session_id, SessionStatus.AWAITING_ALIGNMENT,
-                             "Alignment ready. Please select split points.")
-
   page_dimensions = {
     page_num: {"width": dims[0], "height": dims[1]}
     for page_num, dims in dimensions.items()
   }
+  session_data["alignment_assets"] = {
+    "composites": composites,
+    "page_dimensions": page_dimensions,
+    "suggested_split_points": suggested_split_points,
+  }
+  session_data.pop("alignment_preparing", None)
+  session_repo.update_metadata(session_id, session_data)
+  session_repo.update_status(session_id, SessionStatus.AWAITING_ALIGNMENT,
+                             "Alignment ready. Please select split points.")
+
+  await sse.send_event(stream_id, "complete", {
+    "total": 1,
+    "processed": 1,
+    "matched": 0,
+    "message": "Alignment ready. Please select split points."
+  })
 
   return {
     "session_id": session_id,

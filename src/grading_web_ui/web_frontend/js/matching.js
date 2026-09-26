@@ -134,14 +134,22 @@ async function loadNameMatching() {
         const studentsData = await studentsResp.json();
         allStudents = studentsData.students;
 
-        // Pre-fill suggested matches based on fuzzy matching
-        // Only if not already matched
+        // Pre-fill suggestions only once per available student.  Suggestions
+        // are selections just like manual choices, so proposing one student
+        // for two exams is never useful and previously led to a race during
+        // the batch save.
+        const reservedStudentIds = new Set(
+            allSubmissions
+                .filter(submission => submission.canvas_user_id)
+                .map(submission => submission.canvas_user_id)
+        );
         allSubmissions.forEach(submission => {
             if (!submission.canvas_user_id && submission.approximate_name) {
                 let bestScore = 0;
                 let bestStudent = null;
 
                 allStudents.forEach(student => {
+                    if (reservedStudentIds.has(student.user_id)) return;
                     const score = fuzzyMatch(submission.approximate_name, student.name);
                     if (score > bestScore && score >= 98) {  // 98% threshold (same as backend)
                         bestScore = score;
@@ -151,6 +159,7 @@ async function loadNameMatching() {
 
                 if (bestStudent) {
                     submission.suggested_canvas_user_id = bestStudent.user_id;
+                    reservedStudentIds.add(bestStudent.user_id);
                     console.log(`Suggested match for "${submission.approximate_name}": ${bestStudent.name} (${bestScore}%)`);
                 }
             }
@@ -529,6 +538,7 @@ async function confirmAllMatches() {
     // Collect all pending matches
     const pendingMatches = [];
     const warnings = [];
+    const selectedStudentIds = new Map();
 
     for (const submission of allSubmissions) {
         const select = document.getElementById(`select-${submission.id}`);
@@ -538,12 +548,22 @@ async function confirmAllMatches() {
         if (!selectedUserId) continue;
         if (submission.is_matched && submission.canvas_user_id === selectedUserId) continue;
 
-        // Check for warnings (reassignments)
+        if (selectedStudentIds.has(selectedUserId)) {
+            const otherExam = selectedStudentIds.get(selectedUserId);
+            alert(`The same student is selected for Exam #${otherExam} and Exam #${submission.document_id + 1}. Assign each student to only one exam.`);
+            return;
+        }
+        selectedStudentIds.set(selectedUserId, submission.document_id + 1);
+
+        // A matched student cannot be reassigned from this screen.  The API
+        // applies the same rule, but stopping here avoids a partially saved
+        // batch when a second browser has changed a match meanwhile.
         const student = allStudents.find(s => s.user_id === selectedUserId);
         if (student && student.is_matched) {
             const currentMatchId = select.dataset.currentMatch;
             if (!currentMatchId || parseInt(currentMatchId) !== selectedUserId) {
-                warnings.push(`"${student.name}" will be reassigned to Exam #${submission.document_id + 1}`);
+                alert(`"${student.name}" is already matched to another exam. Clear that exam's match before using this student here.`);
+                return;
             }
         }
 
@@ -588,11 +608,11 @@ async function confirmAllMatches() {
     setMatchingActionStatus(`Saving ${pendingMatches.length} confirmed match(es)...`, 'info');
 
     try {
-        // Process matches with bounded concurrency for faster confirmation.
+        // Save in order.  The server also enforces one exam per student; doing
+        // this serially keeps a stale client view from turning into a race.
         const revealQuery = revealCanvasNames ? '?reveal_names=true' : '';
         const queue = [...pendingMatches];
         const total = queue.length;
-        const concurrency = Math.min(8, total);
         let completed = 0;
         let successCount = 0;
         let failCount = 0;
@@ -629,7 +649,7 @@ async function confirmAllMatches() {
             }
         };
 
-        await Promise.all(Array.from({ length: concurrency }, () => worker()));
+        await worker();
 
         // Show result
         if (failCount > 0) {

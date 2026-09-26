@@ -352,14 +352,18 @@ async def match_submission(
   if not student:
     raise HTTPException(status_code=404, detail="Student not found in Canvas")
 
-  # Check if this student is already matched to another submission
+  # A roster entry can belong to only one physical exam in a session.  This
+  # used to clear the other exam and silently move the match, which made a
+  # burst of browser requests appear to shuffle later rows.
   previous_submission = submission_repo.get_by_canvas_user(session_id, match.canvas_user_id)
-  previous_submission_id = None
-
   if previous_submission and previous_submission.id != match.submission_id:
-    # If student was previously matched to a different submission, unassign them
-    previous_submission_id = previous_submission.id
-    submission_repo.clear_match(previous_submission_id)
+    raise HTTPException(
+      status_code=409,
+      detail=(
+        f"This student is already matched to Exam #{previous_submission.document_id + 1}. "
+        "Clear that match before assigning the student to another exam."
+      )
+    )
 
   # Update submission with new match
   submission_repo.update_match(match.submission_id, match.canvas_user_id, student["name"])
@@ -374,5 +378,5 @@ async def match_submission(
     "status": "matched",
     "student_name": student["name"],
     "remaining_unmatched": unmatched_count,
-    "reassigned_from": previous_submission_id
+    "reassigned_from": None
   }
