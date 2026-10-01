@@ -4478,8 +4478,8 @@ closeTranscription.addEventListener('click', () => {
 
 // Function to fetch transcription (with caching)
 async function fetchTranscription(problemId, model = 'default') {
-    // Normalize 'default' to 'sonnet' for caching since default routes to Anthropic.
-    const cacheKey = model === 'default' ? 'sonnet' : model;
+    // Keep the configured default separate from explicit tier retries.
+    const cacheKey = model === 'default' ? 'default' : model;
 
     // Check cache first
     if (transcriptionCache[problemId] && transcriptionCache[problemId][cacheKey]) {
@@ -4531,18 +4531,22 @@ function displayTranscription(transcription) {
     transcriptionActions.style.display = 'block';
     transcriptionActions.innerHTML = `
         <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
-            <button id="retry-sonnet-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                Try Sonnet
+            <button id="retry-small-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
+                Configured Small
             </button>
-            <button id="retry-opus-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                Try Opus (Premium)
+            <button id="retry-medium-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
+                Configured Medium
+            </button>
+            <button id="retry-large-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
+                Configured Large
             </button>
         </div>
     `;
 
     // Add event listeners for the new buttons
-    document.getElementById('retry-sonnet-btn').addEventListener('click', () => retryWithModel('sonnet'));
-    document.getElementById('retry-opus-btn').addEventListener('click', () => retryWithModel('opus'));
+    document.getElementById('retry-small-btn').addEventListener('click', () => retryWithModel('small'));
+    document.getElementById('retry-medium-btn').addEventListener('click', () => retryWithModel('medium'));
+    document.getElementById('retry-large-btn').addEventListener('click', () => retryWithModel('large'));
 }
 
 // Function to retry transcription with a specific model
@@ -4550,9 +4554,10 @@ async function retryWithModel(model) {
     if (!currentProblem) return;
 
     const modelNames = {
-        'default': 'Anthropic',
-        'sonnet': 'Sonnet',
-        'opus': 'Opus (Premium)'
+        'default': 'your configured default model',
+        'small': 'your configured small model',
+        'medium': 'your configured medium model',
+        'large': 'your configured large model'
     };
 
     // Show loading state
@@ -4578,16 +4583,16 @@ async function updateTranscriptionDialog() {
         return;
     }
 
-    // Check if we have a cached transcription for this problem (default to sonnet)
-    const cacheKey = 'sonnet';
+    // Check if we have a cached transcription for this problem's configured default.
+    const cacheKey = 'default';
     if (transcriptionCache[currentProblem.id] && transcriptionCache[currentProblem.id][cacheKey]) {
         // Show cached transcription immediately
         console.log(`Showing cached transcription for problem ${currentProblem.id}`);
         displayTranscription(transcriptionCache[currentProblem.id][cacheKey]);
     } else {
-        // No cache - fetch new transcription with Anthropic default
+        // No cache - fetch using the server-side configured default.
         console.log(`No cache found, fetching new transcription for problem ${currentProblem.id}`);
-        transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with Anthropic...</div>';
+        transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with your configured default model...</div>';
         transcriptionActions.style.display = 'none';
 
         try {
@@ -4707,7 +4712,7 @@ document.getElementById('finalize-upload-dialog').addEventListener('click', (e) 
     }
 });
 
-// Decipher handwriting button (defaults to Anthropic)
+// Decipher handwriting button (uses the server-side configured default)
 decipherBtn.addEventListener('click', async () => {
     if (!currentProblem) {
         alert('No problem loaded');
@@ -4715,12 +4720,12 @@ decipherBtn.addEventListener('click', async () => {
     }
 
     // Show dialog with loading state
-    transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with Anthropic...</div>';
+    transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with your configured default model...</div>';
     transcriptionActions.style.display = 'none';
     transcriptionDialog.style.display = 'flex';
 
     try {
-        // Default to 'default' which uses Anthropic Sonnet-family candidates
+        // Default is resolved for this user at request time.
         const transcription = await fetchTranscription(currentProblem.id, 'default');
         displayTranscription(transcription);
     } catch (error) {
@@ -4731,18 +4736,22 @@ decipherBtn.addEventListener('click', async () => {
         transcriptionActions.style.display = 'block';
         transcriptionActions.innerHTML = `
             <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
-                <button id="retry-sonnet-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
-                    Try Sonnet
+                <button id="retry-small-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
+                    Configured Small
                 </button>
-                <button id="retry-opus-btn" class="btn btn-primary" style="flex: 1; min-width: 120px;">
-                    Try Opus (Premium)
+                <button id="retry-medium-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
+                    Configured Medium
+                </button>
+                <button id="retry-large-btn" class="btn btn-primary" style="flex: 1; min-width: 120px;">
+                    Configured Large
                 </button>
             </div>
         `;
 
         // Add event listeners for the buttons
-        document.getElementById('retry-sonnet-btn').addEventListener('click', () => retryWithModel('sonnet'));
-        document.getElementById('retry-opus-btn').addEventListener('click', () => retryWithModel('opus'));
+        document.getElementById('retry-small-btn').addEventListener('click', () => retryWithModel('small'));
+        document.getElementById('retry-medium-btn').addEventListener('click', () => retryWithModel('medium'));
+        document.getElementById('retry-large-btn').addEventListener('click', () => retryWithModel('large'));
     }
 });
 

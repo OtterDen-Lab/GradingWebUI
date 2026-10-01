@@ -52,12 +52,10 @@ function escapeAI(value) {
 async function saveAIModelSettings(scope) {
   const models = {};
   document.querySelectorAll('[data-ai-tier]').forEach(input => {
-    models[input.dataset.aiTier] = input.value.trim() || null;
+    const tier = input.dataset.aiTier;
+    models[tier] = input.value.trim() ||
+      (scope === 'system' ? aiModelSettings.settings[tier].model_id : null);
   });
-  if (scope === 'system' && Object.values(models).some(value => !value)) {
-    alert('System defaults require a model for every tier.');
-    return;
-  }
   const response = await fetch(`${API_BASE}/ai-settings/${scope}`, {
     method: 'PUT', credentials: 'include', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({provider: 'anthropic', models})

@@ -1,6 +1,7 @@
 """Provider-neutral resolution of AI model defaults and user overrides."""
 from dataclasses import dataclass
 from typing import Optional
+import sqlite3
 
 from ... import ai_helper
 from ..database import get_db_connection
@@ -38,19 +39,24 @@ def resolve_model(user_id: Optional[int], provider: str = "anthropic",
   if explicit_model:
     return ModelSelection(provider, explicit_model.strip(), tier, "request")
 
-  with get_db_connection() as conn:
-    if user_id is not None:
+  # The reusable exam processor is also used outside a running web app. In
+  # that context a database may not exist, so retain the safe built-in default.
+  try:
+    with get_db_connection() as conn:
+      if user_id is not None:
+        row = conn.execute("""
+          SELECT model_id FROM user_model_overrides
+          WHERE user_id = ? AND provider = ? AND tier = ?
+        """, (user_id, provider, tier)).fetchone()
+        if row:
+          return ModelSelection(provider, row["model_id"], tier, "user")
       row = conn.execute("""
-        SELECT model_id FROM user_model_overrides
-        WHERE user_id = ? AND provider = ? AND tier = ?
-      """, (user_id, provider, tier)).fetchone()
+        SELECT model_id FROM system_model_defaults WHERE provider = ? AND tier = ?
+      """, (provider, tier)).fetchone()
       if row:
-        return ModelSelection(provider, row["model_id"], tier, "user")
-    row = conn.execute("""
-      SELECT model_id FROM system_model_defaults WHERE provider = ? AND tier = ?
-    """, (provider, tier)).fetchone()
-    if row:
-      return ModelSelection(provider, row["model_id"], tier, "system")
+        return ModelSelection(provider, row["model_id"], tier, "system")
+  except sqlite3.OperationalError:
+    pass
   return ModelSelection(provider, ai_helper.get_model_for_tier(provider, tier), tier, "built-in")
 
 

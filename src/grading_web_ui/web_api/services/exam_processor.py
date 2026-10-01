@@ -29,6 +29,7 @@ from grading_web_ui import ai_helper
 # Import QR scanner service
 from .qr_scanner import QRScanner, qr_matches_problem_number
 from .problem_service import ProblemService
+from .model_settings import resolve_model
 
 # Import DTOs
 from ..dtos import SubmissionDTO, ProblemDTO
@@ -99,6 +100,9 @@ class ExamProcessor:
       log.warning(
           f"Unknown AI provider '{ai_provider}', defaulting to Anthropic")
       self.ai_helper_class = ai_helper.AI_Helper__Anthropic
+    # Upload jobs do not currently retain a browser-local provider setting.
+    # Resolve the system small tier when processing begins instead.
+    self.name_model = resolve_model(None, self.ai_provider, "small")
   
   def process_exams(
       self,
@@ -615,11 +619,10 @@ class ExamProcessor:
           sorted(student_names))
 
       if self.ai_helper_class is ai_helper.AI_Helper__Anthropic:
-        # Keep name matching on the fast Haiku 4.5 path to avoid stale model aliases.
         response, _ = self.ai_helper_class().query_ai(
           query,
           attachments=[("png", name_image_base64)],
-          candidate_models=["claude-haiku-4-5"]
+          candidate_models=[self.name_model.model_id]
         )
       else:
         response, _ = self.ai_helper_class().query_ai(

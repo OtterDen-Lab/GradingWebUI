@@ -103,6 +103,7 @@ function updateUserDisplay() {
                 Logged in as <strong>${currentUser.username}</strong> (${roleLabel})
             </span>
             <button id="change-password-btn" class="btn btn-secondary" style="margin-right: 5px;">Change Password</button>
+            <button id="ai-settings-btn" class="btn btn-secondary" style="margin-right: 5px;">Settings</button>
             <button id="logout-btn" class="btn btn-secondary">Logout</button>
         `;
 
@@ -111,6 +112,10 @@ function updateUserDisplay() {
 
         // Add change password handler
         document.getElementById('change-password-btn').onclick = openChangePasswordModal;
+        document.getElementById('ai-settings-btn').onclick = () => {
+            navigateToSection('ai-settings-section');
+            loadAIModelSettings();
+        };
     }
 }
 
@@ -216,7 +221,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadMockRosterConfig();
   loadSessions();
   setupEventListeners();
-  initializeAIProvider();
 });
 
 async function loadVersionTag() {
@@ -300,24 +304,10 @@ function closeNewSessionModal() {
   sessionNameDirty = false;
 }
 
-// Initialize AI provider dropdown from localStorage
-function initializeAIProvider() {
-    const aiProviderSelect = document.getElementById('global-ai-provider-select');
-
-    // Load saved preference from localStorage (default to 'anthropic')
-    const savedProvider = localStorage.getItem('ai_provider') || 'anthropic';
-    aiProviderSelect.value = savedProvider;
-
-    // Save to localStorage whenever user changes selection
-    aiProviderSelect.addEventListener('change', (e) => {
-        localStorage.setItem('ai_provider', e.target.value);
-        console.log(`AI provider changed to: ${e.target.value}`);
-    });
-}
-
-// Get current AI provider selection
+// Name extraction currently uses the configured Anthropic provider. This keeps
+// the legacy upload payload stable while model choice is server-side.
 function getAIProvider() {
-    return localStorage.getItem('ai_provider') || 'anthropic';
+    return 'anthropic';
 }
 
 function getSessionQrScanSettings() {
