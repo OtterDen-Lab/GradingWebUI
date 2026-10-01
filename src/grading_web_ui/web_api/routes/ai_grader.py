@@ -162,7 +162,7 @@ async def extract_question(
     submission = submission_repo.get_by_id(problem.submission_id)
 
     if submission and submission.exam_pdf_data:
-      image_data = AIGraderService().problem_service.extract_image_from_pdf_data(
+      image_data = AIGraderService(current_user["user_id"]).problem_service.extract_image_from_pdf_data(
         pdf_base64=submission.exam_pdf_data,
         page_number=region_data["page_number"],
         region_y_start=region_data["region_y_start"],
@@ -182,7 +182,7 @@ async def extract_question(
 
   try:
     # Extract question text
-    ai_grader = AIGraderService()
+    ai_grader = AIGraderService(current_user["user_id"])
     question_text = ai_grader.get_or_extract_question(session_id,
                                                       request.problem_number,
                                                       image_data)
@@ -215,7 +215,7 @@ async def start_autograde(
   if not handler:
     raise HTTPException(status_code=400,
                         detail=f"Unsupported autograding mode: {request.mode}")
-  return await handler(session_id, request, background_tasks)
+  return await handler(session_id, request, background_tasks, current_user["user_id"])
 
 
 @router.post("/{session_id}/autograde-all", response_model=AutogradeResponse)
@@ -261,7 +261,7 @@ async def start_autograde_all(
     sse.create_stream(stream_id)
     settings = request.settings.model_dump()
     background_tasks.add_task(run_autograding_all, session_id, problem_numbers,
-                              totals_by_problem, settings, stream_id)
+                              totals_by_problem, settings, stream_id, current_user["user_id"])
   except Exception:
     workflow_locks.release("autograde", session_id)
     raise
@@ -277,7 +277,7 @@ async def start_autograde_all(
 
 
 async def _start_autograde_text(session_id: int, request: AutogradeRequest,
-                                background_tasks: BackgroundTasks):
+                                background_tasks: BackgroundTasks, user_id: int):
   session_repo = SessionRepository()
   problem_repo = ProblemRepository()
   metadata_repo = ProblemMetadataRepository()
@@ -317,7 +317,7 @@ async def _start_autograde_text(session_id: int, request: AutogradeRequest,
     # Start background autograding
     background_tasks.add_task(run_autograding, session_id,
                               request.problem_number, request.max_points,
-                              stream_id, request.auto_accept)
+                              stream_id, request.auto_accept, user_id)
   except Exception:
     workflow_locks.release("autograde", session_id)
     raise
@@ -329,7 +329,7 @@ async def _start_autograde_text(session_id: int, request: AutogradeRequest,
 
 
 async def _start_autograde_image(session_id: int, request: AutogradeRequest,
-                                 background_tasks: BackgroundTasks):
+                                 background_tasks: BackgroundTasks, user_id: int):
   session_repo = SessionRepository()
   problem_repo = ProblemRepository()
 
@@ -358,7 +358,7 @@ async def _start_autograde_image(session_id: int, request: AutogradeRequest,
     sse.create_stream(stream_id)
     settings = request.settings.model_dump()
     background_tasks.add_task(run_autograding_image, session_id,
-                              request.problem_number, settings, stream_id)
+                              request.problem_number, settings, stream_id, user_id)
   except Exception:
     workflow_locks.release("autograde", session_id)
     raise
@@ -374,7 +374,7 @@ async def _start_autograde_image(session_id: int, request: AutogradeRequest,
 
 
 async def run_autograding_image(session_id: int, problem_number: int,
-                                settings: dict, stream_id: str):
+                                settings: dict, stream_id: str, user_id: int):
   """Background task to autograde problems from images with SSE updates."""
   try:
     log.info(
@@ -386,7 +386,7 @@ async def run_autograding_image(session_id: int, problem_number: int,
       {"message": f"Starting image-only autograding for problem {problem_number}..."})
 
     loop = asyncio.get_event_loop()
-    ai_grader = AIGraderService()
+    ai_grader = AIGraderService(user_id)
 
     def update_progress(current, total, message):
       progress_percent = min(100, int(
@@ -439,7 +439,7 @@ async def run_autograding_image(session_id: int, problem_number: int,
 
 async def run_autograding_all(session_id: int, problem_numbers: list,
                               totals_by_problem: dict, settings: dict,
-                              stream_id: str):
+                              stream_id: str, user_id: int):
   """Background task to autograde all problems with SSE updates."""
   try:
     log.info(
@@ -452,7 +452,7 @@ async def run_autograding_all(session_id: int, problem_numbers: list,
       {"message": f"Starting image-only autograding for {len(problem_numbers)} problems..."})
 
     loop = asyncio.get_event_loop()
-    ai_grader = AIGraderService()
+    ai_grader = AIGraderService(user_id)
 
     def send_progress(current, total, message):
       progress_percent = min(100, int(
@@ -514,7 +514,7 @@ async def run_autograding_all(session_id: int, problem_numbers: list,
 
 async def run_autograding(session_id: int, problem_number: int,
                           max_points: float, stream_id: str,
-                          auto_accept: bool):
+                          auto_accept: bool, user_id: int):
   """Background task to autograde problems with SSE progress updates"""
   try:
     log.info(
@@ -530,7 +530,7 @@ async def run_autograding(session_id: int, problem_number: int,
     loop = asyncio.get_event_loop()
 
     # Create AI grader service
-    ai_grader = AIGraderService()
+    ai_grader = AIGraderService(user_id)
 
     # Progress callback for SSE updates
     def update_progress(current, total, message):
@@ -603,7 +603,7 @@ async def generate_rubric(
     raise HTTPException(status_code=404, detail="Session not found")
 
   try:
-    ai_grader = AIGraderService()
+    ai_grader = AIGraderService(current_user["user_id"])
 
     # Get grading examples (manually graded submissions)
     example_answers = ai_grader.get_grading_examples(

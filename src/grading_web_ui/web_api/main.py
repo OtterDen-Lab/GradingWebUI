@@ -84,7 +84,7 @@ from .database import init_database, get_db_connection
 from .services.quiz_encryption import install_quizgenerator_key_provider
 from .services.runtime_metrics import RuntimeMetrics
 from .startup_config import validate_startup_configuration
-from .routes import sessions, problems, uploads, canvas, matching, finalize, ai_grader, alignment, feedback_tags, auth, assignments
+from .routes import sessions, problems, uploads, canvas, matching, finalize, ai_grader, alignment, feedback_tags, auth, assignments, ai_settings
 from .auth import require_instructor
 
 # Optional debug routes (may not exist on all deployments)
@@ -208,6 +208,7 @@ async def version_info():
 
 # Include routers
 app.include_router(auth.router,           prefix="/api/auth",           tags=["auth"])
+app.include_router(ai_settings.router,    prefix="/api/ai-settings",    tags=["ai-settings"])
 app.include_router(sessions.router,       prefix="/api/sessions",       tags=["sessions"])
 app.include_router(assignments.router,    prefix="/api/sessions",       tags=["assignments"])
 app.include_router(problems.router,       prefix="/api/problems",       tags=["problems"])

@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 26
+CURRENT_SCHEMA_VERSION = 27
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -502,6 +502,8 @@ def create_schema(cursor):
     "CREATE INDEX idx_session_assignments_session ON session_assignments(session_id)"
   )
 
+  migrate_to_v27(cursor)
+
   maybe_create_bootstrap_admin(cursor)
 
   # Record schema version
@@ -616,6 +618,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 26:
     migrate_to_v26(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (26)")
+
+  if from_version < 27:
+    migrate_to_v27(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (27)")
 
 
 def migrate_to_v2(cursor):
@@ -1182,6 +1188,33 @@ def migrate_to_v26(cursor):
     cursor.execute(
       "ALTER TABLE problems ADD COLUMN regeneration_cached_at TIMESTAMP")
     log.info("Added regeneration_cached_at column")
+
+
+def migrate_to_v27(cursor):
+  """Store AI model defaults independently of grading sessions."""
+  log.info("Migrating to schema version 27: adding AI model settings")
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS system_model_defaults (
+      provider TEXT NOT NULL,
+      tier TEXT NOT NULL CHECK(tier IN ('small', 'medium', 'large')),
+      model_id TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_by INTEGER,
+      PRIMARY KEY (provider, tier),
+      FOREIGN KEY (updated_by) REFERENCES users(id)
+    )
+  """)
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_model_overrides (
+      user_id INTEGER NOT NULL,
+      provider TEXT NOT NULL,
+      tier TEXT NOT NULL CHECK(tier IN ('small', 'medium', 'large')),
+      model_id TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, provider, tier),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  """)
 
 
 def update_problem_stats(session_id: int):

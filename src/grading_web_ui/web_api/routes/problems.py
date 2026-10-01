@@ -27,6 +27,7 @@ from ..services.feedback_text import (
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from ..services.qr_scanner import qr_matches_problem_number
 from ..auth import require_session_access, get_current_user
+from ..services.model_settings import resolve_model
 
 from grading_web_ui import ai_helper
 
@@ -1159,8 +1160,8 @@ async def decipher_handwriting(
 
     Args:
         problem_id: ID of the problem to transcribe
-        model: AI model to use ("default", "sonnet", "opus")
-               "default" uses Anthropic Sonnet-family candidates
+        model: "default", a tier (small/medium/large), or provider:model.
+               Defaults resolve from the current user's saved settings.
     """
   problem_repo = ProblemRepository()
   submission_repo = SubmissionRepository()
@@ -1185,45 +1186,33 @@ async def decipher_handwriting(
   try:
     selected_model = (model or "default").strip().lower()
 
-    # Select AI provider based on model parameter
-    if selected_model == "opus":
-      ai = ai_helper.AI_Helper__Anthropic()
-      opus_candidates = _parse_model_csv(
-        os.getenv("ANTHROPIC_OPUS_MODELS",
-                  "claude-opus-4-5,claude-opus-4-20250514")
-      )
-      opus_fallbacks = _parse_model_csv(
-        os.getenv(
-          "ANTHROPIC_OPUS_FALLBACK_MODELS",
-          "claude-sonnet-4-5,claude-3-7-sonnet-latest,claude-3-5-sonnet-latest"
-        )
-      )
-      response, usage = ai.query_ai(
-        query,
-        attachments=[("png", image_base64)],
-        candidate_models=[*opus_candidates, *opus_fallbacks]
-      )
-      transcription = response
-      used_model = usage.get("model", "unknown")
-      model_name = (
-        f"Opus (Premium: {used_model})"
-        if used_model in set(opus_candidates) else
-        f"Anthropic fallback ({used_model})"
-      )
-    elif selected_model in ("default", "sonnet"):
-      ai = ai_helper.AI_Helper__Anthropic()
-      response, usage = ai.query_ai(query, attachments=[("png", image_base64)])
-      transcription = response
-      model_name = f"Anthropic ({usage.get('model', 'unknown')})"
-    else:
-      raise HTTPException(
-        status_code=400,
-        detail="Unknown model. Expected one of: default, sonnet, opus"
-      )
+    # Compatibility aliases preserve old links while all choices now resolve
+    # dynamically from persistent settings instead of the grading session.
+    tier = {"default": "medium", "sonnet": "medium", "opus": "large"}.get(
+      selected_model, selected_model)
+    provider = "anthropic"
+    explicit_model = None
+    if ":" in selected_model:
+      provider, explicit_model = selected_model.split(":", 1)
+      tier = "medium"
+    try:
+      selection = resolve_model(current_user["user_id"], provider, tier,
+                                explicit_model)
+    except ValueError as error:
+      raise HTTPException(status_code=400, detail=str(error)) from error
+    if selection.provider != "anthropic":
+      raise HTTPException(status_code=400,
+                          detail="Handwriting support is not yet available for this provider")
+    ai = ai_helper.AI_Helper__Anthropic()
+    response, usage = ai.query_ai(
+      query, attachments=[("png", image_base64)],
+      candidate_models=[selection.model_id])
+    transcription = response
+    model_name = f"Anthropic ({usage.get('model', selection.model_id)})"
 
     # Validate transcription is not empty
     if not transcription or not transcription.strip():
-      error_msg = f"Model returned empty transcription. Try a different model (Sonnet or Opus)."
+      error_msg = "Model returned empty transcription. Try another configured model."
       log.warning(
         f"Empty transcription from {model_name} for problem {problem_id}")
       raise HTTPException(status_code=500, detail=error_msg)

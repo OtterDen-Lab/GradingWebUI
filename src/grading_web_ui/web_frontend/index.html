@@ -460,8 +460,21 @@
                 <button id="import-session-btn" class="btn btn-secondary instructor-only">Import Session</button>
                 <button id="compare-sessions-btn" class="btn btn-secondary instructor-only">Compare Sessions (CSV)</button>
                 <button id="manage-users-btn" class="btn btn-secondary instructor-only">Manage Users</button>
+                <button id="ai-settings-btn" class="btn btn-secondary">AI Model Settings</button>
               </div>
                 <input type="file" id="import-file-input" accept=".json" style="display: none;">
+            </section>
+
+            <section id="ai-settings-section" class="section">
+                <h2>AI Model Settings</h2>
+                <p style="color: var(--gray-700);">Your choices apply immediately to handwriting transcription and new autograding requests. Leave a personal tier blank to use the system default.</p>
+                <div id="ai-settings-error" style="display:none; color: var(--danger-color);"></div>
+                <div id="ai-settings-form"></div>
+                <div style="display:flex; gap:10px; margin-top:18px;">
+                    <button id="save-my-ai-settings" class="btn btn-primary">Save My Defaults</button>
+                    <button id="save-system-ai-settings" class="btn btn-secondary instructor-only">Save System Defaults</button>
+                    <button id="cancel-ai-settings" class="btn">Back</button>
+                </div>
             </section>
 
             <!-- User Management Section -->
@@ -1229,6 +1242,7 @@
 
     <script src="/js/app.js"></script>
     <script src="/js/user_management.js"></script>
+    <script src="/js/ai_settings.js"></script>
     <script src="/js/session_assignments.js"></script>
     <script src="/js/matching.js"></script>
     <script src="/js/grading.js"></script>

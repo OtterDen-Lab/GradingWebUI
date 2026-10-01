@@ -18,6 +18,7 @@ from ..repositories import (
 )
 from .problem_service import ProblemService
 from .quiz_regeneration import regenerate_from_encrypted_compat
+from .model_settings import resolve_model
 
 log = logging.getLogger(__name__)
 
@@ -25,10 +26,17 @@ log = logging.getLogger(__name__)
 class AIGraderService:
   """Handles AI-assisted autograding of exam problems"""
 
-  def __init__(self):
+  def __init__(self, user_id: Optional[int] = None):
     self.ai_helper = AI_Helper__Anthropic()
+    self.model_selection = resolve_model(user_id, "anthropic", "large")
     self.problem_service = ProblemService()
     self._session_yaml_cache: Dict[int, Optional[str]] = {}
+
+  def _query(self, message, attachments, max_response_tokens=1000, **kwargs):
+    """Use the caller's current large-model selection for every AI operation."""
+    return self.ai_helper.query_ai(
+      message, attachments, max_response_tokens=max_response_tokens,
+      candidate_models=[self.model_selection.model_id], **kwargs)
 
   def extract_question_text(self, image_base64: str) -> str:
     """Extract question text from a problem image, ignoring handwritten content.
@@ -45,9 +53,7 @@ class AIGraderService:
       "Return only the question text without any additional commentary.")
 
     attachments = [("png", image_base64)]
-    question_text, usage = self.ai_helper.query_ai(message,
-                                                   attachments,
-                                                   max_response_tokens=2000)
+    question_text, usage = self._query(message, attachments, 2000)
 
     log.info(
       f"Extracted question text ({usage['total_tokens']} tokens): {question_text[:100]}..."
@@ -69,9 +75,7 @@ class AIGraderService:
       "Return only the handwritten text without any additional commentary.")
 
     attachments = [("png", image_base64)]
-    handwriting_text, usage = self.ai_helper.query_ai(message,
-                                                      attachments,
-                                                      max_response_tokens=2000)
+    handwriting_text, usage = self._query(message, attachments, 2000)
 
     log.info(
       f"Deciphered handwriting ({usage['total_tokens']} tokens): {handwriting_text[:100]}..."
@@ -119,8 +123,7 @@ class AIGraderService:
       f"  ]\n"
       f"}}")
 
-    response, usage = self.ai_helper.query_ai(message, [],
-                                              max_response_tokens=2000)
+    response, usage = self._query(message, [], 2000)
 
     log.info(
       f"Generated rubric ({usage['total_tokens']} tokens): {response[:200]}..."
@@ -238,8 +241,7 @@ class AIGraderService:
       f"SCORE: [integer]\n"
       f"FEEDBACK: [clear and constructive feedback for the student]")
 
-    response, usage = self.ai_helper.query_ai(message, [],
-                                              max_response_tokens=1000)
+    response, usage = self._query(message, [], 1000)
 
     log.info(
       f"AI grading response ({usage['total_tokens']} tokens): {response[:200]}..."
@@ -971,10 +973,8 @@ class AIGraderService:
         f"Image {idx}: problem_id={item['problem_id']} submission_id={item['submission_id']} ({answer_line})"
       )
 
-    response, usage = self.ai_helper.query_ai("\n".join(message_lines),
-                                              attachments,
-                                              max_response_tokens=8000,
-                                              max_retries=0)
+    response, usage = self._query("\n".join(message_lines), attachments,
+                                  8000, max_retries=0)
     log.info(
       f"Image-only grading response ({usage['total_tokens']} tokens): {response[:200]}..."
     )
