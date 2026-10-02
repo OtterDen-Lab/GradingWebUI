@@ -285,6 +285,10 @@ GRADING_STRICT_STARTUP_CONFIG=true
 ## Dependency Management
 
 Runtime dependencies are pinned in `pyproject.toml`, and CI installs via `uv sync --frozen` using `uv.lock`.
+CI runs `pip-audit` as a report-only step: findings remain visible in the
+workflow output but do not block a release. Review each finding for
+reachability, document accepted risk by advisory ID, and revisit it during the
+next dependency update.
 
 Recommended update cadence:
 
