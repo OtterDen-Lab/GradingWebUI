@@ -9,6 +9,13 @@ from ..database import get_db_connection
 MODEL_TIERS = ("small", "medium", "large")
 HANDWRITING_TARGETS = ("ollama", *MODEL_TIERS)
 MAX_TRANSCRIPTION_ADDITIONAL_INSTRUCTIONS = 2000
+BUILT_IN_TRANSCRIPTION_INSTRUCTIONS = (
+  "Transcribe only the student's handwritten response.\n\n"
+  "Do not solve, grade, interpret, correct, summarize, or editorialize.\n"
+  "Ignore all printed text, including the question, instructions, labels, and point values.\n"
+  "Preserve the student's wording, spelling, notation, and line breaks where possible.\n"
+  "Use [illegible] only for text that cannot reasonably be determined from the visible handwriting.\n"
+  "Return only the transcription.")
 
 
 @dataclass(frozen=True)

@@ -62,18 +62,23 @@ function renderHandwritingDefaultSettings() {
       <option value="medium">medium</option>
       <option value="large">large</option>
     </select>
-    <button id="save-my-handwriting-default" class="btn btn-secondary">Use as my default</button>
-    <button id="save-system-handwriting-default" class="btn btn-secondary instructor-only">Use as system default</button>
+    <button id="save-my-handwriting-default" class="btn btn-secondary">Set my normal model</button>
+    <button id="save-system-handwriting-default" class="btn btn-secondary instructor-only">Set system normal model</button>
   </div>`;
 }
 
 function renderTranscriptionInstructions() {
   const additional = aiModelSettings.transcription_additional_instructions;
   const personalAdditional = additional.source === 'user' ? additional.text : '';
+  const builtIn = aiModelSettings.built_in_transcription_instructions || '';
   return `<div style="margin-top:24px; padding-top:16px; border-top:1px solid var(--gray-200)">
-    <h3 style="margin:0 0 8px">Additional transcription instructions</h3>
+    <h3 style="margin:0 0 8px">Transcription instructions</h3>
+    <strong>Built-in instructions</strong>
+    <small style="display:block;color:var(--gray-700);margin:4px 0">Read-only. These are always sent and cannot be replaced.</small>
+    <textarea readonly rows="7" style="width:100%;max-width:620px;box-sizing:border-box;background:var(--gray-100)">${escapeAI(builtIn)}</textarea>
     <div style="margin-top:18px">
-      <small style="display:block;color:var(--gray-700);margin:4px 0">These are appended to the built-in instruction to transcribe only the student's handwriting. Effective source: ${escapeAI(additional.source)}.</small>
+      <strong>Additional instructions</strong>
+      <small style="display:block;color:var(--gray-700);margin:4px 0">These are appended after the built-in instructions; they do not replace them. Effective source: ${escapeAI(additional.source)}.</small>
       <textarea id="transcription-additional-instructions" rows="3" maxlength="2000" placeholder="Use system instructions" style="width:100%;max-width:620px;box-sizing:border-box">${escapeAI(personalAdditional)}</textarea>
       <div><button id="save-my-transcription-instructions" class="btn btn-secondary">Save my instructions</button>
       <button id="save-system-transcription-instructions" class="btn btn-secondary instructor-only">Save system instructions</button></div>

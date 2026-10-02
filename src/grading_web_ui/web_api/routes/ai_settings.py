@@ -40,6 +40,8 @@ async def get_settings(current_user: dict = Depends(get_current_user)):
     "providers": list(model_settings.ai_helper.MODEL_CONFIG),
     "settings": model_settings.get_effective_settings(current_user["user_id"]),
     "handwriting_default": model_settings.get_handwriting_default(current_user["user_id"]),
+    "built_in_transcription_instructions":
+      model_settings.BUILT_IN_TRANSCRIPTION_INSTRUCTIONS,
     "transcription_additional_instructions":
       model_settings.get_transcription_additional_instructions(current_user["user_id"]),
     "ollama_active": ({"server_name": ollama_server["name"],
