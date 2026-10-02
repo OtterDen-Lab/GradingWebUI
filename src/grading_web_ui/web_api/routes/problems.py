@@ -1163,36 +1163,54 @@ async def get_problem_in_context(
 
 
 def _parse_handwriting_analysis(raw_response: str) -> tuple[str, bool, bool, bool]:
-  """Validate the structured transcription result returned by a vision model."""
+  """Parse structured transcription, tolerating smaller-model JSON variants."""
   payload_text = (raw_response or "").strip()
   if payload_text.startswith("```") and payload_text.endswith("```"):
     payload_text = "\n".join(payload_text.splitlines()[1:-1]).strip()
   try:
     payload = json.loads(payload_text)
   except (TypeError, json.JSONDecodeError) as error:
-    raise ValueError("Model did not return valid handwriting-analysis JSON") from error
+    # Some smaller vision models prepend a short explanation despite the
+    # instruction. Accept a JSON object embedded in that response, but do not
+    # fall back to treating arbitrary prose as a transcription result.
+    start = payload_text.find("{")
+    if start < 0:
+      raise ValueError("Model did not return handwriting-analysis JSON") from error
+    try:
+      payload, _ = json.JSONDecoder().raw_decode(payload_text[start:])
+    except json.JSONDecodeError as nested_error:
+      raise ValueError("Model did not return valid handwriting-analysis JSON") from nested_error
 
-  expected_fields = {
-    "is_blank", "is_effectively_blank", "is_relevant", "text"
-  }
-  if not isinstance(payload, dict) or set(payload) != expected_fields:
-    raise ValueError(
-      "Handwriting-analysis JSON must contain only is_blank, "
-      "is_effectively_blank, is_relevant, and text")
-  for field in ("is_blank", "is_effectively_blank", "is_relevant"):
-    if type(payload[field]) is not bool:
-      raise ValueError(f"Handwriting-analysis {field} must be true or false")
-  if not isinstance(payload["text"], str):
+  if not isinstance(payload, dict):
+    raise ValueError("Handwriting-analysis JSON must be an object")
+
+  def read_bool(field: str, *aliases: str, default: bool | None = None) -> bool:
+    value = next((payload[key] for key in (field, *aliases) if key in payload), default)
+    if isinstance(value, bool):
+      return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+      return value.strip().lower() == "true"
+    if value is None:
+      raise ValueError(f"Handwriting-analysis JSON is missing {field}")
+    raise ValueError(f"Handwriting-analysis {field} must be true or false")
+
+  is_blank = read_bool("is_blank", "blank")
+  is_effectively_blank = read_bool(
+    "is_effectively_blank", "effectively_blank", default=False)
+  is_relevant = read_bool("is_relevant", "relevant",
+                          default=not is_blank and not is_effectively_blank)
+  text = payload.get("text", payload.get("transcription"))
+  if not isinstance(text, str):
     raise ValueError("Handwriting-analysis text must be a string")
 
-  transcription = payload["text"].strip()
-  is_blank = payload["is_blank"]
-  is_effectively_blank = payload["is_effectively_blank"]
-  is_relevant = payload["is_relevant"]
+  transcription = text.strip()
   if not transcription and not is_blank:
     raise ValueError("Model returned an empty transcription without marking it blank")
-  if is_blank and (is_effectively_blank or is_relevant):
-    raise ValueError("A blank response cannot be effectively blank or relevant")
+  if is_blank:
+    # A blank response is the final category in sorting, regardless of an
+    # inconsistent optional classification emitted by the model.
+    is_effectively_blank = False
+    is_relevant = False
   return transcription, is_blank, is_effectively_blank, is_relevant
 
 
