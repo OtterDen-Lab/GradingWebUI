@@ -4796,10 +4796,11 @@ async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
     );
     if (!response.ok) throw new Error('Unable to check handwriting-analysis progress');
     const job = await response.json();
-    const suffix = job.failed ? `; ${job.failed} failed` : '';
+    const blankSummary = `; ${job.reported_blank || 0} reported blank`;
+    const failureSummary = job.failed ? `; ${job.failed} failed` : '';
     decipherAllStatus.textContent = job.status === 'completed'
-        ? `Complete: ${job.succeeded}/${job.total} analyzed${suffix}`
-        : `Analyzing: ${job.processed}/${job.total}${suffix}`;
+        ? `Complete: ${job.succeeded}/${job.total} analyzed${blankSummary}${failureSummary}`
+        : `Analyzing: ${job.processed}/${job.total}${blankSummary}${failureSummary}`;
     return job.status === 'completed';
 }
 

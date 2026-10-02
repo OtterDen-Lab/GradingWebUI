@@ -15,7 +15,10 @@ BUILT_IN_TRANSCRIPTION_INSTRUCTIONS = (
   "Ignore all printed text, including the question, instructions, labels, and point values.\n"
   "Preserve the student's wording, spelling, notation, and line breaks where possible.\n"
   "Use [illegible] only for text that cannot reasonably be determined from the visible handwriting.\n"
-  "Return only the transcription.")
+  "Determine whether the student provided no handwritten response.\n\n"
+  "Return only a JSON object with exactly these fields: "
+  "{\"is_blank\": true or false, \"text\": \"the transcription\"}. "
+  "Set text to an empty string when is_blank is true. Do not use Markdown fences.")
 
 
 @dataclass(frozen=True)

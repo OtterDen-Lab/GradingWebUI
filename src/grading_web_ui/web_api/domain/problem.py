@@ -33,6 +33,7 @@ class Problem:
     transcription: Handwriting transcription
     transcription_model: Model used for transcription
     transcription_cached_at: When transcription was cached
+    transcription_is_blank: Blank judgment returned by the transcription model
   """
   id: int
   session_id: int
@@ -53,6 +54,7 @@ class Problem:
   transcription: Optional[str] = None
   transcription_model: Optional[str] = None
   transcription_cached_at: Optional[datetime] = None
+  transcription_is_blank: Optional[bool] = None
 
   # Business logic methods
 

@@ -61,7 +61,11 @@ class ProblemRepository(BaseRepository[Problem]):
       qr_encrypted_data=row["qr_encrypted_data"],
       transcription=row["transcription"],
       transcription_model=row["transcription_model"],
-      transcription_cached_at=transcription_cached_at
+      transcription_cached_at=transcription_cached_at,
+      transcription_is_blank=(
+        bool(row["transcription_is_blank"])
+        if row["transcription_is_blank"] is not None else None
+      )
     )
 
   def _canvas_user_filter_clause(self,
@@ -651,7 +655,8 @@ class ProblemRepository(BaseRepository[Problem]):
       """, tuple(problem_ids))
       return int(cursor.rowcount or 0)
 
-  def update_transcription(self, problem_id: int, transcription: str, model: str) -> None:
+  def update_transcription(self, problem_id: int, transcription: str, model: str,
+                           is_blank: bool) -> None:
     """
     Cache transcription for a problem.
 
@@ -659,14 +664,16 @@ class ProblemRepository(BaseRepository[Problem]):
       problem_id: Problem primary key
       transcription: Transcribed text
       model: Model name used for transcription
+      is_blank: Blank judgment returned by the transcription model
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
       cursor.execute("""
         UPDATE problems
-        SET transcription = ?, transcription_model = ?, transcription_cached_at = CURRENT_TIMESTAMP
+        SET transcription = ?, transcription_model = ?,
+            transcription_is_blank = ?, transcription_cached_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      """, (transcription, model, problem_id))
+      """, (transcription, model, 1 if is_blank else 0, problem_id))
 
   def update_qr_data(self, problem_id: int, max_points: float, encrypted_data: Optional[str] = None) -> None:
     """

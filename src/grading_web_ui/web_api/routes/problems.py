@@ -59,6 +59,7 @@ _session_prefetch_tasks = {}
 _session_prefetch_tasks_lock = threading.Lock()
 _handwriting_jobs = {}
 _handwriting_jobs_lock = threading.Lock()
+_HANDWRITING_MAX_RESPONSE_TOKENS = 4096
 
 _DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "above_beyond", "label": "Above and beyond", "color": "#16a34a"},
@@ -1161,6 +1162,30 @@ async def get_problem_in_context(
   }
 
 
+def _parse_handwriting_analysis(raw_response: str) -> tuple[str, bool]:
+  """Validate the structured transcription result returned by a vision model."""
+  payload_text = (raw_response or "").strip()
+  if payload_text.startswith("```") and payload_text.endswith("```"):
+    payload_text = "\n".join(payload_text.splitlines()[1:-1]).strip()
+  try:
+    payload = json.loads(payload_text)
+  except (TypeError, json.JSONDecodeError) as error:
+    raise ValueError("Model did not return valid handwriting-analysis JSON") from error
+
+  if not isinstance(payload, dict) or set(payload) != {"is_blank", "text"}:
+    raise ValueError("Handwriting-analysis JSON must contain only is_blank and text")
+  if type(payload["is_blank"]) is not bool:
+    raise ValueError("Handwriting-analysis is_blank must be true or false")
+  if not isinstance(payload["text"], str):
+    raise ValueError("Handwriting-analysis text must be a string")
+
+  transcription = payload["text"].strip()
+  is_blank = payload["is_blank"]
+  if not transcription and not is_blank:
+    raise ValueError("Model returned an empty transcription without marking it blank")
+  return transcription, is_blank
+
+
 def _decipher_handwriting(problem_id: int, model: str, user_id: int,
                           skip_cached: bool = False) -> dict:
   """Transcribe and persist one response; optionally leave a cached result intact.
@@ -1181,6 +1206,7 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       "problem_id": problem_id,
       "transcription": problem.transcription,
       "model": problem.transcription_model,
+      "is_blank": problem.transcription_is_blank,
       "cached": True,
     }
 
@@ -1213,7 +1239,9 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       timing_provider = "ollama"
       timing_model = server["active_model"]
       timing_server = server["name"]
-      transcription, usage = ai.query_ai(query, attachments=[("png", image_base64)])
+      transcription, usage = ai.query_ai(
+        query, attachments=[("png", image_base64)],
+        max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS)
       model_name = f"Ollama ({usage.get('model', server['active_model'])} on {server['name']})"
     else:
 
@@ -1240,28 +1268,29 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       timing_model = selection.model_id
       response, usage = ai.query_ai(
         query, attachments=[("png", image_base64)],
-        candidate_models=[selection.model_id])
+        candidate_models=[selection.model_id],
+        max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS)
       transcription = response
       timing_model = usage.get("model", timing_model)
       model_name = f"Anthropic ({usage.get('model', selection.model_id)})"
 
-    # Validate transcription is not empty
-    if not transcription or not transcription.strip():
-      error_msg = "Model returned empty transcription. Try another configured model."
-      log.warning(
-        f"Empty transcription from {model_name} for problem {problem_id}")
-      raise HTTPException(status_code=500, detail=error_msg)
+    try:
+      transcription, is_blank = _parse_handwriting_analysis(transcription)
+    except ValueError as error:
+      log.warning("Invalid handwriting-analysis result from %s for problem %s: %s",
+                  model_name, problem_id, error)
+      raise HTTPException(status_code=500, detail=str(error)) from error
 
     model_latency.record(
       "handwriting", timing_provider, timing_model,
       (perf_counter() - timing_start) * 1000, "success", timing_server)
-    transcription = transcription.strip()
-    problem_repo.update_transcription(problem_id, transcription, model_name)
+    problem_repo.update_transcription(problem_id, transcription, model_name, is_blank)
 
     return {
       "problem_id": problem_id,
       "transcription": transcription,
-      "model": model_name
+      "model": model_name,
+      "is_blank": is_blank,
     }
   except HTTPException:
     if timing_start is not None:
@@ -1287,8 +1316,8 @@ def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
     _handwriting_jobs[job_id]["status"] = "running"
   for problem_id in problem_ids:
     try:
-      _decipher_handwriting(problem_id, model, user_id,
-                            skip_cached=not overwrite)
+      result = _decipher_handwriting(problem_id, model, user_id,
+                                     skip_cached=not overwrite)
     except Exception as error:
       log.warning("Batch transcription failed for problem %s: %s", problem_id, error)
       with _handwriting_jobs_lock:
@@ -1296,6 +1325,8 @@ def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
     else:
       with _handwriting_jobs_lock:
         _handwriting_jobs[job_id]["succeeded"] += 1
+        if result.get("is_blank"):
+          _handwriting_jobs[job_id]["reported_blank"] += 1
     finally:
       with _handwriting_jobs_lock:
         _handwriting_jobs[job_id]["processed"] += 1
@@ -1349,6 +1380,7 @@ async def decipher_all_handwriting(
       "processed": 0,
       "succeeded": 0,
       "failed": 0,
+      "reported_blank": 0,
     }
   background_tasks.add_task(
     _batch_decipher_handwriting, job_id, problem_ids, model,
