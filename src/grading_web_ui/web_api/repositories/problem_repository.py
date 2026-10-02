@@ -147,6 +147,23 @@ class ProblemRepository(BaseRepository[Problem]):
         (session_id,)
       )
 
+  def get_untranscribed_for_problem(self, session_id: int,
+                                    problem_number: int) -> List[Problem]:
+    """Return non-blank responses that do not yet have a transcription."""
+    with self._get_connection() as conn:
+      return self._execute_and_fetch_all(
+        conn,
+        """
+        SELECT * FROM problems
+        WHERE session_id = ?
+          AND problem_number = ?
+          AND is_blank = 0
+          AND (transcription IS NULL OR TRIM(transcription) = '')
+        ORDER BY id
+        """,
+        (session_id, problem_number)
+      )
+
   def get_comparison_rows_for_session(self, session_id: int) -> List[Dict]:
     """
     Get per-problem comparison rows joined with submission file hash.

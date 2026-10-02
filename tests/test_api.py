@@ -1170,6 +1170,49 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
   assert payload["transcription"] == "transcribed text"
   assert payload["model"] == "Anthropic (claude-sonnet-4-5)"
 
+  with get_db_connection() as conn:
+    cached = conn.execute(
+      "SELECT transcription, transcription_model FROM problems WHERE id = ?",
+      (problem_id,)
+    ).fetchone()
+  assert cached["transcription"] == "transcribed text"
+  assert cached["transcription_model"] == "Anthropic (claude-sonnet-4-5)"
+
+
+def test_decipher_all_queues_only_uncached_nonblank_responses(client, monkeypatch):
+  """Batch transcription leaves cached and blank responses out of its queue."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  session_id = create_test_session(client, "Batch Decipher")
+  _, queued_problem_id = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=8)
+  _, cached_problem_id = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=8)
+  _, blank_problem_id = seed_submission_with_problem(
+    session_id, document_id=3, problem_number=8, is_blank=True)
+  with get_db_connection() as conn:
+    conn.execute(
+      "UPDATE problems SET transcription = 'already cached' WHERE id = ?",
+      (cached_problem_id,)
+    )
+
+  queued_calls = []
+  monkeypatch.setattr(
+    problems_routes,
+    "_batch_decipher_handwriting",
+    lambda problem_ids, model, user_id: queued_calls.append(
+      (problem_ids, model, user_id))
+  )
+
+  response = client.post(
+    f"/api/problems/session/{session_id}/8/decipher-all")
+
+  assert response.status_code == 200
+  assert response.json() == {"status": "queued", "queued": 1}
+  assert len(queued_calls) == 1
+  assert queued_calls[0][:2] == ([queued_problem_id], "default")
+  assert blank_problem_id not in queued_calls[0][0]
+
 
 def test_subjective_finalize_applies_bucket_scores(client):
   """Finalizing subjective buckets should grade all triaged responses."""

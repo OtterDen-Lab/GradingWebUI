@@ -8,7 +8,7 @@ import threading
 import hashlib
 from time import perf_counter
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
 from datetime import datetime
 from typing import Optional
 import base64
@@ -1158,18 +1158,13 @@ async def get_problem_in_context(
   }
 
 
-@router.post("/{problem_id}/decipher")
-async def decipher_handwriting(
-  problem_id: int,
-  model: str = "default",
-  current_user: dict = Depends(get_current_user)
-):
-  """Use AI to transcribe handwritten text from a problem image (requires auth and session access)
+def _decipher_handwriting(problem_id: int, model: str, user_id: int,
+                          skip_cached: bool = False) -> dict:
+  """Transcribe and persist one response; optionally leave a cached result intact.
 
-    Args:
-        problem_id: ID of the problem to transcribe
-        model: "default", a tier (small/medium/large), or provider:model.
-               Defaults resolve from the current user's saved settings.
+    This is deliberately synchronous: the batch caller runs it in FastAPI's
+    background-task thread pool, one response at a time, to avoid saturating
+    the configured AI provider.
     """
   problem_repo = ProblemRepository()
   submission_repo = SubmissionRepository()
@@ -1178,19 +1173,20 @@ async def decipher_handwriting(
   if not problem:
     raise HTTPException(status_code=404, detail="Problem not found")
 
-  # Check if user has access to this session
-  if current_user["role"] != "instructor":
-    from ..repositories.session_assignment_repository import SessionAssignmentRepository
-    assignment_repo = SessionAssignmentRepository()
-    if not assignment_repo.is_user_assigned(problem.session_id, current_user["user_id"]):
-      raise HTTPException(status_code=403, detail="You do not have access to this grading session")
+  if skip_cached and problem.transcription and problem.transcription.strip():
+    return {
+      "problem_id": problem_id,
+      "transcription": problem.transcription,
+      "model": problem.transcription_model,
+      "cached": True,
+    }
 
   # Get image data (extract from PDF if needed)
   image_base64 = get_problem_image_data(problem, submission_repo)
 
   query = BUILT_IN_TRANSCRIPTION_INSTRUCTIONS
   additional_instructions = get_transcription_additional_instructions(
-    current_user["user_id"])["text"]
+    user_id)["text"]
   if additional_instructions:
     query += f"\n\nAdditional transcription instructions:\n{additional_instructions}"
 
@@ -1201,7 +1197,7 @@ async def decipher_handwriting(
   try:
     selected_model = (model or "default").strip().lower()
     if selected_model == "default":
-      selected_model = get_handwriting_default(current_user["user_id"])["target"]
+      selected_model = get_handwriting_default(user_id)["target"]
 
     if selected_model == "ollama":
       server = ollama_settings.get_active_server()
@@ -1228,7 +1224,7 @@ async def decipher_handwriting(
         provider, explicit_model = selected_model.split(":", 1)
         tier = "medium"
       try:
-        selection = resolve_model(current_user["user_id"], provider, tier,
+        selection = resolve_model(user_id, provider, tier,
                                   explicit_model)
       except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -1256,10 +1252,12 @@ async def decipher_handwriting(
     model_latency.record(
       "handwriting", timing_provider, timing_model,
       (perf_counter() - timing_start) * 1000, "success", timing_server)
+    transcription = transcription.strip()
+    problem_repo.update_transcription(problem_id, transcription, model_name)
 
     return {
       "problem_id": problem_id,
-      "transcription": transcription.strip(),
+      "transcription": transcription,
       "model": model_name
     }
   except HTTPException:
@@ -1277,6 +1275,56 @@ async def decipher_handwriting(
     log.error(f"Transcription failed: {traceback.format_exc()}")
     raise HTTPException(status_code=500,
                         detail=f"Transcription failed: {str(e)}")
+
+
+def _batch_decipher_handwriting(problem_ids: list[int], model: str,
+                                user_id: int) -> None:
+  """Fill the transcription cache without allowing one failure to stop a batch."""
+  for problem_id in problem_ids:
+    try:
+      _decipher_handwriting(problem_id, model, user_id, skip_cached=True)
+    except Exception as error:
+      log.warning("Batch transcription failed for problem %s: %s", problem_id, error)
+
+
+@router.post("/{problem_id}/decipher")
+async def decipher_handwriting(
+  problem_id: int,
+  model: str = "default",
+  current_user: dict = Depends(get_current_user)
+):
+  """Use AI to transcribe handwritten text from one accessible problem image."""
+  problem = ProblemRepository().get_by_id(problem_id)
+  if not problem:
+    raise HTTPException(status_code=404, detail="Problem not found")
+  if current_user["role"] != "instructor":
+    from ..repositories.session_assignment_repository import SessionAssignmentRepository
+    if not SessionAssignmentRepository().is_user_assigned(
+        problem.session_id, current_user["user_id"]):
+      raise HTTPException(status_code=403, detail="You do not have access to this grading session")
+  # The normal/default action reads a pre-populated result. Explicit model
+  # choices remain an intentional re-analysis and replace the cached value.
+  return _decipher_handwriting(
+    problem_id, model, current_user["user_id"],
+    skip_cached=(model or "default").strip().lower() == "default")
+
+
+@router.post("/session/{session_id}/{problem_number}/decipher-all")
+async def decipher_all_handwriting(
+  session_id: int,
+  problem_number: int,
+  background_tasks: BackgroundTasks,
+  model: str = "default",
+  current_user: dict = Depends(require_session_access())
+):
+  """Queue transcription of every uncached, non-blank response for a problem."""
+  problem_ids = [
+    problem.id for problem in ProblemRepository().get_untranscribed_for_problem(
+      session_id, problem_number)
+  ]
+  background_tasks.add_task(
+    _batch_decipher_handwriting, problem_ids, model, current_user["user_id"])
+  return {"status": "queued", "queued": len(problem_ids)}
 
 
 @router.get("/{session_id}/{problem_number}/graded")

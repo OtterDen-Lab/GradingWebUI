@@ -4442,6 +4442,7 @@ const transcriptionActions = document.getElementById('transcription-actions');
 const modelUsed = document.getElementById('model-used');
 const closeTranscription = document.getElementById('close-transcription');
 const decipherBtn = document.getElementById('decipher-btn');
+const decipherAllBtn = document.getElementById('decipher-all-btn');
 const retryPremiumBtn = document.getElementById('retry-premium-btn');
 let transcriptionModelOptions = null;
 
@@ -4780,6 +4781,44 @@ decipherBtn.addEventListener('click', async () => {
         document.getElementById('retry-medium-btn').addEventListener('click', () => retryWithModel('medium'));
         document.getElementById('retry-large-btn').addEventListener('click', () => retryWithModel('large'));
         document.getElementById('retry-ollama-btn').addEventListener('click', () => retryWithModel('ollama'));
+    }
+});
+
+// Queue the current question's remaining responses so transcriptions are ready
+// when the grader opens them. The API skips blanks and existing cached results.
+decipherAllBtn.addEventListener('click', async () => {
+    if (!currentSession?.id || !currentProblemNumber) {
+        alert('Choose a problem first.');
+        return;
+    }
+
+    const problemNumber = Number(currentProblemNumber);
+    if (!confirm(`Analyze handwriting for every untranscribed response to problem ${problemNumber}? This runs in the background.`)) {
+        return;
+    }
+
+    const originalLabel = decipherAllBtn.textContent;
+    decipherAllBtn.disabled = true;
+    decipherAllBtn.textContent = 'Queueing…';
+    try {
+        const response = await fetch(
+            `${API_BASE}/problems/session/${currentSession.id}/${problemNumber}/decipher-all`,
+            { method: 'POST' }
+        );
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.detail || 'Unable to queue handwriting analysis');
+        }
+        const result = await response.json();
+        alert(result.queued
+            ? `Handwriting analysis queued for ${result.queued} response${result.queued === 1 ? '' : 's'}.`
+            : 'All non-blank responses already have handwriting analysis.');
+    } catch (error) {
+        console.error('Failed to queue handwriting analysis:', error);
+        alert(error.message);
+    } finally {
+        decipherAllBtn.disabled = false;
+        decipherAllBtn.textContent = originalLabel;
     }
 });
 
