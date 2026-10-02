@@ -1364,8 +1364,9 @@ def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
           _handwriting_jobs[job_id]["reported_blank"] += 1
         if result.get("is_effectively_blank"):
           _handwriting_jobs[job_id]["reported_effectively_blank"] += 1
-        if not result.get("is_relevant") and not result.get("is_blank") and \
-            not result.get("is_effectively_blank"):
+        if result.get("is_relevant"):
+          _handwriting_jobs[job_id]["reported_relevant"] += 1
+        elif not result.get("is_blank") and not result.get("is_effectively_blank"):
           _handwriting_jobs[job_id]["reported_irrelevant"] += 1
     finally:
       with _handwriting_jobs_lock:
@@ -1423,6 +1424,7 @@ async def decipher_all_handwriting(
       "reported_blank": 0,
       "reported_effectively_blank": 0,
       "reported_irrelevant": 0,
+      "reported_relevant": 0,
     }
   background_tasks.add_task(
     _batch_decipher_handwriting, job_id, problem_ids, model,
