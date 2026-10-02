@@ -667,9 +667,6 @@
                             <button id="show-answer-btn" class="btn btn-secondary" style="display: none;">Show Answer</button>
                             <button id="decipher-btn" class="btn btn-secondary">Decipher Handwriting</button>
                             <button id="decipher-all-btn" class="btn btn-secondary">Analyze All Handwriting</button>
-                            <label style="display:flex;align-items:center;gap:4px;font-size:13px;">
-                                <input id="decipher-all-overwrite" type="checkbox"> Overwrite existing
-                            </label>
                             <small id="decipher-all-status" style="align-self:center;color:var(--gray-700);"></small>
                         </div>
                         <div style="display: flex; gap: 10px; margin-bottom: 6px; flex-wrap: wrap;">
@@ -1114,6 +1111,26 @@
             <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;">
                 <button id="finalize-upload-cancel-btn" class="btn" type="button">Cancel</button>
                 <button id="finalize-upload-confirm-btn" class="btn btn-success" type="button">Upload Selected Students</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Batch Handwriting Analysis Dialog -->
+    <div id="handwriting-batch-dialog" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:2100;align-items:center;justify-content:center;">
+        <div style="background:white;border-radius:8px;padding:22px;width:min(460px,calc(100vw - 32px));box-sizing:border-box;">
+            <h3 style="margin:0 0 10px;">Analyze All Handwriting</h3>
+            <p style="margin:0 0 16px;color:var(--gray-700);">Analyze all submissions for the current problem, including responses marked blank.</p>
+            <label style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
+                Model
+                <select id="handwriting-batch-model"></select>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:20px;">
+                <input id="handwriting-batch-overwrite" type="checkbox" style="margin-top:3px;">
+                <span><strong>Overwrite existing analysis</strong><br><small style="color:var(--gray-700);">Re-run responses that already have a saved transcription.</small></span>
+            </label>
+            <div style="display:flex;justify-content:flex-end;gap:10px;">
+                <button id="handwriting-batch-cancel" class="btn" type="button">Cancel</button>
+                <button id="handwriting-batch-start" class="btn btn-primary" type="button">Start Analysis</button>
             </div>
         </div>
     </div>

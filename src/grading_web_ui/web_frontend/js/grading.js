@@ -57,7 +57,6 @@ function canPrefetchNextProblems() {
         return false;
     }
     const problemNumber = Number(currentProblemNumber);
-    const sessionId = currentSession.id;
     if (prefetchQueueProblemNumber === null) {
         prefetchQueueProblemNumber = problemNumber;
     } else if (prefetchQueueProblemNumber !== problemNumber) {
@@ -4444,8 +4443,12 @@ const modelUsed = document.getElementById('model-used');
 const closeTranscription = document.getElementById('close-transcription');
 const decipherBtn = document.getElementById('decipher-btn');
 const decipherAllBtn = document.getElementById('decipher-all-btn');
-const decipherAllOverwrite = document.getElementById('decipher-all-overwrite');
 const decipherAllStatus = document.getElementById('decipher-all-status');
+const handwritingBatchDialog = document.getElementById('handwriting-batch-dialog');
+const handwritingBatchModel = document.getElementById('handwriting-batch-model');
+const handwritingBatchOverwrite = document.getElementById('handwriting-batch-overwrite');
+const handwritingBatchCancel = document.getElementById('handwriting-batch-cancel');
+const handwritingBatchStart = document.getElementById('handwriting-batch-start');
 const retryPremiumBtn = document.getElementById('retry-premium-btn');
 let transcriptionModelOptions = null;
 
@@ -4800,27 +4803,41 @@ async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
     return job.status === 'completed';
 }
 
-// Queue every response for the current question, including ones marked blank.
-// Existing transcriptions are retained unless the overwrite option is selected.
-decipherAllBtn.addEventListener('click', async () => {
+async function openHandwritingBatchDialog() {
     if (!currentSession?.id || !currentProblemNumber) {
         alert('Choose a problem first.');
         return;
     }
 
+    handwritingBatchDialog.style.display = 'flex';
+    handwritingBatchModel.innerHTML = '<option value="default">Loading configured default…</option>';
+    const choices = ['default', 'ollama', 'small', 'medium', 'large'];
+    const labels = await Promise.all(choices.map(getTranscriptionModelLabel));
+    handwritingBatchModel.innerHTML = choices.map((choice, index) =>
+        `<option value="${choice}">${escapeAI(labels[index])}</option>`).join('');
+}
+
+function closeHandwritingBatchDialog() {
+    handwritingBatchDialog.style.display = 'none';
+}
+
+// Queue every response for the current question, including ones marked blank.
+// Existing transcriptions are retained unless the overwrite option is selected.
+async function startHandwritingBatch() {
+    if (!currentSession?.id || !currentProblemNumber) return;
+
     const problemNumber = Number(currentProblemNumber);
-    const overwrite = decipherAllOverwrite.checked;
-    const scope = overwrite ? 'every response, replacing existing analysis' : 'responses without existing analysis';
-    if (!confirm(`Analyze handwriting for ${scope} on problem ${problemNumber}? This runs in the background, including responses marked blank.`)) {
-        return;
-    }
+    const sessionId = currentSession.id;
+    const overwrite = handwritingBatchOverwrite.checked;
+    const model = handwritingBatchModel.value;
 
     const originalLabel = decipherAllBtn.textContent;
     decipherAllBtn.disabled = true;
     decipherAllBtn.textContent = 'Queueing…';
+    handwritingBatchStart.disabled = true;
     try {
         const response = await fetch(
-            `${API_BASE}/problems/session/${currentSession.id}/${problemNumber}/decipher-all?overwrite=${overwrite}`,
+            `${API_BASE}/problems/session/${sessionId}/${problemNumber}/decipher-all?model=${encodeURIComponent(model)}&overwrite=${overwrite}`,
             { method: 'POST' }
         );
         if (!response.ok) {
@@ -4828,6 +4845,7 @@ decipherAllBtn.addEventListener('click', async () => {
             throw new Error(payload.detail || 'Unable to queue handwriting analysis');
         }
         const result = await response.json();
+        closeHandwritingBatchDialog();
         decipherAllStatus.textContent = result.queued
             ? `Queued: 0/${result.queued}`
             : 'Complete: nothing to analyze';
@@ -4851,7 +4869,15 @@ decipherAllBtn.addEventListener('click', async () => {
     } finally {
         decipherAllBtn.disabled = false;
         decipherAllBtn.textContent = originalLabel;
+        handwritingBatchStart.disabled = false;
     }
+}
+
+decipherAllBtn.addEventListener('click', openHandwritingBatchDialog);
+handwritingBatchCancel.addEventListener('click', closeHandwritingBatchDialog);
+handwritingBatchStart.addEventListener('click', startHandwritingBatch);
+handwritingBatchDialog.addEventListener('click', (event) => {
+    if (event.target === handwritingBatchDialog) closeHandwritingBatchDialog();
 });
 
 // =============================================================================
