@@ -2340,7 +2340,7 @@ def test_autograde_all_concurrent_requests_allow_only_one_start(client,
                                           problem_numbers: list,
                                           totals_by_problem: dict,
                                           settings: dict,
-                                          stream_id: str):
+                                          stream_id: str, user_id: int):
     await asyncio.sleep(0.25)
     workflow_locks.release("autograde", target_session_id)
 
@@ -2516,7 +2516,8 @@ def test_autograde_image_lifecycle_starts_job(client, monkeypatch):
                                graded=False)
 
   async def fake_run_autograding_image(target_session_id: int, problem_number: int,
-                                       settings: dict, stream_id: str):
+                                       settings: dict, stream_id: str,
+                                       user_id: int):
     workflow_locks.release("autograde", target_session_id)
 
   monkeypatch.setattr(ai_routes, "run_autograding_image",
@@ -2559,7 +2560,7 @@ def test_autograde_all_lifecycle_starts_job(client, monkeypatch):
 
   async def fake_run_autograding_all(target_session_id: int, problem_numbers: list,
                                      totals_by_problem: dict, settings: dict,
-                                     stream_id: str):
+                                     stream_id: str, user_id: int):
     workflow_locks.release("autograde", target_session_id)
 
   monkeypatch.setattr(ai_routes, "run_autograding_all",
@@ -2598,14 +2599,15 @@ def test_run_autograding_image_releases_lock_on_failure(monkeypatch):
   async def capture_event(stream_id: str, event_type: str, data: dict):
     captured_events.append((stream_id, event_type, data))
 
-  monkeypatch.setattr(ai_routes, "AIGraderService", lambda: FailingAIGrader())
+  monkeypatch.setattr(ai_routes, "AIGraderService",
+                      lambda user_id: FailingAIGrader())
   monkeypatch.setattr(ai_routes.sse, "send_event", capture_event)
 
   asyncio.run(
     ai_routes.run_autograding_image(session_id, 1, {
       "auto_accept": False,
       "dry_run": True
-    }, "test_stream"))
+    }, "test_stream", 1))
 
   assert workflow_locks.is_active("autograde", session_id) is False
   assert any(event_type == "error" for _, event_type, _ in captured_events)
@@ -2627,7 +2629,8 @@ def test_run_autograding_all_releases_lock_on_failure(monkeypatch):
   async def capture_event(stream_id: str, event_type: str, data: dict):
     captured_events.append((stream_id, event_type, data))
 
-  monkeypatch.setattr(ai_routes, "AIGraderService", lambda: FailingAIGrader())
+  monkeypatch.setattr(ai_routes, "AIGraderService",
+                      lambda user_id: FailingAIGrader())
   monkeypatch.setattr(ai_routes.sse, "send_event", capture_event)
 
   asyncio.run(
@@ -2636,7 +2639,7 @@ def test_run_autograding_all_releases_lock_on_failure(monkeypatch):
     }, {
       "auto_accept": False,
       "dry_run": True
-    }, "test_stream_all"))
+    }, "test_stream_all", 1))
 
   assert workflow_locks.is_active("autograde", session_id) is False
   assert any(event_type == "error" for _, event_type, _ in captured_events)
