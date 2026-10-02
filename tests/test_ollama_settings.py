@@ -1,5 +1,7 @@
 from grading_web_ui.web_api import database
 from grading_web_ui.web_api.services import ollama_settings
+from grading_web_ui.ai_helper import AI_Helper__Ollama
+import pytest
 
 
 def test_ollama_server_lists_installed_models(tmp_path, monkeypatch):
@@ -26,3 +28,24 @@ def test_ollama_server_lists_installed_models(tmp_path, monkeypatch):
 
   saved = ollama_settings.set_active_model(server["id"], "qwen3-vl:30b", user_id)
   assert saved["active_model"] == "qwen3-vl:30b"
+
+
+def test_ollama_helper_disables_thinking_and_reports_missing_final_text(monkeypatch):
+  captured = {}
+
+  class Response:
+    def raise_for_status(self):
+      pass
+
+    def json(self):
+      return {"message": {"content": "", "thinking": "reasoning"},
+              "eval_count": 1000, "done_reason": "length"}
+
+  def post(*args, **kwargs):
+    captured.update(kwargs["json"])
+    return Response()
+
+  monkeypatch.setattr("grading_web_ui.ai_helper.httpx.post", post)
+  with pytest.raises(RuntimeError, match="no final text.*1000.*length"):
+    AI_Helper__Ollama("https://ollama.example.test", "qwen3-vl:30b").query_ai("read", [])
+  assert captured["think"] is False

@@ -235,6 +235,10 @@ class AI_Helper__Ollama(AI_Helper):
     payload = {
       "model": self.model,
       "stream": False,
+      # Vision transcription needs a concise final answer. Reasoning-capable
+      # models (including Qwen 3) can otherwise consume num_predict before
+      # emitting it.
+      "think": False,
       "messages": [{"role": "user", "content": message, "images": images}],
       "options": {"num_predict": max_response_tokens},
     }
@@ -242,6 +246,16 @@ class AI_Helper__Ollama(AI_Helper):
     response.raise_for_status()
     body = response.json()
     content = body.get("message", {}).get("content", "")
+    if not content or not content.strip():
+      generated = body.get("eval_count", 0)
+      reason = body.get("done_reason", "unknown")
+      thinking = body.get("message", {}).get("thinking", "")
+      detail = (
+        f"Ollama completed the request but returned no final text "
+        f"(generated {generated} tokens; stop reason: {reason}).")
+      if thinking:
+        detail += " The model returned reasoning but no final answer."
+      raise RuntimeError(detail)
     return content, {
       "prompt_tokens": body.get("prompt_eval_count", 0),
       "completion_tokens": body.get("eval_count", 0),

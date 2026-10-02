@@ -27,9 +27,13 @@ class OllamaModelUpdate(BaseModel):
 
 @router.get("")
 async def get_settings(current_user: dict = Depends(get_current_user)):
+  ollama_server = ollama_settings.get_active_server()
   return {
     "providers": list(model_settings.ai_helper.MODEL_CONFIG),
     "settings": model_settings.get_effective_settings(current_user["user_id"]),
+    "ollama_active": ({"server_name": ollama_server["name"],
+                       "model_id": ollama_server["active_model"]}
+                      if ollama_server else None),
   }
 
 

@@ -4443,6 +4443,26 @@ const modelUsed = document.getElementById('model-used');
 const closeTranscription = document.getElementById('close-transcription');
 const decipherBtn = document.getElementById('decipher-btn');
 const retryPremiumBtn = document.getElementById('retry-premium-btn');
+let transcriptionModelOptions = null;
+
+async function getTranscriptionModelLabel(selection) {
+    try {
+        if (!transcriptionModelOptions) {
+            const response = await fetch(`${API_BASE}/ai-settings`, {credentials: 'include'});
+            if (response.ok) transcriptionModelOptions = await response.json();
+        }
+        const settings = transcriptionModelOptions?.settings;
+        if (selection === 'ollama') {
+            const ollama = transcriptionModelOptions?.ollama_active;
+            return ollama ? `Ollama: ${ollama.model_id} on ${ollama.server_name}` : 'Ollama (no active model configured)';
+        }
+        const tier = selection === 'default' ? 'medium' : selection;
+        const setting = settings?.[tier];
+        return setting ? `Anthropic ${tier}: ${setting.model_id} (${setting.source} default)` : `configured ${tier} model`;
+    } catch (_error) {
+        return 'configured model';
+    }
+}
 
 // Cache for transcriptions: { problemId: { standard: {text, model}, premium: {text, model} } }
 const transcriptionCache = {};
@@ -4525,6 +4545,7 @@ async function fetchTranscription(problemId, model = 'default') {
 // Function to display transcription in dialog
 function displayTranscription(transcription) {
     transcriptionText.textContent = transcription.text;
+    transcriptionText.style.color = '';
     modelUsed.textContent = `Model used: ${transcription.model}`;
 
     // Show model selection buttons
@@ -4557,16 +4578,10 @@ function displayTranscription(transcription) {
 async function retryWithModel(model) {
     if (!currentProblem) return;
 
-    const modelNames = {
-        'default': 'your configured default model',
-        'small': 'your configured small model',
-        'medium': 'your configured medium model',
-        'large': 'your configured large model',
-        'ollama': 'your configured Ollama model'
-    };
+    const modelLabel = await getTranscriptionModelLabel(model);
 
     // Show loading state
-    transcriptionText.innerHTML = `<div class="transcription-loading">Transcribing with ${modelNames[model]}...</div>`;
+    transcriptionText.textContent = `Transcribing with ${modelLabel}...`;
     transcriptionActions.style.display = 'none';
 
     try {
@@ -4574,8 +4589,8 @@ async function retryWithModel(model) {
         displayTranscription(transcription);
     } catch (error) {
         console.error(`Failed to decipher with ${model}:`, error);
-        const modelLabel = modelNames[model] || model;
-        transcriptionText.innerHTML = `<div style="color: var(--danger-color);">Failed to transcribe with ${modelLabel}. ${error.message}</div>`;
+        transcriptionText.textContent = `Failed to transcribe with ${modelLabel}. ${error.message}`;
+        transcriptionText.style.color = 'var(--danger-color)';
         // Show buttons again so user can retry
         transcriptionActions.style.display = 'block';
     }
@@ -4597,7 +4612,7 @@ async function updateTranscriptionDialog() {
     } else {
         // No cache - fetch using the server-side configured default.
         console.log(`No cache found, fetching new transcription for problem ${currentProblem.id}`);
-        transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with your configured default model...</div>';
+        transcriptionText.textContent = `Transcribing handwriting with ${await getTranscriptionModelLabel('default')}...`;
         transcriptionActions.style.display = 'none';
 
         try {
@@ -4725,7 +4740,7 @@ decipherBtn.addEventListener('click', async () => {
     }
 
     // Show dialog with loading state
-    transcriptionText.innerHTML = '<div class="transcription-loading">Transcribing handwriting with your configured default model...</div>';
+    transcriptionText.textContent = `Transcribing handwriting with ${await getTranscriptionModelLabel('default')}...`;
     transcriptionActions.style.display = 'none';
     transcriptionDialog.style.display = 'flex';
 
