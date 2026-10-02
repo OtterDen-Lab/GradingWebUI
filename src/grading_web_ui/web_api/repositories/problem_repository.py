@@ -147,18 +147,19 @@ class ProblemRepository(BaseRepository[Problem]):
         (session_id,)
       )
 
-  def get_untranscribed_for_problem(self, session_id: int,
-                                    problem_number: int) -> List[Problem]:
-    """Return non-blank responses that do not yet have a transcription."""
+  def get_for_handwriting_analysis(self, session_id: int, problem_number: int,
+                                   overwrite: bool = False) -> List[Problem]:
+    """Return every response, or only responses without saved analysis."""
+    cache_filter = "" if overwrite else """
+          AND (transcription IS NULL OR TRIM(transcription) = '')"""
     with self._get_connection() as conn:
       return self._execute_and_fetch_all(
         conn,
-        """
+        f"""
         SELECT * FROM problems
         WHERE session_id = ?
           AND problem_number = ?
-          AND is_blank = 0
-          AND (transcription IS NULL OR TRIM(transcription) = '')
+          {cache_filter}
         ORDER BY id
         """,
         (session_id, problem_number)

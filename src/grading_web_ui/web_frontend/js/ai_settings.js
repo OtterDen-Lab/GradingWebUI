@@ -13,7 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('save-system-ai-settings')?.addEventListener('click', () => saveAIModelSettings('system'));
 });
 
-async function loadAIModelSettings() {
+async function loadAIModelSettings({ refreshOllama = true } = {}) {
   const error = document.getElementById('ai-settings-error');
   error.style.display = 'none';
   try {
@@ -44,7 +44,11 @@ async function loadAIModelSettings() {
     document.getElementById('save-my-transcription-instructions').onclick = () => saveTranscriptionInstructions('me');
     document.getElementById('save-system-transcription-instructions').onclick = () => saveTranscriptionInstructions('system');
     if (currentUser?.role === 'instructor') {
-      await Promise.all([loadOllamaSettings(), loadHandwritingLatency()]);
+      const refreshes = [loadHandwritingLatency()];
+      // Saving an Anthropic or transcription setting must not reset the
+      // Ollama selector or make an unnecessary request to a server.
+      if (refreshOllama) refreshes.push(loadOllamaSettings());
+      await Promise.all(refreshes);
     }
   } catch (err) {
     error.textContent = err.message;
@@ -113,7 +117,7 @@ function renderTranscriptionInstructions() {
   </div>`;
 }
 
-async function loadOllamaSettings() {
+async function loadOllamaSettings(selectedServerId = null) {
   const container = document.getElementById('ollama-settings-form');
   const response = await fetch(`${API_BASE}/ai-settings/ollama/servers`, {credentials: 'include'});
   if (!response.ok) return;
@@ -132,6 +136,12 @@ async function loadOllamaSettings() {
       '<small style="color:var(--gray-700)">No Ollama servers configured.</small>'}</div>`;
   document.getElementById('save-ollama-server').onclick = saveOllamaServer;
   if (servers.length) {
+    const activeServerId = aiModelSettings?.ollama_active?.server_id;
+    const serverIdToSelect = selectedServerId || activeServerId;
+    if (serverIdToSelect && servers.some(server =>
+        String(server.id) === String(serverIdToSelect))) {
+      document.getElementById('ollama-server-select').value = String(serverIdToSelect);
+    }
     document.getElementById('ollama-server-select').onchange = renderOllamaModels;
     document.getElementById('refresh-ollama-models').onclick = renderOllamaModels;
     await renderOllamaModels();
@@ -146,7 +156,8 @@ async function saveOllamaServer() {
     body: JSON.stringify({name, base_url})
   });
   if (!response.ok) return alert((await response.json()).detail || 'Could not add Ollama server');
-  await loadOllamaSettings();
+  const saved = await response.json();
+  await loadOllamaSettings(saved.server.id);
 }
 
 async function renderOllamaModels() {
@@ -180,7 +191,11 @@ async function renderOllamaModels() {
       // Discard it whenever the active Ollama model changes.
       transcriptionModelOptions = null;
       if (aiModelSettings) {
-        aiModelSettings.ollama_active = {server_name: selectedServer.textContent.split(' — ')[0], model_id: model};
+        aiModelSettings.ollama_active = {
+          server_id: Number(serverId),
+          server_name: selectedServer.textContent.split(' — ')[0],
+          model_id: model
+        };
       }
       Object.values(transcriptionCache).forEach(cache => delete cache.default);
     }
@@ -217,7 +232,7 @@ async function saveAIModelSettings(scope) {
     alert(error.detail || 'Could not save settings');
     return;
   }
-  await loadAIModelSettings();
+  await loadAIModelSettings({ refreshOllama: false });
 }
 
 async function saveHandwritingDefault(scope) {
@@ -231,7 +246,7 @@ async function saveHandwritingDefault(scope) {
   transcriptionModelOptions = null;
   // A cached "default" transcription may have come from the previous route.
   Object.values(transcriptionCache).forEach(cache => delete cache.default);
-  await loadAIModelSettings();
+  await loadAIModelSettings({ refreshOllama: false });
 }
 
 async function saveTranscriptionInstructions(scope) {
@@ -245,5 +260,5 @@ async function saveTranscriptionInstructions(scope) {
     body: JSON.stringify({additional_instructions})
   });
   if (!response.ok) return alert((await response.json()).detail || 'Could not save transcription instructions');
-  await loadAIModelSettings();
+  await loadAIModelSettings({ refreshOllama: false });
 }

@@ -6,6 +6,7 @@ import os
 import asyncio
 import threading
 import hashlib
+from uuid import uuid4
 from time import perf_counter
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
@@ -56,6 +57,8 @@ _regeneration_cache_lock = threading.Lock()
 _regeneration_cache_max_entries = 2000
 _session_prefetch_tasks = {}
 _session_prefetch_tasks_lock = threading.Lock()
+_handwriting_jobs = {}
+_handwriting_jobs_lock = threading.Lock()
 
 _DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "above_beyond", "label": "Above and beyond", "color": "#16a34a"},
@@ -1277,14 +1280,27 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
                         detail=f"Transcription failed: {str(e)}")
 
 
-def _batch_decipher_handwriting(problem_ids: list[int], model: str,
-                                user_id: int) -> None:
-  """Fill the transcription cache without allowing one failure to stop a batch."""
+def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
+                                user_id: int, overwrite: bool) -> None:
+  """Fill a batch while exposing progress and continuing after failures."""
+  with _handwriting_jobs_lock:
+    _handwriting_jobs[job_id]["status"] = "running"
   for problem_id in problem_ids:
     try:
-      _decipher_handwriting(problem_id, model, user_id, skip_cached=True)
+      _decipher_handwriting(problem_id, model, user_id,
+                            skip_cached=not overwrite)
     except Exception as error:
       log.warning("Batch transcription failed for problem %s: %s", problem_id, error)
+      with _handwriting_jobs_lock:
+        _handwriting_jobs[job_id]["failed"] += 1
+    else:
+      with _handwriting_jobs_lock:
+        _handwriting_jobs[job_id]["succeeded"] += 1
+    finally:
+      with _handwriting_jobs_lock:
+        _handwriting_jobs[job_id]["processed"] += 1
+  with _handwriting_jobs_lock:
+    _handwriting_jobs[job_id]["status"] = "completed"
 
 
 @router.post("/{problem_id}/decipher")
@@ -1315,16 +1331,45 @@ async def decipher_all_handwriting(
   problem_number: int,
   background_tasks: BackgroundTasks,
   model: str = "default",
+  overwrite: bool = False,
   current_user: dict = Depends(require_session_access())
 ):
-  """Queue transcription of every uncached, non-blank response for a problem."""
+  """Queue handwriting analysis for all submissions of a problem."""
   problem_ids = [
-    problem.id for problem in ProblemRepository().get_untranscribed_for_problem(
-      session_id, problem_number)
+    problem.id for problem in ProblemRepository().get_for_handwriting_analysis(
+      session_id, problem_number, overwrite)
   ]
+  job_id = str(uuid4())
+  with _handwriting_jobs_lock:
+    _handwriting_jobs[job_id] = {
+      "session_id": session_id,
+      "problem_number": problem_number,
+      "status": "queued",
+      "total": len(problem_ids),
+      "processed": 0,
+      "succeeded": 0,
+      "failed": 0,
+    }
   background_tasks.add_task(
-    _batch_decipher_handwriting, problem_ids, model, current_user["user_id"])
-  return {"status": "queued", "queued": len(problem_ids)}
+    _batch_decipher_handwriting, job_id, problem_ids, model,
+    current_user["user_id"], overwrite)
+  return {"job_id": job_id, "status": "queued", "queued": len(problem_ids)}
+
+
+@router.get("/session/{session_id}/{problem_number}/decipher-all/{job_id}")
+async def get_decipher_all_status(
+  session_id: int,
+  problem_number: int,
+  job_id: str,
+  current_user: dict = Depends(require_session_access())
+):
+  """Return progress for an in-process handwriting-analysis batch."""
+  with _handwriting_jobs_lock:
+    job = _handwriting_jobs.get(job_id)
+    if not job or job["session_id"] != session_id or \
+        job["problem_number"] != problem_number:
+      raise HTTPException(status_code=404, detail="Handwriting analysis job not found")
+    return dict(job)
 
 
 @router.get("/{session_id}/{problem_number}/graded")

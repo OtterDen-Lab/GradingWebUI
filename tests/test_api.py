@@ -1179,8 +1179,8 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
   assert cached["transcription_model"] == "Anthropic (claude-sonnet-4-5)"
 
 
-def test_decipher_all_queues_only_uncached_nonblank_responses(client, monkeypatch):
-  """Batch transcription leaves cached and blank responses out of its queue."""
+def test_decipher_all_queues_uncached_responses_including_blanks(client, monkeypatch):
+  """Batch analysis includes blank responses but leaves cached ones alone by default."""
   from grading_web_ui.web_api.routes import problems as problems_routes
 
   session_id = create_test_session(client, "Batch Decipher")
@@ -1200,18 +1200,20 @@ def test_decipher_all_queues_only_uncached_nonblank_responses(client, monkeypatc
   monkeypatch.setattr(
     problems_routes,
     "_batch_decipher_handwriting",
-    lambda problem_ids, model, user_id: queued_calls.append(
-      (problem_ids, model, user_id))
+    lambda job_id, problem_ids, model, user_id, overwrite: queued_calls.append(
+      (job_id, problem_ids, model, user_id, overwrite))
   )
 
   response = client.post(
     f"/api/problems/session/{session_id}/8/decipher-all")
 
   assert response.status_code == 200
-  assert response.json() == {"status": "queued", "queued": 1}
+  assert response.json()["status"] == "queued"
+  assert response.json()["queued"] == 2
+  assert response.json()["job_id"]
   assert len(queued_calls) == 1
-  assert queued_calls[0][:2] == ([queued_problem_id], "default")
-  assert blank_problem_id not in queued_calls[0][0]
+  assert queued_calls[0][1:3] == ([queued_problem_id, blank_problem_id], "default")
+  assert queued_calls[0][4] is False
 
 
 def test_subjective_finalize_applies_bucket_scores(client):

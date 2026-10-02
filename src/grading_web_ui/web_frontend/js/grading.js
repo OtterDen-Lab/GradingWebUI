@@ -57,6 +57,7 @@ function canPrefetchNextProblems() {
         return false;
     }
     const problemNumber = Number(currentProblemNumber);
+    const sessionId = currentSession.id;
     if (prefetchQueueProblemNumber === null) {
         prefetchQueueProblemNumber = problemNumber;
     } else if (prefetchQueueProblemNumber !== problemNumber) {
@@ -4443,6 +4444,8 @@ const modelUsed = document.getElementById('model-used');
 const closeTranscription = document.getElementById('close-transcription');
 const decipherBtn = document.getElementById('decipher-btn');
 const decipherAllBtn = document.getElementById('decipher-all-btn');
+const decipherAllOverwrite = document.getElementById('decipher-all-overwrite');
+const decipherAllStatus = document.getElementById('decipher-all-status');
 const retryPremiumBtn = document.getElementById('retry-premium-btn');
 let transcriptionModelOptions = null;
 
@@ -4784,8 +4787,21 @@ decipherBtn.addEventListener('click', async () => {
     }
 });
 
-// Queue the current question's remaining responses so transcriptions are ready
-// when the grader opens them. The API skips blanks and existing cached results.
+async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
+    const response = await fetch(
+        `${API_BASE}/problems/session/${sessionId}/${problemNumber}/decipher-all/${jobId}`
+    );
+    if (!response.ok) throw new Error('Unable to check handwriting-analysis progress');
+    const job = await response.json();
+    const suffix = job.failed ? `; ${job.failed} failed` : '';
+    decipherAllStatus.textContent = job.status === 'completed'
+        ? `Complete: ${job.succeeded}/${job.total} analyzed${suffix}`
+        : `Analyzing: ${job.processed}/${job.total}${suffix}`;
+    return job.status === 'completed';
+}
+
+// Queue every response for the current question, including ones marked blank.
+// Existing transcriptions are retained unless the overwrite option is selected.
 decipherAllBtn.addEventListener('click', async () => {
     if (!currentSession?.id || !currentProblemNumber) {
         alert('Choose a problem first.');
@@ -4793,7 +4809,9 @@ decipherAllBtn.addEventListener('click', async () => {
     }
 
     const problemNumber = Number(currentProblemNumber);
-    if (!confirm(`Analyze handwriting for every untranscribed response to problem ${problemNumber}? This runs in the background.`)) {
+    const overwrite = decipherAllOverwrite.checked;
+    const scope = overwrite ? 'every response, replacing existing analysis' : 'responses without existing analysis';
+    if (!confirm(`Analyze handwriting for ${scope} on problem ${problemNumber}? This runs in the background, including responses marked blank.`)) {
         return;
     }
 
@@ -4802,7 +4820,7 @@ decipherAllBtn.addEventListener('click', async () => {
     decipherAllBtn.textContent = 'Queueing…';
     try {
         const response = await fetch(
-            `${API_BASE}/problems/session/${currentSession.id}/${problemNumber}/decipher-all`,
+            `${API_BASE}/problems/session/${currentSession.id}/${problemNumber}/decipher-all?overwrite=${overwrite}`,
             { method: 'POST' }
         );
         if (!response.ok) {
@@ -4810,9 +4828,23 @@ decipherAllBtn.addEventListener('click', async () => {
             throw new Error(payload.detail || 'Unable to queue handwriting analysis');
         }
         const result = await response.json();
-        alert(result.queued
-            ? `Handwriting analysis queued for ${result.queued} response${result.queued === 1 ? '' : 's'}.`
-            : 'All non-blank responses already have handwriting analysis.');
+        decipherAllStatus.textContent = result.queued
+            ? `Queued: 0/${result.queued}`
+            : 'Complete: nothing to analyze';
+        if (result.queued) {
+            const timer = setInterval(async () => {
+                try {
+                    if (await watchHandwritingAnalysis(
+                        sessionId, problemNumber, result.job_id)) {
+                        clearInterval(timer);
+                    }
+                } catch (error) {
+                    clearInterval(timer);
+                    console.error('Failed to check handwriting-analysis progress:', error);
+                    decipherAllStatus.textContent = error.message;
+                }
+            }, 1000);
+        }
     } catch (error) {
         console.error('Failed to queue handwriting analysis:', error);
         alert(error.message);
