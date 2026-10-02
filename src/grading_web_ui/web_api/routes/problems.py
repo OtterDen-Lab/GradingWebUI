@@ -27,7 +27,11 @@ from ..services.feedback_text import (
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from ..services.qr_scanner import qr_matches_problem_number
 from ..auth import require_session_access, get_current_user
-from ..services.model_settings import resolve_model
+from ..services.model_settings import (
+  get_handwriting_default,
+  get_transcription_additional_instructions,
+  resolve_model,
+)
 from ..services import ollama_settings
 
 from grading_web_ui import ai_helper
@@ -1181,11 +1185,20 @@ async def decipher_handwriting(
   # Get image data (extract from PDF if needed)
   image_base64 = get_problem_image_data(problem, submission_repo)
 
-  # Simple, direct prompt to avoid editorializing or commentary
-  query = "Transcribe all handwritten text from this image. Output only the transcribed text."
+  query = (
+    "Transcribe only text handwritten by the student. Ignore all printed or typed "
+    "question text, instructions, labels, point values, and page furniture. "
+    "Preserve mathematical notation where possible. Output only the student's "
+    "handwritten response without commentary.")
+  additional_instructions = get_transcription_additional_instructions(
+    current_user["user_id"])["text"]
+  if additional_instructions:
+    query += f"\n\nAdditional transcription instructions:\n{additional_instructions}"
 
   try:
     selected_model = (model or "default").strip().lower()
+    if selected_model == "default":
+      selected_model = get_handwriting_default(current_user["user_id"])["target"]
 
     if selected_model == "ollama":
       server = ollama_settings.get_active_server()

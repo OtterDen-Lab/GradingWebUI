@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 28
+CURRENT_SCHEMA_VERSION = 30
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -504,6 +504,8 @@ def create_schema(cursor):
 
   migrate_to_v27(cursor)
   migrate_to_v28(cursor)
+  migrate_to_v29(cursor)
+  migrate_to_v30(cursor)
 
   maybe_create_bootstrap_admin(cursor)
 
@@ -627,6 +629,14 @@ def run_migrations(cursor, from_version: int):
   if from_version < 28:
     migrate_to_v28(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (28)")
+
+  if from_version < 29:
+    migrate_to_v29(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (29)")
+
+  if from_version < 30:
+    migrate_to_v30(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (30)")
 
 
 def migrate_to_v2(cursor):
@@ -1236,6 +1246,50 @@ def migrate_to_v28(cursor):
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_by INTEGER,
       FOREIGN KEY (updated_by) REFERENCES users(id)
+    )
+  """)
+
+
+def migrate_to_v29(cursor):
+  """Persist the target used by the normal handwriting action."""
+  log.info("Migrating to schema version 29: adding handwriting default settings")
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS system_handwriting_settings (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      target TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_by INTEGER,
+      FOREIGN KEY (updated_by) REFERENCES users(id)
+    )
+  """)
+
+
+def migrate_to_v30(cursor):
+  """Allow bounded system and user additions to the transcription prompt."""
+  log.info("Migrating to schema version 30: adding transcription prompt settings")
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS system_transcription_prompt_settings (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      additional_instructions TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_by INTEGER,
+      FOREIGN KEY (updated_by) REFERENCES users(id)
+    )
+  """)
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_transcription_prompt_overrides (
+      user_id INTEGER PRIMARY KEY,
+      additional_instructions TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  """)
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_handwriting_overrides (
+      user_id INTEGER PRIMARY KEY,
+      target TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   """)
 

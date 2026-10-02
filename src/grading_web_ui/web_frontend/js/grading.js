@@ -4551,7 +4551,10 @@ function displayTranscription(transcription) {
     // Show model selection buttons
     transcriptionActions.style.display = 'block';
     transcriptionActions.innerHTML = `
-        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+        <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px;">
+            <button id="retry-ollama-btn" class="btn-secondary" style="min-width: 0;">
+                Configured Ollama
+            </button>
             <button id="retry-small-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
                 Configured Small
             </button>
@@ -4560,9 +4563,6 @@ function displayTranscription(transcription) {
             </button>
             <button id="retry-large-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
                 Configured Large
-            </button>
-            <button id="retry-ollama-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                Configured Ollama
             </button>
         </div>
     `;
@@ -4755,7 +4755,10 @@ decipherBtn.addEventListener('click', async () => {
         // Show model selection buttons
         transcriptionActions.style.display = 'block';
         transcriptionActions.innerHTML = `
-            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+            <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px;">
+                <button id="retry-ollama-btn" class="btn btn-secondary" style="min-width: 0;">
+                    Configured Ollama
+                </button>
                 <button id="retry-small-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
                     Configured Small
                 </button>
@@ -4764,9 +4767,6 @@ decipherBtn.addEventListener('click', async () => {
                 </button>
                 <button id="retry-large-btn" class="btn btn-primary" style="flex: 1; min-width: 120px;">
                     Configured Large
-                </button>
-                <button id="retry-ollama-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
-                    Configured Ollama
                 </button>
             </div>
         `;

@@ -7,6 +7,8 @@ from ... import ai_helper
 from ..database import get_db_connection
 
 MODEL_TIERS = ("small", "medium", "large")
+HANDWRITING_TARGETS = ("ollama", *MODEL_TIERS)
+MAX_TRANSCRIPTION_ADDITIONAL_INSTRUCTIONS = 2000
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,76 @@ def get_effective_settings(user_id: int, provider: str = "anthropic") -> dict:
     tier: vars(resolve_model(user_id, provider, tier))
     for tier in MODEL_TIERS
   }
+
+
+def get_handwriting_default(user_id: int) -> dict:
+  """Resolve the normal Decipher action independently from model-tier defaults."""
+  try:
+    with get_db_connection() as conn:
+      row = conn.execute("SELECT target FROM user_handwriting_overrides WHERE user_id = ?",
+                         (user_id,)).fetchone()
+      if row:
+        return {"target": row["target"], "source": "user"}
+      row = conn.execute("SELECT target FROM system_handwriting_settings WHERE id = 1").fetchone()
+      if row:
+        return {"target": row["target"], "source": "system"}
+  except sqlite3.OperationalError:
+    pass
+  return {"target": "medium", "source": "built-in"}
+
+
+def set_handwriting_default(user_id: int, target: Optional[str], system: bool = False) -> None:
+  if target is not None and target not in HANDWRITING_TARGETS:
+    raise ValueError("Handwriting default must be one of: ollama, small, medium, large")
+  with get_db_connection() as conn:
+    if system:
+      if target is None:
+        raise ValueError("A system handwriting default is required")
+      conn.execute("""INSERT INTO system_handwriting_settings (id, target, updated_by)
+        VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET target = excluded.target,
+        updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""", (target, user_id))
+    elif target is None:
+      conn.execute("DELETE FROM user_handwriting_overrides WHERE user_id = ?", (user_id,))
+    else:
+      conn.execute("""INSERT INTO user_handwriting_overrides (user_id, target)
+        VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET target = excluded.target,
+        updated_at = CURRENT_TIMESTAMP""", (user_id, target))
+
+
+def get_transcription_additional_instructions(user_id: int) -> dict:
+  try:
+    with get_db_connection() as conn:
+      row = conn.execute("""SELECT additional_instructions
+        FROM user_transcription_prompt_overrides WHERE user_id = ?""", (user_id,)).fetchone()
+      if row:
+        return {"text": row["additional_instructions"], "source": "user"}
+      row = conn.execute("SELECT additional_instructions FROM system_transcription_prompt_settings WHERE id = 1").fetchone()
+      if row:
+        return {"text": row["additional_instructions"], "source": "system"}
+  except sqlite3.OperationalError:
+    pass
+  return {"text": "", "source": "built-in"}
+
+
+def set_transcription_additional_instructions(user_id: int, text: Optional[str],
+                                              system: bool = False) -> None:
+  text = (text or "").strip()
+  if len(text) > MAX_TRANSCRIPTION_ADDITIONAL_INSTRUCTIONS:
+    raise ValueError(
+      f"Additional transcription instructions must be at most {MAX_TRANSCRIPTION_ADDITIONAL_INSTRUCTIONS} characters")
+  with get_db_connection() as conn:
+    if system:
+      conn.execute("""INSERT INTO system_transcription_prompt_settings
+        (id, additional_instructions, updated_by) VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET additional_instructions = excluded.additional_instructions,
+        updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""", (text, user_id))
+    elif not text:
+      conn.execute("DELETE FROM user_transcription_prompt_overrides WHERE user_id = ?", (user_id,))
+    else:
+      conn.execute("""INSERT INTO user_transcription_prompt_overrides
+        (user_id, additional_instructions) VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET additional_instructions = excluded.additional_instructions,
+        updated_at = CURRENT_TIMESTAMP""", (user_id, text))
 
 
 def set_system_defaults(provider: str, models: dict, updated_by: int) -> None:

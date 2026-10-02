@@ -25,12 +25,23 @@ class OllamaModelUpdate(BaseModel):
   model: Optional[str] = Field(None, max_length=240)
 
 
+class HandwritingDefaultUpdate(BaseModel):
+  target: Optional[str] = Field(None, pattern="^(ollama|small|medium|large)$")
+
+
+class TranscriptionPromptUpdate(BaseModel):
+  additional_instructions: Optional[str] = Field(None, max_length=2000)
+
+
 @router.get("")
 async def get_settings(current_user: dict = Depends(get_current_user)):
   ollama_server = ollama_settings.get_active_server()
   return {
     "providers": list(model_settings.ai_helper.MODEL_CONFIG),
     "settings": model_settings.get_effective_settings(current_user["user_id"]),
+    "handwriting_default": model_settings.get_handwriting_default(current_user["user_id"]),
+    "transcription_additional_instructions":
+      model_settings.get_transcription_additional_instructions(current_user["user_id"]),
     "ollama_active": ({"server_name": ollama_server["name"],
                        "model_id": ollama_server["active_model"]}
                       if ollama_server else None),
@@ -67,6 +78,46 @@ async def update_my_settings(request: ModelDefaultsUpdate,
   except ValueError as error:
     raise HTTPException(status_code=400, detail=str(error)) from error
   return {"settings": model_settings.get_effective_settings(current_user["user_id"], request.provider)}
+
+
+@router.put("/system/handwriting-default")
+async def update_system_handwriting_default(
+    request: HandwritingDefaultUpdate,
+    current_user: dict = Depends(require_instructor)):
+  try:
+    model_settings.set_handwriting_default(current_user["user_id"], request.target, system=True)
+  except ValueError as error:
+    raise HTTPException(status_code=400, detail=str(error)) from error
+  return model_settings.get_handwriting_default(current_user["user_id"])
+
+
+@router.put("/me/handwriting-default")
+async def update_my_handwriting_default(
+    request: HandwritingDefaultUpdate,
+    current_user: dict = Depends(get_current_user)):
+  try:
+    model_settings.set_handwriting_default(current_user["user_id"], request.target)
+  except ValueError as error:
+    raise HTTPException(status_code=400, detail=str(error)) from error
+  return model_settings.get_handwriting_default(current_user["user_id"])
+
+
+@router.put("/system/transcription-instructions")
+async def update_system_transcription_instructions(
+    request: TranscriptionPromptUpdate,
+    current_user: dict = Depends(require_instructor)):
+  model_settings.set_transcription_additional_instructions(
+    current_user["user_id"], request.additional_instructions, system=True)
+  return model_settings.get_transcription_additional_instructions(current_user["user_id"])
+
+
+@router.put("/me/transcription-instructions")
+async def update_my_transcription_instructions(
+    request: TranscriptionPromptUpdate,
+    current_user: dict = Depends(get_current_user)):
+  model_settings.set_transcription_additional_instructions(
+    current_user["user_id"], request.additional_instructions)
+  return model_settings.get_transcription_additional_instructions(current_user["user_id"])
 
 
 @router.get("/ollama/servers")

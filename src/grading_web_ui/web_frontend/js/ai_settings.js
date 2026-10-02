@@ -36,12 +36,46 @@ async function loadAIModelSettings() {
         <small style="display:block;color:var(--gray-700)">Effective: ${escapeAI(setting.model_id)} (${setting.source})</small>
         <input data-ai-tier="${tier}" list="anthropic-model-options" value="${escapeAI(personal)}" placeholder="Use system default" style="width:100%; padding:8px; box-sizing:border-box;">
       </label>`;
-    }).join('');
+    }).join('') + renderHandwritingDefaultSettings();
+    document.getElementById('handwriting-default-target').value = aiModelSettings.handwriting_default.target;
+    document.getElementById('save-my-handwriting-default').onclick = () => saveHandwritingDefault('me');
+    document.getElementById('save-system-handwriting-default').onclick = () => saveHandwritingDefault('system');
+    document.getElementById('save-my-transcription-instructions').onclick = () => saveTranscriptionInstructions('me');
+    document.getElementById('save-system-transcription-instructions').onclick = () => saveTranscriptionInstructions('system');
     if (currentUser?.role === 'instructor') await loadOllamaSettings();
   } catch (err) {
     error.textContent = err.message;
     error.style.display = 'block';
   }
+}
+
+function renderHandwritingDefaultSettings() {
+  const defaultSetting = aiModelSettings.handwriting_default;
+  const target = defaultSetting.target;
+  const ollamaLabel = aiModelSettings.ollama_active
+    ? `Ollama — ${escapeAI(aiModelSettings.ollama_active.model_id)} on ${escapeAI(aiModelSettings.ollama_active.server_name)}`
+    : 'Ollama — no active model configured';
+  const additional = aiModelSettings.transcription_additional_instructions;
+  const personalAdditional = additional.source === 'user' ? additional.text : '';
+  return `<div style="margin-top:24px; padding-top:16px; border-top:1px solid var(--gray-200)">
+    <h3 style="margin:0 0 8px">Normal handwriting model</h3>
+    <small style="display:block;color:var(--gray-700);margin-bottom:8px">The Decipher Handwriting button currently uses <strong>${escapeAI(target)}</strong> (${escapeAI(defaultSetting.source)} default).</small>
+    <select id="handwriting-default-target">
+      <option value="ollama">${ollamaLabel}</option>
+      <option value="small">Anthropic Small — ${escapeAI(aiModelSettings.settings.small.model_id)}</option>
+      <option value="medium">Anthropic Medium — ${escapeAI(aiModelSettings.settings.medium.model_id)}</option>
+      <option value="large">Anthropic Large — ${escapeAI(aiModelSettings.settings.large.model_id)}</option>
+    </select>
+    <button id="save-my-handwriting-default" class="btn btn-secondary">Use as my default</button>
+    <button id="save-system-handwriting-default" class="btn btn-secondary instructor-only">Use as system default</button>
+    <div style="margin-top:18px">
+      <strong>Additional transcription instructions</strong>
+      <small style="display:block;color:var(--gray-700);margin:4px 0">These are appended to the built-in instruction to transcribe only the student's handwriting. Effective source: ${escapeAI(additional.source)}.</small>
+      <textarea id="transcription-additional-instructions" rows="3" maxlength="2000" placeholder="Use system instructions" style="width:100%;max-width:620px;box-sizing:border-box">${escapeAI(personalAdditional)}</textarea>
+      <div><button id="save-my-transcription-instructions" class="btn btn-secondary">Save my instructions</button>
+      <button id="save-system-transcription-instructions" class="btn btn-secondary instructor-only">Save system instructions</button></div>
+    </div>
+  </div>`;
 }
 
 async function loadOllamaSettings() {
@@ -139,5 +173,31 @@ async function saveAIModelSettings(scope) {
     alert(error.detail || 'Could not save settings');
     return;
   }
+  await loadAIModelSettings();
+}
+
+async function saveHandwritingDefault(scope) {
+  const target = document.getElementById('handwriting-default-target').value;
+  const endpoint = scope === 'system' ? 'system/handwriting-default' : 'me/handwriting-default';
+  const response = await fetch(`${API_BASE}/ai-settings/${endpoint}`, {
+    method: 'PUT', credentials: 'include', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({target})
+  });
+  if (!response.ok) return alert((await response.json()).detail || 'Could not save handwriting default');
+  transcriptionModelOptions = null;
+  await loadAIModelSettings();
+}
+
+async function saveTranscriptionInstructions(scope) {
+  let additional_instructions = document.getElementById('transcription-additional-instructions').value;
+  if (scope === 'system' && !additional_instructions.trim()) {
+    additional_instructions = aiModelSettings.transcription_additional_instructions.text;
+  }
+  const endpoint = scope === 'system' ? 'system/transcription-instructions' : 'me/transcription-instructions';
+  const response = await fetch(`${API_BASE}/ai-settings/${endpoint}`, {
+    method: 'PUT', credentials: 'include', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({additional_instructions})
+  });
+  if (!response.ok) return alert((await response.json()).detail || 'Could not save transcription instructions');
   await loadAIModelSettings();
 }
