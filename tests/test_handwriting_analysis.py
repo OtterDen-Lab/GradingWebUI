@@ -18,6 +18,12 @@ def test_accepts_legacy_two_field_json_from_smaller_models():
   ) == ("", True, False, False)
 
 
+def test_marks_legacy_nonblank_json_as_classification_incomplete():
+  assert _parse_handwriting_analysis(
+    '{"is_blank": false, "text": "work shown"}'
+  ) == ("work shown", False, None, None)
+
+
 def test_accepts_embedded_json_and_boolean_strings():
   assert _parse_handwriting_analysis(
     'Result: {"blank": "false", "effectively_blank": "true", '

@@ -684,8 +684,8 @@ class ProblemRepository(BaseRepository[Problem]):
       return int(cursor.rowcount or 0)
 
   def update_transcription(self, problem_id: int, transcription: str, model: str,
-                           is_blank: bool, is_effectively_blank: bool,
-                           is_relevant: bool) -> None:
+                           is_blank: bool, is_effectively_blank: Optional[bool],
+                           is_relevant: Optional[bool]) -> None:
     """
     Cache transcription for a problem.
 
@@ -706,7 +706,8 @@ class ProblemRepository(BaseRepository[Problem]):
             transcription_is_relevant = ?, transcription_cached_at = CURRENT_TIMESTAMP
         WHERE id = ?
       """, (transcription, model, 1 if is_blank else 0,
-            1 if is_effectively_blank else 0, 1 if is_relevant else 0,
+            None if is_effectively_blank is None else int(is_effectively_blank),
+            None if is_relevant is None else int(is_relevant),
             problem_id))
 
   def update_qr_data(self, problem_id: int, max_points: float, encrypted_data: Optional[str] = None) -> None:

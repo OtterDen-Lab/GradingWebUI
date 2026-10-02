@@ -4810,6 +4810,8 @@ async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
     const effectivelyBlankSummary =
         `; ${job.reported_effectively_blank || 0} effectively blank`;
     const irrelevantSummary = `; ${job.reported_irrelevant || 0} irrelevant`;
+    const incompleteSummary = job.classification_incomplete
+        ? `; ${job.classification_incomplete} classification incomplete` : '';
     const classifiedNonRelevant = (job.reported_blank || 0) +
         (job.reported_effectively_blank || 0) + (job.reported_irrelevant || 0);
     // Infer this for a batch already running during an app upgrade, whose
@@ -4819,8 +4821,8 @@ async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
     const relevantSummary = `; ${relevantCount} relevant`;
     const failureSummary = job.failed ? `; ${job.failed} failed` : '';
     decipherAllStatus.textContent = job.status === 'completed'
-        ? `Complete: ${job.succeeded}/${job.total} analyzed${relevantSummary}${irrelevantSummary}${effectivelyBlankSummary}${blankSummary}${failureSummary}`
-        : `Analyzing: ${job.processed}/${job.total}${relevantSummary}${irrelevantSummary}${effectivelyBlankSummary}${blankSummary}${failureSummary}`;
+        ? `Complete: ${job.succeeded}/${job.total} analyzed${relevantSummary}${irrelevantSummary}${effectivelyBlankSummary}${blankSummary}${incompleteSummary}${failureSummary}`
+        : `Analyzing: ${job.processed}/${job.total}${relevantSummary}${irrelevantSummary}${effectivelyBlankSummary}${blankSummary}${incompleteSummary}${failureSummary}`;
     return job.status === 'completed';
 }
 

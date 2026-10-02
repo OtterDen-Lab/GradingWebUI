@@ -49,3 +49,23 @@ def test_ollama_helper_disables_thinking_and_reports_missing_final_text(monkeypa
   with pytest.raises(RuntimeError, match="no final text.*1000.*length"):
     AI_Helper__Ollama("https://ollama.example.test", "qwen3-vl:30b").query_ai("read", [])
   assert captured["think"] is False
+
+
+def test_ollama_helper_requests_json_when_requested(monkeypatch):
+  captured = {}
+
+  class Response:
+    def raise_for_status(self):
+      pass
+
+    def json(self):
+      return {"message": {"content": "{}"}}
+
+  def post(*args, **kwargs):
+    captured.update(kwargs["json"])
+    return Response()
+
+  monkeypatch.setattr("grading_web_ui.ai_helper.httpx.post", post)
+  AI_Helper__Ollama("https://ollama.example.test", "qwen3-vl:30b").query_ai(
+    "read", [], json_output=True)
+  assert captured["format"] == "json"

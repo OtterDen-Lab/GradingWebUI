@@ -1162,7 +1162,8 @@ async def get_problem_in_context(
   }
 
 
-def _parse_handwriting_analysis(raw_response: str) -> tuple[str, bool, bool, bool]:
+def _parse_handwriting_analysis(
+    raw_response: str) -> tuple[str, bool, bool | None, bool | None]:
   """Parse structured transcription, tolerating smaller-model JSON variants."""
   payload_text = (raw_response or "").strip()
   if payload_text.startswith("```") and payload_text.endswith("```"):
@@ -1184,21 +1185,25 @@ def _parse_handwriting_analysis(raw_response: str) -> tuple[str, bool, bool, boo
   if not isinstance(payload, dict):
     raise ValueError("Handwriting-analysis JSON must be an object")
 
-  def read_bool(field: str, *aliases: str, default: bool | None = None) -> bool:
-    value = next((payload[key] for key in (field, *aliases) if key in payload), default)
+  missing = object()
+
+  def read_bool(field: str, *aliases: str, required: bool = False) -> bool | None:
+    value = next((payload[key] for key in (field, *aliases) if key in payload),
+                 missing)
+    if value is missing:
+      if required:
+        raise ValueError(f"Handwriting-analysis JSON is missing {field}")
+      return None
     if isinstance(value, bool):
       return value
     if isinstance(value, str) and value.strip().lower() in ("true", "false"):
       return value.strip().lower() == "true"
-    if value is None:
-      raise ValueError(f"Handwriting-analysis JSON is missing {field}")
     raise ValueError(f"Handwriting-analysis {field} must be true or false")
 
-  is_blank = read_bool("is_blank", "blank")
+  is_blank = read_bool("is_blank", "blank", required=True)
   is_effectively_blank = read_bool(
-    "is_effectively_blank", "effectively_blank", default=False)
-  is_relevant = read_bool("is_relevant", "relevant",
-                          default=not is_blank and not is_effectively_blank)
+    "is_effectively_blank", "effectively_blank")
+  is_relevant = read_bool("is_relevant", "relevant")
   text = payload.get("text", payload.get("transcription"))
   if not isinstance(text, str):
     raise ValueError("Handwriting-analysis text must be a string")
@@ -1271,7 +1276,8 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       timing_server = server["name"]
       transcription, usage = ai.query_ai(
         query, attachments=[("png", image_base64)],
-        max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS)
+        max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS,
+        json_output=True)
       model_name = f"Ollama ({usage.get('model', server['active_model'])} on {server['name']})"
     else:
 
@@ -1366,8 +1372,12 @@ def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
           _handwriting_jobs[job_id]["reported_effectively_blank"] += 1
         if result.get("is_relevant"):
           _handwriting_jobs[job_id]["reported_relevant"] += 1
-        elif not result.get("is_blank") and not result.get("is_effectively_blank"):
+        elif result.get("is_relevant") is False and \
+            not result.get("is_blank") and not result.get("is_effectively_blank"):
           _handwriting_jobs[job_id]["reported_irrelevant"] += 1
+        if result.get("is_effectively_blank") is None or \
+            result.get("is_relevant") is None:
+          _handwriting_jobs[job_id]["classification_incomplete"] += 1
     finally:
       with _handwriting_jobs_lock:
         _handwriting_jobs[job_id]["processed"] += 1
@@ -1425,6 +1435,7 @@ async def decipher_all_handwriting(
       "reported_effectively_blank": 0,
       "reported_irrelevant": 0,
       "reported_relevant": 0,
+      "classification_incomplete": 0,
     }
   background_tasks.add_task(
     _batch_decipher_handwriting, job_id, problem_ids, model,
