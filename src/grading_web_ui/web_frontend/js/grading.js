@@ -4452,13 +4452,17 @@ async function getTranscriptionModelLabel(selection) {
             if (response.ok) transcriptionModelOptions = await response.json();
         }
         const settings = transcriptionModelOptions?.settings;
+        const defaultTarget = transcriptionModelOptions?.handwriting_default?.target || 'medium';
+        const isDefault = selection === 'default';
+        if (isDefault) selection = defaultTarget;
         if (selection === 'ollama') {
             const ollama = transcriptionModelOptions?.ollama_active;
-            return ollama ? `Ollama: ${ollama.model_id} on ${ollama.server_name}` : 'Ollama (no active model configured)';
+            const label = ollama ? `Ollama: ${ollama.model_id} on ${ollama.server_name}` : 'Ollama (no active model configured)';
+            return isDefault ? `default → ${label}` : label;
         }
-        const tier = selection === 'default' ? 'medium' : selection;
-        const setting = settings?.[tier];
-        return setting ? `Anthropic ${tier}: ${setting.model_id} (${setting.source} default)` : `configured ${tier} model`;
+        const setting = settings?.[selection];
+        const label = setting ? `Anthropic ${selection}: ${setting.model_id} (${setting.source} default)` : `configured ${selection} model`;
+        return isDefault ? `default → ${label}` : label;
     } catch (_error) {
         return 'configured model';
     }
@@ -4553,16 +4557,16 @@ function displayTranscription(transcription) {
     transcriptionActions.innerHTML = `
         <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px;">
             <button id="retry-ollama-btn" class="btn-secondary" style="min-width: 0;">
-                Configured Ollama
+                ollama
             </button>
             <button id="retry-small-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                Configured Small
+                small
             </button>
             <button id="retry-medium-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                Configured Medium
+                medium
             </button>
             <button id="retry-large-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                Configured Large
+                large
             </button>
         </div>
     `;
@@ -4757,16 +4761,16 @@ decipherBtn.addEventListener('click', async () => {
         transcriptionActions.innerHTML = `
             <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px;">
                 <button id="retry-ollama-btn" class="btn btn-secondary" style="min-width: 0;">
-                    Configured Ollama
+                    ollama
                 </button>
                 <button id="retry-small-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
-                    Configured Small
+                    small
                 </button>
                 <button id="retry-medium-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
-                    Configured Medium
+                    medium
                 </button>
                 <button id="retry-large-btn" class="btn btn-primary" style="flex: 1; min-width: 120px;">
-                    Configured Large
+                    large
                 </button>
             </div>
         `;
