@@ -219,6 +219,38 @@ class AI_Helper__Anthropic(AI_Helper):
     raise RuntimeError("Anthropic query failed with no candidate model attempts")
 
 
+class AI_Helper__Ollama(AI_Helper):
+  """Thin client for an operator-provided Ollama server; no models are bundled."""
+
+  def __init__(self, base_url: str, model: str) -> None:
+    self.base_url = base_url.rstrip("/")
+    self.model = model
+
+  def query_ai(self,
+               message: str,
+               attachments: List[Tuple[str, str]],
+               max_response_tokens: int = DEFAULT_MAX_TOKENS,
+               **_kwargs) -> Tuple[str, Dict]:
+    images = [contents for file_type, contents in attachments if file_type == "png"]
+    payload = {
+      "model": self.model,
+      "stream": False,
+      "messages": [{"role": "user", "content": message, "images": images}],
+      "options": {"num_predict": max_response_tokens},
+    }
+    response = httpx.post(f"{self.base_url}/api/chat", json=payload, timeout=300.0)
+    response.raise_for_status()
+    body = response.json()
+    content = body.get("message", {}).get("content", "")
+    return content, {
+      "prompt_tokens": body.get("prompt_eval_count", 0),
+      "completion_tokens": body.get("eval_count", 0),
+      "total_tokens": body.get("prompt_eval_count", 0) + body.get("eval_count", 0),
+      "provider": "ollama",
+      "model": self.model,
+    }
+
+
 class AI_Helper__OpenAI(AI_Helper):
 
   def __init__(self) -> None:

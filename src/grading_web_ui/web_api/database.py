@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 27
+CURRENT_SCHEMA_VERSION = 28
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -503,6 +503,7 @@ def create_schema(cursor):
   )
 
   migrate_to_v27(cursor)
+  migrate_to_v28(cursor)
 
   maybe_create_bootstrap_admin(cursor)
 
@@ -622,6 +623,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 27:
     migrate_to_v27(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (27)")
+
+  if from_version < 28:
+    migrate_to_v28(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (28)")
 
 
 def migrate_to_v2(cursor):
@@ -1213,6 +1218,24 @@ def migrate_to_v27(cursor):
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, provider, tier),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  """)
+
+
+def migrate_to_v28(cursor):
+  """Add optional, externally managed Ollama server configuration."""
+  log.info("Migrating to schema version 28: adding Ollama server settings")
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ollama_servers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      base_url TEXT NOT NULL UNIQUE,
+      active_model TEXT,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_by INTEGER,
+      FOREIGN KEY (updated_by) REFERENCES users(id)
     )
   """)
 

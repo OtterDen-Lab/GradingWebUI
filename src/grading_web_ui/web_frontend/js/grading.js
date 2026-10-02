@@ -4540,6 +4540,9 @@ function displayTranscription(transcription) {
             <button id="retry-large-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
                 Configured Large
             </button>
+            <button id="retry-ollama-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
+                Configured Ollama
+            </button>
         </div>
     `;
 
@@ -4547,6 +4550,7 @@ function displayTranscription(transcription) {
     document.getElementById('retry-small-btn').addEventListener('click', () => retryWithModel('small'));
     document.getElementById('retry-medium-btn').addEventListener('click', () => retryWithModel('medium'));
     document.getElementById('retry-large-btn').addEventListener('click', () => retryWithModel('large'));
+    document.getElementById('retry-ollama-btn').addEventListener('click', () => retryWithModel('ollama'));
 }
 
 // Function to retry transcription with a specific model
@@ -4557,7 +4561,8 @@ async function retryWithModel(model) {
         'default': 'your configured default model',
         'small': 'your configured small model',
         'medium': 'your configured medium model',
-        'large': 'your configured large model'
+        'large': 'your configured large model',
+        'ollama': 'your configured Ollama model'
     };
 
     // Show loading state
@@ -4745,6 +4750,9 @@ decipherBtn.addEventListener('click', async () => {
                 <button id="retry-large-btn" class="btn btn-primary" style="flex: 1; min-width: 120px;">
                     Configured Large
                 </button>
+                <button id="retry-ollama-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
+                    Configured Ollama
+                </button>
             </div>
         `;
 
@@ -4752,6 +4760,7 @@ decipherBtn.addEventListener('click', async () => {
         document.getElementById('retry-small-btn').addEventListener('click', () => retryWithModel('small'));
         document.getElementById('retry-medium-btn').addEventListener('click', () => retryWithModel('medium'));
         document.getElementById('retry-large-btn').addEventListener('click', () => retryWithModel('large'));
+        document.getElementById('retry-ollama-btn').addEventListener('click', () => retryWithModel('ollama'));
     }
 });
 

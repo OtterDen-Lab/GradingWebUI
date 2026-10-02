@@ -28,6 +28,7 @@ from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from ..services.qr_scanner import qr_matches_problem_number
 from ..auth import require_session_access, get_current_user
 from ..services.model_settings import resolve_model
+from ..services import ollama_settings
 
 from grading_web_ui import ai_helper
 
@@ -1186,29 +1187,40 @@ async def decipher_handwriting(
   try:
     selected_model = (model or "default").strip().lower()
 
+    if selected_model == "ollama":
+      server = ollama_settings.get_active_server()
+      if not server:
+        raise HTTPException(
+          status_code=400,
+          detail="No active Ollama model is configured in Settings")
+      ai = ai_helper.AI_Helper__Ollama(server["base_url"], server["active_model"])
+      transcription, usage = ai.query_ai(query, attachments=[("png", image_base64)])
+      model_name = f"Ollama ({usage.get('model', server['active_model'])} on {server['name']})"
+    else:
+
     # Compatibility aliases preserve old links while all choices now resolve
     # dynamically from persistent settings instead of the grading session.
-    tier = {"default": "medium", "sonnet": "medium", "opus": "large"}.get(
-      selected_model, selected_model)
-    provider = "anthropic"
-    explicit_model = None
-    if ":" in selected_model:
-      provider, explicit_model = selected_model.split(":", 1)
-      tier = "medium"
-    try:
-      selection = resolve_model(current_user["user_id"], provider, tier,
-                                explicit_model)
-    except ValueError as error:
-      raise HTTPException(status_code=400, detail=str(error)) from error
-    if selection.provider != "anthropic":
-      raise HTTPException(status_code=400,
-                          detail="Handwriting support is not yet available for this provider")
-    ai = ai_helper.AI_Helper__Anthropic()
-    response, usage = ai.query_ai(
-      query, attachments=[("png", image_base64)],
-      candidate_models=[selection.model_id])
-    transcription = response
-    model_name = f"Anthropic ({usage.get('model', selection.model_id)})"
+      tier = {"default": "medium", "sonnet": "medium", "opus": "large"}.get(
+        selected_model, selected_model)
+      provider = "anthropic"
+      explicit_model = None
+      if ":" in selected_model:
+        provider, explicit_model = selected_model.split(":", 1)
+        tier = "medium"
+      try:
+        selection = resolve_model(current_user["user_id"], provider, tier,
+                                  explicit_model)
+      except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+      if selection.provider != "anthropic":
+        raise HTTPException(status_code=400,
+                            detail="Handwriting support is not yet available for this provider")
+      ai = ai_helper.AI_Helper__Anthropic()
+      response, usage = ai.query_ai(
+        query, attachments=[("png", image_base64)],
+        candidate_models=[selection.model_id])
+      transcription = response
+      model_name = f"Anthropic ({usage.get('model', selection.model_id)})"
 
     # Validate transcription is not empty
     if not transcription or not transcription.strip():
