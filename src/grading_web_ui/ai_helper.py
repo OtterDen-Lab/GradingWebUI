@@ -189,7 +189,13 @@ class AI_Helper__Anthropic(AI_Helper):
           model_name
         }
 
-        return response.content[0].text, usage_info
+        # Newer Claude models may place a ThinkingBlock before one or more
+        # TextBlocks. Do not assume content[0] is directly displayable.
+        text_parts = [block.text for block in response.content
+                      if getattr(block, "type", None) == "text" or hasattr(block, "text")]
+        if not text_parts:
+          raise RuntimeError("Anthropic response contained no text block")
+        return "".join(text_parts), usage_info
       except Exception as e:
         last_error = e
         is_model_error = cls._is_model_not_found_error(e)

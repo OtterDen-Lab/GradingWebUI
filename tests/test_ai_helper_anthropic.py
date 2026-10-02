@@ -16,10 +16,28 @@ class _Content:
     self.text = text
 
 
+class _ThinkingContent:
+  type = "thinking"
+
+
+class _TextContent:
+  type = "text"
+
+  def __init__(self, text: str):
+    self.text = text
+
+
 class _Response:
 
   def __init__(self, text: str):
     self.content = [_Content(text)]
+    self.usage = _Usage()
+
+
+class _ThinkingResponse:
+
+  def __init__(self, text: str):
+    self.content = [_ThinkingContent(), _TextContent(text)]
     self.usage = _Usage()
 
 
@@ -69,6 +87,16 @@ def test_anthropic_query_falls_back_when_model_not_found(monkeypatch):
   assert usage["provider"] == "anthropic"
   assert usage["model"] == "good-model"
   assert calls == ["bad-model", "good-model"]
+
+
+def test_anthropic_query_uses_text_block_after_thinking_block(monkeypatch):
+  monkeypatch.setenv("ANTHROPIC_MODEL", "thinking-model")
+  AI_Helper__Anthropic._client = _FakeClient(
+    lambda _model: _ThinkingResponse("final transcription"))
+
+  text, _usage = AI_Helper__Anthropic.query_ai("hello", attachments=[])
+
+  assert text == "final transcription"
 
 
 def test_anthropic_query_does_not_swallow_non_model_errors(monkeypatch):
