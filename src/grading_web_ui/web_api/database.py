@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 30
+CURRENT_SCHEMA_VERSION = 31
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -506,6 +506,7 @@ def create_schema(cursor):
   migrate_to_v28(cursor)
   migrate_to_v29(cursor)
   migrate_to_v30(cursor)
+  migrate_to_v31(cursor)
 
   maybe_create_bootstrap_admin(cursor)
 
@@ -637,6 +638,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 30:
     migrate_to_v30(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (30)")
+
+  if from_version < 31:
+    migrate_to_v31(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (31)")
 
 
 def migrate_to_v2(cursor):
@@ -1275,6 +1280,27 @@ def migrate_to_v30(cursor):
       updated_by INTEGER,
       FOREIGN KEY (updated_by) REFERENCES users(id)
     )
+  """)
+
+
+def migrate_to_v31(cursor):
+  """Record model request timings for aggregate latency reporting."""
+  log.info("Migrating to schema version 31: adding AI model latency metrics")
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ai_model_latency_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feature TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      server_name TEXT,
+      duration_ms REAL NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('success', 'error')),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_ai_model_latency_lookup
+    ON ai_model_latency_events(feature, provider, model_id, server_name, outcome, created_at)
   """)
   cursor.execute("""
     CREATE TABLE IF NOT EXISTS user_transcription_prompt_overrides (

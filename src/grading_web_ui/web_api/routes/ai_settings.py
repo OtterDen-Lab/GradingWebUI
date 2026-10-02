@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from ..auth import get_current_user, require_instructor
 from ..services import model_settings
 from ..services import ollama_settings
+from ..services import model_latency
 
 router = APIRouter()
 
@@ -58,6 +59,11 @@ async def get_models(provider: str, current_user: dict = Depends(require_instruc
     raise HTTPException(status_code=400, detail=str(error)) from error
   except Exception as error:
     raise HTTPException(status_code=502, detail=f"Could not retrieve provider models: {error}") from error
+
+
+@router.get("/latency/handwriting")
+async def get_handwriting_latency(current_user: dict = Depends(require_instructor)):
+  return {"rows": model_latency.handwriting_summary()}
 
 
 @router.put("/system")

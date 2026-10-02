@@ -454,8 +454,13 @@
                 <h2>AI Model Settings</h2>
                 <p style="color: var(--gray-700);">Your choices apply immediately to handwriting transcription and new autograding requests. Leave a personal tier blank to use the system default.</p>
                 <div id="ai-settings-error" style="display:none; color: var(--danger-color);"></div>
-                <div id="ai-settings-form"></div>
-                <div id="ollama-settings-form" class="instructor-only" style="margin-top:28px;"></div>
+                <div style="display:grid; grid-template-columns:minmax(0, 2fr) minmax(280px, 1fr); gap:28px; align-items:start;">
+                    <div>
+                        <div id="ai-settings-form"></div>
+                        <div id="ollama-settings-form" class="instructor-only" style="margin-top:28px;"></div>
+                    </div>
+                    <aside id="handwriting-latency-panel" class="instructor-only" style="background:var(--gray-100); border-radius:8px; padding:16px;"></aside>
+                </div>
                 <div style="display:flex; gap:10px; margin-top:18px;">
                     <button id="save-my-ai-settings" class="btn btn-primary">Save My Defaults</button>
                     <button id="save-system-ai-settings" class="btn btn-secondary instructor-only">Save System Defaults</button>

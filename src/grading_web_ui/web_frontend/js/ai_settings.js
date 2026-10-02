@@ -43,11 +43,38 @@ async function loadAIModelSettings() {
     document.getElementById('save-system-handwriting-default').onclick = () => saveHandwritingDefault('system');
     document.getElementById('save-my-transcription-instructions').onclick = () => saveTranscriptionInstructions('me');
     document.getElementById('save-system-transcription-instructions').onclick = () => saveTranscriptionInstructions('system');
-    if (currentUser?.role === 'instructor') await loadOllamaSettings();
+    if (currentUser?.role === 'instructor') {
+      await Promise.all([loadOllamaSettings(), loadHandwritingLatency()]);
+    }
   } catch (err) {
     error.textContent = err.message;
     error.style.display = 'block';
   }
+}
+
+async function loadHandwritingLatency() {
+  const panel = document.getElementById('handwriting-latency-panel');
+  if (!panel) return;
+  panel.innerHTML = '<h3 style="margin-top:0">Handwriting latency</h3><small>Loading…</small>';
+  const response = await fetch(`${API_BASE}/ai-settings/latency/handwriting`, {credentials: 'include'});
+  if (!response.ok) {
+    panel.innerHTML = '<h3 style="margin-top:0">Handwriting latency</h3><small>Metrics unavailable.</small>';
+    return;
+  }
+  const rows = (await response.json()).rows;
+  if (!rows.length) {
+    panel.innerHTML = '<h3 style="margin-top:0">Handwriting latency</h3><small>Metrics will appear after transcription requests finish.</small>';
+    return;
+  }
+  const format = value => value == null ? '—' : `${(value / 1000).toFixed(value >= 10000 ? 1 : 2)}s`;
+  panel.innerHTML = `<h3 style="margin-top:0">Handwriting latency</h3>
+    <small style="display:block;margin-bottom:8px;color:var(--gray-700)">Successful request latency; all-time p50/p90.</small>
+    <div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">
+      <thead><tr><th style="text-align:left">Model</th><th>n</th><th>p50</th><th>p90</th></tr></thead>
+      <tbody>${rows.map(row => `<tr>
+        <td style="padding:6px 3px;word-break:break-word">${escapeAI(row.provider === 'ollama' ? `${row.server_name || 'server'} / ${row.model_id}` : row.model_id)}${row.failures ? `<br><small style="color:var(--danger-color)">${row.failures} failed</small>` : ''}</td>
+        <td style="text-align:center">${row.samples}</td><td style="text-align:center">${format(row.p50_ms)}</td><td style="text-align:center">${format(row.p90_ms)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
 }
 
 function renderHandwritingDefaultSettings() {
