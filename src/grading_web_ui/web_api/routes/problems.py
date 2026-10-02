@@ -1186,10 +1186,12 @@ async def decipher_handwriting(
   image_base64 = get_problem_image_data(problem, submission_repo)
 
   query = (
-    "Transcribe only text handwritten by the student. Ignore all printed or typed "
-    "question text, instructions, labels, point values, and page furniture. "
-    "Preserve mathematical notation where possible. Output only the student's "
-    "handwritten response without commentary.")
+    "Transcribe only the student's handwritten response.\n\n"
+    "Do not solve, grade, interpret, correct, summarize, or editorialize.\n"
+    "Ignore all printed text, including the question, instructions, labels, and point values.\n"
+    "Preserve the student's wording, spelling, notation, and line breaks where possible.\n"
+    "Use [illegible] only for text that cannot reasonably be determined from the visible handwriting.\n"
+    "Return only the transcription.")
   additional_instructions = get_transcription_additional_instructions(
     current_user["user_id"])["text"]
   if additional_instructions:
