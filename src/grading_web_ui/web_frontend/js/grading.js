@@ -1749,6 +1749,8 @@ function autoSizeProblemContainerToImage(problemImage) {
 function displayCurrentProblem() {
     if (!currentProblem) return;
 
+    clearStaleHandwritingBatchStatus();
+
     // Display problem
     const problemImage = document.getElementById('problem-image');
     problemImage.onload = () => {
@@ -4796,12 +4798,33 @@ async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
     );
     if (!response.ok) throw new Error('Unable to check handwriting-analysis progress');
     const job = await response.json();
-    const blankSummary = `; ${job.reported_blank || 0} reported blank`;
+    // The user may have navigated to another problem while the job runs.
+    // Stop polling rather than reviving a status message for the old problem.
+    if (String(currentSession?.id) !== String(sessionId) ||
+        String(currentProblemNumber) !== String(problemNumber)) {
+        return true;
+    }
+    decipherAllStatus.dataset.sessionId = String(sessionId);
+    decipherAllStatus.dataset.problemNumber = String(problemNumber);
+    const blankSummary = `; ${job.reported_blank || 0} blank`;
+    const effectivelyBlankSummary =
+        `; ${job.reported_effectively_blank || 0} effectively blank`;
+    const irrelevantSummary = `; ${job.reported_irrelevant || 0} irrelevant`;
     const failureSummary = job.failed ? `; ${job.failed} failed` : '';
     decipherAllStatus.textContent = job.status === 'completed'
-        ? `Complete: ${job.succeeded}/${job.total} analyzed${blankSummary}${failureSummary}`
-        : `Analyzing: ${job.processed}/${job.total}${blankSummary}${failureSummary}`;
+        ? `Complete: ${job.succeeded}/${job.total} analyzed${blankSummary}${effectivelyBlankSummary}${irrelevantSummary}${failureSummary}`
+        : `Analyzing: ${job.processed}/${job.total}${blankSummary}${effectivelyBlankSummary}${irrelevantSummary}${failureSummary}`;
     return job.status === 'completed';
+}
+
+function clearStaleHandwritingBatchStatus() {
+    if (!decipherAllStatus?.textContent) return;
+    if (decipherAllStatus.dataset.sessionId !== String(currentSession?.id) ||
+        decipherAllStatus.dataset.problemNumber !== String(currentProblemNumber)) {
+        decipherAllStatus.textContent = '';
+        delete decipherAllStatus.dataset.sessionId;
+        delete decipherAllStatus.dataset.problemNumber;
+    }
 }
 
 async function openHandwritingBatchDialog() {
@@ -4846,6 +4869,8 @@ async function startHandwritingBatch() {
             throw new Error(payload.detail || 'Unable to queue handwriting analysis');
         }
         const result = await response.json();
+        decipherAllStatus.dataset.sessionId = String(sessionId);
+        decipherAllStatus.dataset.problemNumber = String(problemNumber);
         closeHandwritingBatchDialog();
         decipherAllStatus.textContent = result.queued
             ? `Queued: 0/${result.queued}`

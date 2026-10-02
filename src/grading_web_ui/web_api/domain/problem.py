@@ -34,6 +34,8 @@ class Problem:
     transcription_model: Model used for transcription
     transcription_cached_at: When transcription was cached
     transcription_is_blank: Blank judgment returned by the transcription model
+    transcription_is_effectively_blank: Doodle/minimal-content judgment
+    transcription_is_relevant: Relevance judgment against the printed question
   """
   id: int
   session_id: int
@@ -55,6 +57,8 @@ class Problem:
   transcription_model: Optional[str] = None
   transcription_cached_at: Optional[datetime] = None
   transcription_is_blank: Optional[bool] = None
+  transcription_is_effectively_blank: Optional[bool] = None
+  transcription_is_relevant: Optional[bool] = None
 
   # Business logic methods
 

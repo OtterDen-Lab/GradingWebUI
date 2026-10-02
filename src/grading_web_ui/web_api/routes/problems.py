@@ -1162,7 +1162,7 @@ async def get_problem_in_context(
   }
 
 
-def _parse_handwriting_analysis(raw_response: str) -> tuple[str, bool]:
+def _parse_handwriting_analysis(raw_response: str) -> tuple[str, bool, bool, bool]:
   """Validate the structured transcription result returned by a vision model."""
   payload_text = (raw_response or "").strip()
   if payload_text.startswith("```") and payload_text.endswith("```"):
@@ -1172,18 +1172,28 @@ def _parse_handwriting_analysis(raw_response: str) -> tuple[str, bool]:
   except (TypeError, json.JSONDecodeError) as error:
     raise ValueError("Model did not return valid handwriting-analysis JSON") from error
 
-  if not isinstance(payload, dict) or set(payload) != {"is_blank", "text"}:
-    raise ValueError("Handwriting-analysis JSON must contain only is_blank and text")
-  if type(payload["is_blank"]) is not bool:
-    raise ValueError("Handwriting-analysis is_blank must be true or false")
+  expected_fields = {
+    "is_blank", "is_effectively_blank", "is_relevant", "text"
+  }
+  if not isinstance(payload, dict) or set(payload) != expected_fields:
+    raise ValueError(
+      "Handwriting-analysis JSON must contain only is_blank, "
+      "is_effectively_blank, is_relevant, and text")
+  for field in ("is_blank", "is_effectively_blank", "is_relevant"):
+    if type(payload[field]) is not bool:
+      raise ValueError(f"Handwriting-analysis {field} must be true or false")
   if not isinstance(payload["text"], str):
     raise ValueError("Handwriting-analysis text must be a string")
 
   transcription = payload["text"].strip()
   is_blank = payload["is_blank"]
+  is_effectively_blank = payload["is_effectively_blank"]
+  is_relevant = payload["is_relevant"]
   if not transcription and not is_blank:
     raise ValueError("Model returned an empty transcription without marking it blank")
-  return transcription, is_blank
+  if is_blank and (is_effectively_blank or is_relevant):
+    raise ValueError("A blank response cannot be effectively blank or relevant")
+  return transcription, is_blank, is_effectively_blank, is_relevant
 
 
 def _decipher_handwriting(problem_id: int, model: str, user_id: int,
@@ -1207,6 +1217,8 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       "transcription": problem.transcription,
       "model": problem.transcription_model,
       "is_blank": problem.transcription_is_blank,
+      "is_effectively_blank": problem.transcription_is_effectively_blank,
+      "is_relevant": problem.transcription_is_relevant,
       "cached": True,
     }
 
@@ -1275,7 +1287,8 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       model_name = f"Anthropic ({usage.get('model', selection.model_id)})"
 
     try:
-      transcription, is_blank = _parse_handwriting_analysis(transcription)
+      transcription, is_blank, is_effectively_blank, is_relevant = \
+        _parse_handwriting_analysis(transcription)
     except ValueError as error:
       log.warning("Invalid handwriting-analysis result from %s for problem %s: %s",
                   model_name, problem_id, error)
@@ -1284,13 +1297,17 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
     model_latency.record(
       "handwriting", timing_provider, timing_model,
       (perf_counter() - timing_start) * 1000, "success", timing_server)
-    problem_repo.update_transcription(problem_id, transcription, model_name, is_blank)
+    problem_repo.update_transcription(
+      problem_id, transcription, model_name, is_blank, is_effectively_blank,
+      is_relevant)
 
     return {
       "problem_id": problem_id,
       "transcription": transcription,
       "model": model_name,
       "is_blank": is_blank,
+      "is_effectively_blank": is_effectively_blank,
+      "is_relevant": is_relevant,
     }
   except HTTPException:
     if timing_start is not None:
@@ -1327,6 +1344,11 @@ def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
         _handwriting_jobs[job_id]["succeeded"] += 1
         if result.get("is_blank"):
           _handwriting_jobs[job_id]["reported_blank"] += 1
+        if result.get("is_effectively_blank"):
+          _handwriting_jobs[job_id]["reported_effectively_blank"] += 1
+        if not result.get("is_relevant") and not result.get("is_blank") and \
+            not result.get("is_effectively_blank"):
+          _handwriting_jobs[job_id]["reported_irrelevant"] += 1
     finally:
       with _handwriting_jobs_lock:
         _handwriting_jobs[job_id]["processed"] += 1
@@ -1381,6 +1403,8 @@ async def decipher_all_handwriting(
       "succeeded": 0,
       "failed": 0,
       "reported_blank": 0,
+      "reported_effectively_blank": 0,
+      "reported_irrelevant": 0,
     }
   background_tasks.add_task(
     _batch_decipher_handwriting, job_id, problem_ids, model,

@@ -65,6 +65,14 @@ class ProblemRepository(BaseRepository[Problem]):
       transcription_is_blank=(
         bool(row["transcription_is_blank"])
         if row["transcription_is_blank"] is not None else None
+      ),
+      transcription_is_effectively_blank=(
+        bool(row["transcription_is_effectively_blank"])
+        if row["transcription_is_effectively_blank"] is not None else None
+      ),
+      transcription_is_relevant=(
+        bool(row["transcription_is_relevant"])
+        if row["transcription_is_relevant"] is not None else None
       )
     )
 
@@ -354,7 +362,12 @@ class ProblemRepository(BaseRepository[Problem]):
           """
           SELECT * FROM problems
           WHERE session_id = ? AND problem_number = ? AND graded = 0
-          ORDER BY is_blank ASC, RANDOM()
+          ORDER BY CASE
+            WHEN transcription_is_blank = 1 THEN 3
+            WHEN transcription_is_effectively_blank = 1 THEN 2
+            WHEN transcription_is_relevant = 0 THEN 1
+            ELSE 0
+          END, is_blank ASC, RANDOM()
           LIMIT 1
           """,
           (session_id, problem_number)
@@ -366,7 +379,12 @@ class ProblemRepository(BaseRepository[Problem]):
         SELECT * FROM problems
         WHERE session_id = ? AND problem_number = ? AND graded = 0
           AND id NOT IN ({placeholders})
-        ORDER BY is_blank ASC, RANDOM()
+        ORDER BY CASE
+          WHEN transcription_is_blank = 1 THEN 3
+          WHEN transcription_is_effectively_blank = 1 THEN 2
+          WHEN transcription_is_relevant = 0 THEN 1
+          ELSE 0
+        END, is_blank ASC, RANDOM()
         LIMIT 1
       """, (session_id, problem_number, *exclude_ids))
       row = cursor.fetchone()
@@ -397,7 +415,12 @@ class ProblemRepository(BaseRepository[Problem]):
           LEFT JOIN subjective_triage st ON st.problem_id = p.id
           WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
             AND st.problem_id IS NULL
-          ORDER BY p.is_blank ASC, RANDOM()
+          ORDER BY CASE
+            WHEN p.transcription_is_blank = 1 THEN 3
+            WHEN p.transcription_is_effectively_blank = 1 THEN 2
+            WHEN p.transcription_is_relevant = 0 THEN 1
+            ELSE 0
+          END, p.is_blank ASC, RANDOM()
           LIMIT 1
           """,
           (session_id, problem_number)
@@ -412,7 +435,12 @@ class ProblemRepository(BaseRepository[Problem]):
         WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
           AND st.problem_id IS NULL
           AND p.id NOT IN ({placeholders})
-        ORDER BY p.is_blank ASC, RANDOM()
+        ORDER BY CASE
+          WHEN p.transcription_is_blank = 1 THEN 3
+          WHEN p.transcription_is_effectively_blank = 1 THEN 2
+          WHEN p.transcription_is_relevant = 0 THEN 1
+          ELSE 0
+        END, p.is_blank ASC, RANDOM()
         LIMIT 1
       """, (session_id, problem_number, *exclude_ids))
       row = cursor.fetchone()
@@ -656,7 +684,8 @@ class ProblemRepository(BaseRepository[Problem]):
       return int(cursor.rowcount or 0)
 
   def update_transcription(self, problem_id: int, transcription: str, model: str,
-                           is_blank: bool) -> None:
+                           is_blank: bool, is_effectively_blank: bool,
+                           is_relevant: bool) -> None:
     """
     Cache transcription for a problem.
 
@@ -665,15 +694,20 @@ class ProblemRepository(BaseRepository[Problem]):
       transcription: Transcribed text
       model: Model name used for transcription
       is_blank: Blank judgment returned by the transcription model
+      is_effectively_blank: Whether content is only doodles or stray marks
+      is_relevant: Whether content attempts to answer the printed question
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
       cursor.execute("""
         UPDATE problems
         SET transcription = ?, transcription_model = ?,
-            transcription_is_blank = ?, transcription_cached_at = CURRENT_TIMESTAMP
+            transcription_is_blank = ?, transcription_is_effectively_blank = ?,
+            transcription_is_relevant = ?, transcription_cached_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      """, (transcription, model, 1 if is_blank else 0, problem_id))
+      """, (transcription, model, 1 if is_blank else 0,
+            1 if is_effectively_blank else 0, 1 if is_relevant else 0,
+            problem_id))
 
   def update_qr_data(self, problem_id: int, max_points: float, encrypted_data: Optional[str] = None) -> None:
     """

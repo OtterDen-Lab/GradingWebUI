@@ -91,6 +91,8 @@ def test_db():
       transcription_model TEXT,
       transcription_cached_at TIMESTAMP,
       transcription_is_blank INTEGER,
+      transcription_is_effectively_blank INTEGER,
+      transcription_is_relevant INTEGER,
       FOREIGN KEY (session_id) REFERENCES grading_sessions(id),
       FOREIGN KEY (submission_id) REFERENCES submissions(id)
     )

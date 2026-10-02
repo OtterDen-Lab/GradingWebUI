@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 32
+CURRENT_SCHEMA_VERSION = 33
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -508,6 +508,7 @@ def create_schema(cursor):
   migrate_to_v30(cursor)
   migrate_to_v31(cursor)
   migrate_to_v32(cursor)
+  migrate_to_v33(cursor)
 
   maybe_create_bootstrap_admin(cursor)
 
@@ -647,6 +648,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 32:
     migrate_to_v32(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (32)")
+
+  if from_version < 33:
+    migrate_to_v33(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (33)")
 
 
 def migrate_to_v2(cursor):
@@ -1332,6 +1337,18 @@ def migrate_to_v32(cursor):
   existing_columns = {row[1] for row in cursor.fetchall()}
   if "transcription_is_blank" not in existing_columns:
     cursor.execute("ALTER TABLE problems ADD COLUMN transcription_is_blank INTEGER")
+
+
+def migrate_to_v33(cursor):
+  """Store relevance and effectively-blank judgments from transcription."""
+  log.info("Migrating to schema version 33: adding handwriting classification")
+  cursor.execute("PRAGMA table_info(problems)")
+  existing_columns = {row[1] for row in cursor.fetchall()}
+  if "transcription_is_effectively_blank" not in existing_columns:
+    cursor.execute(
+      "ALTER TABLE problems ADD COLUMN transcription_is_effectively_blank INTEGER")
+  if "transcription_is_relevant" not in existing_columns:
+    cursor.execute("ALTER TABLE problems ADD COLUMN transcription_is_relevant INTEGER")
 
 
 def update_problem_stats(session_id: int):

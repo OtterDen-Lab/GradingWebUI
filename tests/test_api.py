@@ -1160,7 +1160,8 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
   class _FakeAnthropic:
     @classmethod
     def query_ai(cls, *args, **kwargs):
-      return ('{"is_blank": false, "text": "transcribed text"}',
+      return ('{"is_blank": false, "is_effectively_blank": false, '
+              '"is_relevant": true, "text": "transcribed text"}',
               {"model": "claude-sonnet-4-5"})
 
   monkeypatch.setattr(problems_routes.ai_helper, "AI_Helper__Anthropic", _FakeAnthropic)
@@ -1170,17 +1171,22 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
   payload = response.json()
   assert payload["transcription"] == "transcribed text"
   assert payload["is_blank"] is False
+  assert payload["is_effectively_blank"] is False
+  assert payload["is_relevant"] is True
   assert payload["model"] == "Anthropic (claude-sonnet-4-5)"
 
   with get_db_connection() as conn:
     cached = conn.execute(
-      "SELECT transcription, transcription_model, transcription_is_blank "
+      "SELECT transcription, transcription_model, transcription_is_blank, "
+      "transcription_is_effectively_blank, transcription_is_relevant "
       "FROM problems WHERE id = ?",
       (problem_id,)
     ).fetchone()
   assert cached["transcription"] == "transcribed text"
   assert cached["transcription_model"] == "Anthropic (claude-sonnet-4-5)"
   assert cached["transcription_is_blank"] == 0
+  assert cached["transcription_is_effectively_blank"] == 0
+  assert cached["transcription_is_relevant"] == 1
 
 
 def test_decipher_all_queues_uncached_responses_including_blanks(client, monkeypatch):
