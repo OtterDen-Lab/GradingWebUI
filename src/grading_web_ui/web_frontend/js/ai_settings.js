@@ -26,7 +26,8 @@ async function loadAIModelSettings() {
     const modelsResponse = await fetch(`${API_BASE}/ai-settings/models/anthropic`, {credentials: 'include'});
     if (modelsResponse.ok) modelOptions = (await modelsResponse.json()).models;
     const form = document.getElementById('ai-settings-form');
-    form.innerHTML = `<datalist id="anthropic-model-options">${modelOptions.map(model =>
+    form.innerHTML = renderHandwritingDefaultSettings() +
+      `<datalist id="anthropic-model-options">${modelOptions.map(model =>
       `<option value="${escapeAI(model.id)}">${escapeAI(model.display_name)}</option>`).join('')}</datalist>` +
       ['small', 'medium', 'large'].map(tier => {
       const setting = aiModelSettings.settings[tier];
@@ -36,7 +37,7 @@ async function loadAIModelSettings() {
         <small style="display:block;color:var(--gray-700)">Effective: ${escapeAI(setting.model_id)} (${setting.source})</small>
         <input data-ai-tier="${tier}" list="anthropic-model-options" value="${escapeAI(personal)}" placeholder="Use system default" style="width:100%; padding:8px; box-sizing:border-box;">
       </label>`;
-    }).join('') + renderHandwritingDefaultSettings();
+    }).join('') + renderTranscriptionInstructions();
     document.getElementById('handwriting-default-target').value = aiModelSettings.handwriting_default.target;
     document.getElementById('save-my-handwriting-default').onclick = () => saveHandwritingDefault('me');
     document.getElementById('save-system-handwriting-default').onclick = () => saveHandwritingDefault('system');
@@ -52,24 +53,26 @@ async function loadAIModelSettings() {
 function renderHandwritingDefaultSettings() {
   const defaultSetting = aiModelSettings.handwriting_default;
   const target = defaultSetting.target;
-  const ollamaLabel = aiModelSettings.ollama_active
-    ? `Ollama — ${escapeAI(aiModelSettings.ollama_active.model_id)} on ${escapeAI(aiModelSettings.ollama_active.server_name)}`
-    : 'Ollama — no active model configured';
-  const additional = aiModelSettings.transcription_additional_instructions;
-  const personalAdditional = additional.source === 'user' ? additional.text : '';
-  return `<div style="margin-top:24px; padding-top:16px; border-top:1px solid var(--gray-200)">
+  return `<div style="margin-bottom:24px; padding-bottom:16px; border-bottom:1px solid var(--gray-200)">
     <h3 style="margin:0 0 8px">Normal handwriting model</h3>
-    <small style="display:block;color:var(--gray-700);margin-bottom:8px">The Decipher Handwriting button currently uses <strong>${escapeAI(target)}</strong> (${escapeAI(defaultSetting.source)} default).</small>
+    <small style="display:block;color:var(--gray-700);margin-bottom:8px">The Decipher Handwriting button uses <strong>${escapeAI(target)}</strong> (${escapeAI(defaultSetting.source)} default). The selected route uses its currently configured model.</small>
     <select id="handwriting-default-target">
-      <option value="ollama">${ollamaLabel}</option>
-      <option value="small">Anthropic Small — ${escapeAI(aiModelSettings.settings.small.model_id)}</option>
-      <option value="medium">Anthropic Medium — ${escapeAI(aiModelSettings.settings.medium.model_id)}</option>
-      <option value="large">Anthropic Large — ${escapeAI(aiModelSettings.settings.large.model_id)}</option>
+      <option value="ollama">ollama</option>
+      <option value="small">small</option>
+      <option value="medium">medium</option>
+      <option value="large">large</option>
     </select>
     <button id="save-my-handwriting-default" class="btn btn-secondary">Use as my default</button>
     <button id="save-system-handwriting-default" class="btn btn-secondary instructor-only">Use as system default</button>
+  </div>`;
+}
+
+function renderTranscriptionInstructions() {
+  const additional = aiModelSettings.transcription_additional_instructions;
+  const personalAdditional = additional.source === 'user' ? additional.text : '';
+  return `<div style="margin-top:24px; padding-top:16px; border-top:1px solid var(--gray-200)">
+    <h3 style="margin:0 0 8px">Additional transcription instructions</h3>
     <div style="margin-top:18px">
-      <strong>Additional transcription instructions</strong>
       <small style="display:block;color:var(--gray-700);margin:4px 0">These are appended to the built-in instruction to transcribe only the student's handwriting. Effective source: ${escapeAI(additional.source)}.</small>
       <textarea id="transcription-additional-instructions" rows="3" maxlength="2000" placeholder="Use system instructions" style="width:100%;max-width:620px;box-sizing:border-box">${escapeAI(personalAdditional)}</textarea>
       <div><button id="save-my-transcription-instructions" class="btn btn-secondary">Save my instructions</button>
@@ -185,6 +188,8 @@ async function saveHandwritingDefault(scope) {
   });
   if (!response.ok) return alert((await response.json()).detail || 'Could not save handwriting default');
   transcriptionModelOptions = null;
+  // A cached "default" transcription may have come from the previous route.
+  Object.values(transcriptionCache).forEach(cache => delete cache.default);
   await loadAIModelSettings();
 }
 
