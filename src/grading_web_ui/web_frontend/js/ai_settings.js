@@ -174,7 +174,16 @@ async function renderOllamaModels() {
       method: 'PUT', credentials: 'include', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({model})
     });
     if (!save.ok) alert((await save.json()).detail || 'Could not save active model');
-    else selectedServer.dataset.activeModel = model;
+    else {
+      selectedServer.dataset.activeModel = model;
+      // The handwriting dialog caches settings for its pre-request label.
+      // Discard it whenever the active Ollama model changes.
+      transcriptionModelOptions = null;
+      if (aiModelSettings) {
+        aiModelSettings.ollama_active = {server_name: selectedServer.textContent.split(' — ')[0], model_id: model};
+      }
+      Object.values(transcriptionCache).forEach(cache => delete cache.default);
+    }
   };
   document.getElementById('pull-ollama-model').onclick = async () => {
     const model = document.getElementById('ollama-pull-model').value.trim();

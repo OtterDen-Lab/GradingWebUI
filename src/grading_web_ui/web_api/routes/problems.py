@@ -6,6 +6,7 @@ import os
 import asyncio
 import threading
 import hashlib
+from time import perf_counter
 
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
@@ -34,6 +35,7 @@ from ..services.model_settings import (
   resolve_model,
 )
 from ..services import ollama_settings
+from ..services import model_latency
 
 from grading_web_ui import ai_helper
 
@@ -1192,6 +1194,10 @@ async def decipher_handwriting(
   if additional_instructions:
     query += f"\n\nAdditional transcription instructions:\n{additional_instructions}"
 
+  timing_start = None
+  timing_provider = None
+  timing_model = None
+  timing_server = None
   try:
     selected_model = (model or "default").strip().lower()
     if selected_model == "default":
@@ -1204,6 +1210,10 @@ async def decipher_handwriting(
           status_code=400,
           detail="No active Ollama model is configured in Settings")
       ai = ai_helper.AI_Helper__Ollama(server["base_url"], server["active_model"])
+      timing_start = perf_counter()
+      timing_provider = "ollama"
+      timing_model = server["active_model"]
+      timing_server = server["name"]
       transcription, usage = ai.query_ai(query, attachments=[("png", image_base64)])
       model_name = f"Ollama ({usage.get('model', server['active_model'])} on {server['name']})"
     else:
@@ -1226,10 +1236,14 @@ async def decipher_handwriting(
         raise HTTPException(status_code=400,
                             detail="Handwriting support is not yet available for this provider")
       ai = ai_helper.AI_Helper__Anthropic()
+      timing_start = perf_counter()
+      timing_provider = "anthropic"
+      timing_model = selection.model_id
       response, usage = ai.query_ai(
         query, attachments=[("png", image_base64)],
         candidate_models=[selection.model_id])
       transcription = response
+      timing_model = usage.get("model", timing_model)
       model_name = f"Anthropic ({usage.get('model', selection.model_id)})"
 
     # Validate transcription is not empty
@@ -1239,14 +1253,26 @@ async def decipher_handwriting(
         f"Empty transcription from {model_name} for problem {problem_id}")
       raise HTTPException(status_code=500, detail=error_msg)
 
+    model_latency.record(
+      "handwriting", timing_provider, timing_model,
+      (perf_counter() - timing_start) * 1000, "success", timing_server)
+
     return {
       "problem_id": problem_id,
       "transcription": transcription.strip(),
       "model": model_name
     }
   except HTTPException:
+    if timing_start is not None:
+      model_latency.record(
+        "handwriting", timing_provider, timing_model,
+        (perf_counter() - timing_start) * 1000, "error", timing_server)
     raise
   except Exception as e:
+    if timing_start is not None:
+      model_latency.record(
+        "handwriting", timing_provider, timing_model,
+        (perf_counter() - timing_start) * 1000, "error", timing_server)
     import traceback
     log.error(f"Transcription failed: {traceback.format_exc()}")
     raise HTTPException(status_code=500,
