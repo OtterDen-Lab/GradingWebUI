@@ -1275,10 +1275,17 @@ def _parse_handwriting_analysis(
     "is_effectively_blank", "effectively_blank")
   is_relevant = read_bool("is_relevant", "relevant")
   text = payload.get("text", payload.get("transcription"))
+  # Some smaller vision models emit JSON null for a blank transcription even
+  # when they correctly set is_blank=true. Treat that as the explicit blank
+  # marker rather than discarding an otherwise valid analysis result.
+  if text is None and is_blank:
+    text = "[blank]"
   if not isinstance(text, str):
     raise ValueError("Handwriting-analysis text must be a string")
 
   transcription = text.strip()
+  if is_blank and not transcription:
+    transcription = "[blank]"
   if not transcription and not is_blank:
     raise ValueError("Model returned an empty transcription without marking it blank")
   return transcription, is_blank, is_effectively_blank, is_relevant
