@@ -683,6 +683,44 @@ class ProblemRepository(BaseRepository[Problem]):
       """, tuple(problem_ids))
       return int(cursor.rowcount or 0)
 
+  def clear_grades_for_problem_number(self, session_id: int,
+                                      problem_number: int) -> int:
+    """Clear every submitted grade for one problem in a session.
+
+    Handwriting analysis and subjective triage assignments are intentionally
+    retained, so the problem can be regraded without repeating that work.
+    Manual and AI blank decisions are grade outcomes, and are reset along with
+    the score; import-time blank heuristics are preserved.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        UPDATE problems
+        SET score = NULL,
+            feedback = NULL,
+            ai_reasoning = NULL,
+            graded = 0,
+            graded_at = NULL,
+            is_blank = CASE
+              WHEN LOWER(COALESCE(blank_method, '')) IN ('manual', 'ai') THEN 0
+              ELSE is_blank
+            END,
+            blank_confidence = CASE
+              WHEN LOWER(COALESCE(blank_method, '')) IN ('manual', 'ai') THEN NULL
+              ELSE blank_confidence
+            END,
+            blank_method = CASE
+              WHEN LOWER(COALESCE(blank_method, '')) IN ('manual', 'ai') THEN NULL
+              ELSE blank_method
+            END,
+            blank_reasoning = CASE
+              WHEN LOWER(COALESCE(blank_method, '')) IN ('manual', 'ai') THEN NULL
+              ELSE blank_reasoning
+            END
+        WHERE session_id = ? AND problem_number = ? AND graded = 1
+      """, (session_id, problem_number))
+      return int(cursor.rowcount or 0)
+
   def update_transcription(self, problem_id: int, transcription: str, model: str,
                            is_blank: bool, is_effectively_blank: Optional[bool],
                            is_relevant: Optional[bool]) -> None:

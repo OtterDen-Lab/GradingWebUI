@@ -1488,6 +1488,33 @@ async def reopen_subjective_scores(
   }
 
 
+@router.post("/{session_id}/problems/{problem_number}/clear-grades")
+async def clear_problem_grades(
+  session_id: int,
+  problem_number: int,
+  current_user: dict = Depends(require_instructor)
+):
+  """Remove all submitted grades for one problem so it can be regraded."""
+  session_repo = SessionRepository()
+  if not session_repo.exists(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  problem_repo = ProblemRepository()
+  cleared_count = problem_repo.clear_grades_for_problem_number(
+    session_id, problem_number
+  )
+  update_problem_stats(session_id)
+
+  counts = problem_repo.get_counts_for_problem_number(session_id, problem_number)
+  return {
+    "status": "grades_cleared",
+    "session_id": session_id,
+    "problem_number": problem_number,
+    "cleared_count": cleared_count,
+    "problem_counts": counts
+  }
+
+
 @router.get("/{session_id}/default-feedback/{problem_number}")
 async def get_default_feedback(
   session_id: int,

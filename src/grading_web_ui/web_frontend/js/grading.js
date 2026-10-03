@@ -1451,6 +1451,7 @@ function setupGradingControls() {
     document.getElementById('subjective-clear-btn').onclick = clearSubjectiveTriage;
     document.getElementById('subjective-finalize-btn').onclick = openSubjectiveFinalizeDialog;
     document.getElementById('subjective-reopen-btn').onclick = () => submitSubjectiveReopen({ openFinalizeDialog: true });
+    document.getElementById('clear-problem-grades-btn').onclick = clearGradesForCurrentProblem;
     document.getElementById('next-problem-btn').onclick = loadNextProblem;
     document.getElementById('back-problem-btn').onclick = loadPreviousProblem;
     document.getElementById('view-stats-btn').onclick = () => {
@@ -2257,6 +2258,47 @@ async function loadNextProblem(options = {}) {
     } catch (error) {
         console.error('Failed to load problem:', error);
         alert('Failed to load problem');
+    }
+}
+
+async function clearGradesForCurrentProblem() {
+    if (!currentSession || currentProblemNumber === null || currentProblemNumber === undefined) return;
+
+    const problemLabel = `problem ${currentProblemNumber}`;
+    const confirmed = confirm(
+        `Remove every submitted grade for ${problemLabel}?\n\n` +
+        'This clears scores, feedback, manual/AI blank grades, and AI grading reasoning for all submissions of this problem. Handwriting analysis and grouping assignments are kept. This cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    const button = document.getElementById('clear-problem-grades-btn');
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Removing Grades…';
+
+    try {
+        const response = await fetch(
+            `${API_BASE}/sessions/${currentSession.id}/problems/${currentProblemNumber}/clear-grades`,
+            { method: 'POST' }
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(payload.detail || 'Unable to remove grades');
+        }
+
+        invalidateNextProblemPrefetch();
+        lastGradedProblemNumber = null;
+        await updateOverallProgress();
+        await loadNextProblem({ reset: true });
+        showNotification(
+            `Removed grades from ${payload.cleared_count} submission${payload.cleared_count === 1 ? '' : 's'} for ${problemLabel}.`
+        );
+    } catch (error) {
+        console.error('Failed to remove grades for problem:', error);
+        alert(`Failed to remove grades: ${error.message}`);
+    } finally {
+        button.disabled = false;
+        button.textContent = originalText;
     }
 }
 

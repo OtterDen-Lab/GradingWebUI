@@ -1670,6 +1670,66 @@ def test_subjective_reopen_restores_triaged_state(client):
       assert row["feedback"] is None
 
 
+def test_clear_grades_for_problem_only_resets_selected_problem(client):
+  session_id = create_test_session(client, "Clear One Problem's Grades")
+  _, target_problem_id = seed_submission_with_problem(
+    session_id,
+    document_id=1,
+    problem_number=5,
+    graded=True,
+    score=7.0,
+    feedback="Needs one more justification.",
+    is_blank=True,
+    blank_method="manual",
+  )
+  _, other_problem_id = seed_submission_with_problem(
+    session_id,
+    document_id=2,
+    problem_number=6,
+    graded=True,
+    score=4.0,
+    feedback="Other problem grade.",
+  )
+  with get_db_connection() as conn:
+    conn.execute(
+      "UPDATE problems SET ai_reasoning = ?, transcription = ? WHERE id = ?",
+      ("Prior AI grade", "Saved handwriting", target_problem_id),
+    )
+
+  response = client.post(
+    f"/api/sessions/{session_id}/problems/5/clear-grades"
+  )
+
+  assert response.status_code == 200
+  assert response.json()["cleared_count"] == 1
+  with get_db_connection() as conn:
+    target = conn.execute(
+      """SELECT graded, score, feedback, ai_reasoning, is_blank, blank_method,
+                transcription
+         FROM problems WHERE id = ?""",
+      (target_problem_id,),
+    ).fetchone()
+    other = conn.execute(
+      "SELECT graded, score, feedback FROM problems WHERE id = ?",
+      (other_problem_id,),
+    ).fetchone()
+
+  assert dict(target) == {
+    "graded": 0,
+    "score": None,
+    "feedback": None,
+    "ai_reasoning": None,
+    "is_blank": 0,
+    "blank_method": None,
+    "transcription": "Saved handwriting",
+  }
+  assert dict(other) == {
+    "graded": 1,
+    "score": 4.0,
+    "feedback": "Other problem grade.",
+  }
+
+
 def test_subjective_previous_falls_back_to_last_graded_after_finalize(client, monkeypatch):
   """Subjective previous endpoint should return a graded response after finalize."""
   from grading_web_ui.web_api.routes import problems as problems_routes
