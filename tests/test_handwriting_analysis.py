@@ -3,6 +3,10 @@
 import pytest
 
 from grading_web_ui.web_api.routes.problems import (
+  _batch_decipher_handwriting,
+  _create_handwriting_job,
+  _handwriting_jobs,
+  _handwriting_jobs_lock,
   _parse_handwriting_analysis,
   _parse_relevance_classification,
 )
@@ -47,3 +51,27 @@ def test_rejects_non_json_handwriting_analysis():
 
 def test_parses_text_only_relevance_json():
   assert _parse_relevance_classification('{"is_relevant": "false"}') is False
+
+
+def test_batch_retries_a_failed_transcription_once(monkeypatch):
+  calls = []
+
+  def retry_once(problem_id, *_args, **_kwargs):
+    calls.append(problem_id)
+    if len(calls) == 1:
+      raise RuntimeError("transient provider failure")
+    return {"is_blank": False, "is_relevant": True}
+
+  monkeypatch.setattr(
+    "grading_web_ui.web_api.routes.problems._decipher_handwriting", retry_once
+  )
+  job_id = _create_handwriting_job(1, 2, [99], "ollama")
+  _batch_decipher_handwriting(job_id, [99], "ollama", 1, False)
+
+  with _handwriting_jobs_lock:
+    job = _handwriting_jobs.pop(job_id)
+  assert calls == [99, 99]
+  assert job["status"] == "completed"
+  assert job["succeeded"] == 1
+  assert job["failed"] == 0
+  assert job["failed_problem_ids"] == []

@@ -4538,6 +4538,7 @@ const handwritingBatchModel = document.getElementById('handwriting-batch-model')
 const handwritingBatchOverwrite = document.getElementById('handwriting-batch-overwrite');
 const handwritingBatchCancel = document.getElementById('handwriting-batch-cancel');
 const handwritingBatchStart = document.getElementById('handwriting-batch-start');
+const handwritingBatchRetryFailed = document.getElementById('handwriting-batch-retry-failed');
 const handwritingBatchTitle = document.getElementById('handwriting-batch-title');
 const handwritingBatchDescription = document.getElementById('handwriting-batch-description');
 const handwritingBatchOptions = document.getElementById('handwriting-batch-options');
@@ -4918,7 +4919,7 @@ async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
         ? `Complete: ${job.succeeded}/${job.total} analyzed${relevantSummary}${irrelevantSummary}${blankSummary}${incompleteSummary}${failureSummary}`
         : `Analyzing: ${job.processed}/${job.total}${relevantSummary}${irrelevantSummary}${blankSummary}${incompleteSummary}${failureSummary}`;
     if (job.status === 'completed') {
-        completedHandwritingBatch = { sessionId, problemNumber };
+        completedHandwritingBatch = { sessionId, problemNumber, jobId };
     }
     renderHandwritingBatchProgress(job);
     return job.status === 'completed';
@@ -4973,6 +4974,7 @@ function renderHandwritingBatchProgress(job) {
         handwritingBatchDescription.textContent = 'Review the summary, then select Done to refresh the current response.';
         handwritingBatchCancel.textContent = 'Done';
         handwritingBatchCancel.style.display = '';
+        handwritingBatchRetryFailed.style.display = failed ? '' : 'none';
         handwritingBatchStart.style.display = 'none';
     }
 }
@@ -5007,6 +5009,7 @@ async function openHandwritingBatchDialog() {
     handwritingBatchOptions.style.display = '';
     handwritingBatchProgress.style.display = 'none';
     handwritingBatchCancel.textContent = 'Cancel';
+    handwritingBatchRetryFailed.style.display = 'none';
     handwritingBatchStart.style.display = '';
     handwritingBatchModel.innerHTML = '<option value="default">Loading configured default…</option>';
     const choices = ['default', 'ollama', 'small', 'medium', 'large'];
@@ -5056,6 +5059,7 @@ async function startHandwritingBatch() {
         handwritingBatchOptions.style.display = 'none';
         handwritingBatchProgress.style.display = '';
         handwritingBatchCancel.style.display = 'none';
+        handwritingBatchRetryFailed.style.display = 'none';
         handwritingBatchStart.style.display = 'none';
         renderHandwritingBatchProgress({
             status: 'running', total: result.queued, processed: 0,
@@ -5113,6 +5117,51 @@ handwritingBatchCancel.addEventListener('click', async () => {
         }
     }
     closeHandwritingBatchDialog();
+});
+handwritingBatchRetryFailed.addEventListener('click', async () => {
+    if (!completedHandwritingBatch) return;
+    const { sessionId, problemNumber, jobId } = completedHandwritingBatch;
+    handwritingBatchRetryFailed.disabled = true;
+    try {
+        const response = await fetch(
+            `${API_BASE}/problems/session/${sessionId}/${problemNumber}/decipher-all/${jobId}/retry-failed`,
+            { method: 'POST' }
+        );
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.detail || 'Unable to re-run failed responses');
+
+        completedHandwritingBatch = null;
+        handwritingBatchTitle.textContent = 'Re-running Failed Handwriting Analysis';
+        handwritingBatchDescription.textContent = 'Retrying only the responses that failed in the previous run.';
+        handwritingBatchCancel.style.display = 'none';
+        handwritingBatchRetryFailed.style.display = 'none';
+        decipherAllStatus.textContent = `Retrying: 0/${result.queued}`;
+        renderHandwritingBatchProgress({
+            status: 'running', total: result.queued, processed: 0,
+            reported_relevant: 0, reported_irrelevant: 0, reported_blank: 0,
+            classification_incomplete: 0, failed: 0, average_item_seconds: null,
+            estimated_remaining_seconds: null,
+        });
+
+        const timer = setInterval(async () => {
+            try {
+                if (await watchHandwritingAnalysis(sessionId, problemNumber, result.job_id)) {
+                    clearInterval(timer);
+                }
+            } catch (error) {
+                clearInterval(timer);
+                console.error('Failed to check handwriting retry progress:', error);
+                handwritingBatchDescription.textContent = error.message;
+                handwritingBatchCancel.textContent = 'Close';
+                handwritingBatchCancel.style.display = '';
+            }
+        }, 1000);
+    } catch (error) {
+        console.error('Failed to re-run handwriting analysis:', error);
+        alert(error.message);
+    } finally {
+        handwritingBatchRetryFailed.disabled = false;
+    }
 });
 handwritingBatchStart.addEventListener('click', startHandwritingBatch);
 handwritingBatchDialog.addEventListener('click', () => {

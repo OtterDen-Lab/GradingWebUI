@@ -1503,13 +1503,27 @@ def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
   with _handwriting_jobs_lock:
     _handwriting_jobs[job_id]["status"] = "running"
   for problem_id in problem_ids:
-    try:
-      result = _decipher_handwriting(problem_id, model, user_id,
-                                     skip_cached=not overwrite)
-    except Exception as error:
-      log.warning("Batch transcription failed for problem %s: %s", problem_id, error)
+    result = None
+    last_error = None
+    # Transient provider and JSON-format failures are common enough to warrant
+    # one automatic retry, but a second failure remains visible to the grader.
+    for attempt in range(2):
+      try:
+        result = _decipher_handwriting(problem_id, model, user_id,
+                                       skip_cached=not overwrite)
+        break
+      except Exception as error:
+        last_error = error
+        if attempt == 0:
+          log.info("Retrying handwriting transcription for problem %s after: %s",
+                   problem_id, error)
+
+    if result is None:
+      log.warning("Batch transcription failed for problem %s after retry: %s",
+                  problem_id, last_error)
       with _handwriting_jobs_lock:
         _handwriting_jobs[job_id]["failed"] += 1
+        _handwriting_jobs[job_id]["failed_problem_ids"].append(problem_id)
     else:
       with _handwriting_jobs_lock:
         _handwriting_jobs[job_id]["succeeded"] += 1
@@ -1524,19 +1538,44 @@ def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
         # only nonblank responses that should have received that second pass.
         if not result.get("is_blank") and result.get("is_relevant") is None:
           _handwriting_jobs[job_id]["classification_incomplete"] += 1
-    finally:
-      with _handwriting_jobs_lock:
-        job = _handwriting_jobs[job_id]
-        job["processed"] += 1
-        elapsed_seconds = perf_counter() - job["started_at"]
-        job["average_item_seconds"] = elapsed_seconds / job["processed"]
-        job["estimated_remaining_seconds"] = (
-          job["average_item_seconds"] * (job["total"] - job["processed"])
-        )
+    with _handwriting_jobs_lock:
+      job = _handwriting_jobs[job_id]
+      job["processed"] += 1
+      elapsed_seconds = perf_counter() - job["started_at"]
+      job["average_item_seconds"] = elapsed_seconds / job["processed"]
+      job["estimated_remaining_seconds"] = (
+        job["average_item_seconds"] * (job["total"] - job["processed"])
+      )
   with _handwriting_jobs_lock:
     job = _handwriting_jobs[job_id]
     job["status"] = "completed"
     job["estimated_remaining_seconds"] = 0
+
+
+def _create_handwriting_job(session_id: int, problem_number: int,
+                            problem_ids: list[int], model: str) -> str:
+  """Create an in-memory handwriting job record shared by initial runs/retries."""
+  job_id = str(uuid4())
+  with _handwriting_jobs_lock:
+    _handwriting_jobs[job_id] = {
+      "session_id": session_id,
+      "problem_number": problem_number,
+      "model": model,
+      "status": "queued",
+      "started_at": perf_counter(),
+      "total": len(problem_ids),
+      "processed": 0,
+      "succeeded": 0,
+      "failed": 0,
+      "failed_problem_ids": [],
+      "reported_blank": 0,
+      "reported_irrelevant": 0,
+      "reported_relevant": 0,
+      "classification_incomplete": 0,
+      "average_item_seconds": None,
+      "estimated_remaining_seconds": None,
+    }
+  return job_id
 
 
 @router.post("/{problem_id}/decipher")
@@ -1575,28 +1614,40 @@ async def decipher_all_handwriting(
     problem.id for problem in ProblemRepository().get_for_handwriting_analysis(
       session_id, problem_number, overwrite)
   ]
-  job_id = str(uuid4())
-  with _handwriting_jobs_lock:
-    _handwriting_jobs[job_id] = {
-      "session_id": session_id,
-      "problem_number": problem_number,
-      "status": "queued",
-      "started_at": perf_counter(),
-      "total": len(problem_ids),
-      "processed": 0,
-      "succeeded": 0,
-      "failed": 0,
-      "reported_blank": 0,
-      "reported_irrelevant": 0,
-      "reported_relevant": 0,
-      "classification_incomplete": 0,
-      "average_item_seconds": None,
-      "estimated_remaining_seconds": None,
-    }
+  job_id = _create_handwriting_job(session_id, problem_number, problem_ids, model)
   background_tasks.add_task(
     _batch_decipher_handwriting, job_id, problem_ids, model,
     current_user["user_id"], overwrite)
   return {"job_id": job_id, "status": "queued", "queued": len(problem_ids)}
+
+
+@router.post("/session/{session_id}/{problem_number}/decipher-all/{job_id}/retry-failed")
+async def retry_failed_handwriting(
+  session_id: int,
+  problem_number: int,
+  job_id: str,
+  background_tasks: BackgroundTasks,
+  current_user: dict = Depends(require_session_access())
+):
+  """Retry only the responses that still failed in a completed batch."""
+  with _handwriting_jobs_lock:
+    original_job = _handwriting_jobs.get(job_id)
+    if not original_job or original_job["session_id"] != session_id or \
+        original_job["problem_number"] != problem_number:
+      raise HTTPException(status_code=404, detail="Handwriting analysis job not found")
+    if original_job["status"] != "completed":
+      raise HTTPException(status_code=409, detail="Handwriting analysis is still running")
+    problem_ids = list(original_job.get("failed_problem_ids", []))
+    model = original_job.get("model", "default")
+
+  if not problem_ids:
+    raise HTTPException(status_code=400, detail="This batch has no failed responses to retry")
+
+  retry_job_id = _create_handwriting_job(session_id, problem_number,
+                                         problem_ids, model)
+  background_tasks.add_task(_batch_decipher_handwriting, retry_job_id,
+                            problem_ids, model, current_user["user_id"], True)
+  return {"job_id": retry_job_id, "status": "queued", "queued": len(problem_ids)}
 
 
 @router.get("/session/{session_id}/{problem_number}/decipher-all/{job_id}")
