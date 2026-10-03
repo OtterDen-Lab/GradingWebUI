@@ -4544,6 +4544,7 @@ const handwritingBatchOptions = document.getElementById('handwriting-batch-optio
 const handwritingBatchProgress = document.getElementById('handwriting-batch-progress');
 const handwritingBatchOverallLabel = document.getElementById('handwriting-batch-overall-label');
 const handwritingBatchOverallFill = document.getElementById('handwriting-batch-overall-fill');
+const handwritingBatchTiming = document.getElementById('handwriting-batch-timing');
 const handwritingBatchBuckets = document.getElementById('handwriting-batch-buckets');
 const retryPremiumBtn = document.getElementById('retry-premium-btn');
 let transcriptionModelOptions = null;
@@ -4931,25 +4932,38 @@ function renderHandwritingBatchProgress(job) {
     const blank = Number(job.reported_blank) || 0;
     const unavailable = Number(job.classification_incomplete) || 0;
     const failed = Number(job.failed) || 0;
+    const failedOrUnavailable = failed + unavailable;
     const complete = job.status === 'completed';
     const bucketRows = [
         ['Relevant', relevant, '#15803d'],
         ['Irrelevant', irrelevant, '#b91c1c'],
         ['Blank', blank, '#4b5563'],
-        ['Secondary classification unavailable', unavailable, '#b45309'],
-        ['Failed', failed, '#dc2626'],
+        ['Failed / unavailable', failedOrUnavailable, '#b45309'],
     ];
 
     handwritingBatchOverallLabel.textContent = `${processed} / ${job.total || 0}`;
     handwritingBatchOverallFill.style.width = `${Math.min((processed / total) * 100, 100)}%`;
-    handwritingBatchOverallFill.style.backgroundColor = complete ? '#16a34a' : '#2563eb';
+    handwritingBatchOverallFill.style.backgroundColor = '#2563eb';
+    const averageSeconds = Number(job.average_item_seconds);
+    const remainingSeconds = Number(job.estimated_remaining_seconds);
+    if (complete) {
+        handwritingBatchTiming.textContent = Number.isFinite(averageSeconds)
+            ? `Average latency: ${formatHandwritingDuration(averageSeconds)} per response.`
+            : '';
+    } else if (processed > 0 && Number.isFinite(averageSeconds) && Number.isFinite(remainingSeconds)) {
+        handwritingBatchTiming.textContent =
+            `Average latency: ${formatHandwritingDuration(averageSeconds)} per response; ` +
+            `estimated ${formatHandwritingDuration(remainingSeconds)} remaining.`;
+    } else {
+        handwritingBatchTiming.textContent = 'Estimating time remaining after the first response…';
+    }
     handwritingBatchBuckets.innerHTML = bucketRows.map(([label, count, color]) => `
         <div>
             <div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:3px;">
                 <span>${label}</span><strong>${count}</strong>
             </div>
             <div style="height:8px;background:var(--gray-200);border-radius:999px;overflow:hidden;">
-                <div style="height:100%;width:${Math.min((count / total) * 100, 100)}%;background:${color};transition:width 180ms ease;"></div>
+                <div style="height:100%;width:${processed ? Math.min((count / processed) * 100, 100) : 0}%;background:${color};transition:width 180ms ease;"></div>
             </div>
         </div>
     `).join('');
@@ -4961,6 +4975,13 @@ function renderHandwritingBatchProgress(job) {
         handwritingBatchCancel.style.display = '';
         handwritingBatchStart.style.display = 'none';
     }
+}
+
+function formatHandwritingDuration(seconds) {
+    if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remaining = Math.round(seconds % 60);
+    return remaining ? `${minutes}m ${remaining}s` : `${minutes}m`;
 }
 
 function clearStaleHandwritingBatchStatus() {
@@ -5039,7 +5060,8 @@ async function startHandwritingBatch() {
         renderHandwritingBatchProgress({
             status: 'running', total: result.queued, processed: 0,
             reported_relevant: 0, reported_irrelevant: 0, reported_blank: 0,
-            classification_incomplete: 0, failed: 0,
+            classification_incomplete: 0, failed: 0, average_item_seconds: null,
+            estimated_remaining_seconds: null,
         });
         decipherAllStatus.textContent = result.queued
             ? `Queued: 0/${result.queued}`
@@ -5065,7 +5087,8 @@ async function startHandwritingBatch() {
             renderHandwritingBatchProgress({
                 status: 'completed', total: 0, processed: 0,
                 reported_relevant: 0, reported_irrelevant: 0, reported_blank: 0,
-                classification_incomplete: 0, failed: 0,
+                classification_incomplete: 0, failed: 0, average_item_seconds: null,
+                estimated_remaining_seconds: 0,
             });
         }
     } catch (error) {

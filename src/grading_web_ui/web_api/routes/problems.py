@@ -1526,9 +1526,17 @@ def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
           _handwriting_jobs[job_id]["classification_incomplete"] += 1
     finally:
       with _handwriting_jobs_lock:
-        _handwriting_jobs[job_id]["processed"] += 1
+        job = _handwriting_jobs[job_id]
+        job["processed"] += 1
+        elapsed_seconds = perf_counter() - job["started_at"]
+        job["average_item_seconds"] = elapsed_seconds / job["processed"]
+        job["estimated_remaining_seconds"] = (
+          job["average_item_seconds"] * (job["total"] - job["processed"])
+        )
   with _handwriting_jobs_lock:
-    _handwriting_jobs[job_id]["status"] = "completed"
+    job = _handwriting_jobs[job_id]
+    job["status"] = "completed"
+    job["estimated_remaining_seconds"] = 0
 
 
 @router.post("/{problem_id}/decipher")
@@ -1573,6 +1581,7 @@ async def decipher_all_handwriting(
       "session_id": session_id,
       "problem_number": problem_number,
       "status": "queued",
+      "started_at": perf_counter(),
       "total": len(problem_ids),
       "processed": 0,
       "succeeded": 0,
@@ -1581,6 +1590,8 @@ async def decipher_all_handwriting(
       "reported_irrelevant": 0,
       "reported_relevant": 0,
       "classification_incomplete": 0,
+      "average_item_seconds": None,
+      "estimated_remaining_seconds": None,
     }
   background_tasks.add_task(
     _batch_decipher_handwriting, job_id, problem_ids, model,
