@@ -13,6 +13,8 @@ import tomllib
 import logging
 from time import perf_counter
 
+from grading_web_ui import setup_logging
+
 # Load environment variables from .env file
 load_dotenv()
 # Version helpers
@@ -98,6 +100,10 @@ except ImportError:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   """Lifespan event handler for startup/shutdown"""
+  # Uvicorn configures its own console logging while loading the app. Reapply
+  # our configuration here so the rotating application file handlers remain
+  # attached in the running service process.
+  setup_logging()
   log = logging.getLogger(__name__)
 
   # Ensure QuizGenerator key access does not mutate process env at runtime.
