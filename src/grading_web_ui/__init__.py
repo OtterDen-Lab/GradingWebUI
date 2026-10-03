@@ -34,7 +34,18 @@ def setup_logging() -> None:
     config_text = re.sub(r'\$\{([^}:]+):-([^}]+)\}', replace_env_vars,
                          config_text)
     config = yaml.safe_load(config_text)
-    logging.config.dictConfig(config)
+    try:
+      for handler in config.get("handlers", {}).values():
+        filename = handler.get("filename")
+        if filename:
+          Path(filename).parent.mkdir(parents=True, exist_ok=True)
+      logging.config.dictConfig(config)
+    except OSError as error:
+      # Keep a directly launched development server usable when its user does
+      # not have permission to create the production log directory.
+      logging.basicConfig(level=logging.INFO)
+      logging.getLogger(__name__).warning(
+        "Could not initialize file logging: %s; using console logging", error)
   else:
     # Fallback to basic configuration if logging.yaml is not found
     logging.basicConfig(level=logging.INFO)
