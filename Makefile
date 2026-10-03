@@ -34,6 +34,7 @@ LXC_SERVICE_USER ?= grading-web
 # Allow:
 #   make publish v0.8.1
 #   make deploy v0.8.1
+#   make lxc-deploy v0.8.1
 ifneq ($(filter publish,$(firstword $(MAKECMDGOALS))),)
   ifneq ($(word 2,$(MAKECMDGOALS)),)
     PUBLISH_VERSION := $(word 2,$(MAKECMDGOALS))
@@ -43,6 +44,12 @@ endif
 ifneq ($(filter deploy deploy-from-backup,$(firstword $(MAKECMDGOALS))),)
   ifneq ($(word 2,$(MAKECMDGOALS)),)
     DEPLOY_TAG := $(word 2,$(MAKECMDGOALS))
+    $(eval $(word 2,$(MAKECMDGOALS)):;@:)
+  endif
+endif
+ifneq ($(filter lxc-deploy,$(firstword $(MAKECMDGOALS))),)
+  ifneq ($(word 2,$(MAKECMDGOALS)),)
+    LXC_DEPLOY_TAG := $(word 2,$(MAKECMDGOALS))
     $(eval $(word 2,$(MAKECMDGOALS)):;@:)
   endif
 endif
@@ -71,8 +78,8 @@ help:
 	@echo "    Deploy a release, replace its fresh database with a verified backup, and start it."
 	@echo "  make lxc-install"
 	@echo "    Install the native systemd service; requires a mounted LXC state volume."
-	@echo "  make lxc-deploy"
-	@echo "    Sync dependencies from the current native checkout and restart the service."
+	@echo "  make lxc-deploy [vX.Y.Z]"
+	@echo "    Deploy the current native checkout, or switch to an exact release tag first."
 	@echo "  make lxc-backup BACKUP_DIR=/path/on/off-host-storage"
 	@echo "    Create a verified backup from a native LXC installation."
 	@echo "  make lxc-restore BACKUP_FILE=/path/to/grading-backup.db"
@@ -151,7 +158,7 @@ lxc-install:
 	$(SUDO) scripts/install_lxc_service.sh --app-dir "$(LXC_APP_DIR)" --state-dir "$(LXC_STATE_DIR)" --service-user "$(LXC_SERVICE_USER)"
 
 lxc-deploy:
-	$(SUDO) scripts/deploy_lxc_service.sh --app-dir "$(LXC_APP_DIR)" --state-dir "$(LXC_STATE_DIR)" --service-user "$(LXC_SERVICE_USER)"
+	$(SUDO) scripts/deploy_lxc_service.sh --app-dir "$(LXC_APP_DIR)" --state-dir "$(LXC_STATE_DIR)" --service-user "$(LXC_SERVICE_USER)" $(if $(LXC_DEPLOY_TAG),--tag "$(LXC_DEPLOY_TAG)")
 
 lxc-backup:
 	@if [ -z "$(BACKUP_DIR)" ]; then \

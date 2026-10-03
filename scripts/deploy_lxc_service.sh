@@ -1,16 +1,18 @@
 #!/bin/sh
-# Update dependencies from an already-updated native LXC checkout and restart.
+# Update dependencies from a native LXC checkout and restart.
 set -eu
 
 app_dir="/opt/grading-web"
 state_dir="/srv/grading-web"
 service_user="grading-web"
+tag=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --app-dir) app_dir=$2; shift 2 ;;
     --state-dir) state_dir=$2; shift 2 ;;
     --service-user) service_user=$2; shift 2 ;;
-    *) echo "Usage: sudo $0 [--app-dir DIR] [--state-dir DIR] [--service-user USER]" >&2; exit 2 ;;
+    --tag) tag=$2; shift 2 ;;
+    *) echo "Usage: sudo $0 [--app-dir DIR] [--state-dir DIR] [--service-user USER] [--tag vX.Y.Z]" >&2; exit 2 ;;
   esac
 done
 
@@ -19,6 +21,26 @@ done
   echo "Native environment is not installed; run install_lxc_service.sh first." >&2
   exit 1
 }
+
+if [ -n "$tag" ]; then
+  [ -d "$app_dir/.git" ] || {
+    echo "Cannot deploy tag $tag: $app_dir is not a Git checkout." >&2
+    exit 1
+  }
+  [ -z "$(git -C "$app_dir" status --porcelain)" ] || {
+    echo "Cannot deploy tag $tag: $app_dir has uncommitted changes." >&2
+    echo "Commit, stash, or discard them before deploying a release tag." >&2
+    exit 1
+  }
+  git -C "$app_dir" fetch origin --tags --prune
+  git -C "$app_dir" rev-parse --verify --quiet "refs/tags/$tag^{commit}" >/dev/null || {
+    echo "Release tag not found on origin: $tag" >&2
+    exit 1
+  }
+  echo "Switching native checkout to release tag $tag"
+  git -C "$app_dir" checkout --detach "refs/tags/$tag"
+fi
+
 systemctl stop grading-web.service
 runuser -u "$service_user" -- sh -c "cd '$app_dir' && '$app_dir/.venv/bin/uv' sync --frozen --no-dev"
 # Re-render the unit so deployment changes to environment paths take effect.
