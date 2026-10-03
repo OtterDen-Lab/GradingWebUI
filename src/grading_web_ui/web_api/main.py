@@ -69,8 +69,36 @@ def _is_ahead_of_tag(version: str) -> bool:
     return False
 
 
+def _git_output(*args: str) -> str | None:
+  """Run Git in the application checkout and return stripped stdout."""
+  pyproject = _find_pyproject(Path(__file__).resolve())
+  if not pyproject:
+    return None
+  repo_root = pyproject.parent
+  if not (repo_root / ".git").exists():
+    return None
+  try:
+    result = subprocess.run(
+      ["git", "-c", f"safe.directory={repo_root}", *args],
+      cwd=repo_root,
+      check=False,
+      capture_output=True,
+      text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+  except Exception:
+    return None
+
+
 PROJECT_VERSION = _read_project_version()
-DISPLAY_VERSION = f"v{PROJECT_VERSION}" + ("+" if _is_ahead_of_tag(PROJECT_VERSION) else "")
+GIT_BRANCH = _git_output("branch", "--show-current")
+GIT_SHORT_COMMIT = _git_output("rev-parse", "--short", "HEAD")
+IS_TESTING_BUILD = GIT_BRANCH == "testing"
+DISPLAY_VERSION = (
+  f"testing · {GIT_SHORT_COMMIT or 'unknown'}"
+  if IS_TESTING_BUILD else
+  f"v{PROJECT_VERSION}" + ("+" if _is_ahead_of_tag(PROJECT_VERSION) else "")
+)
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -216,7 +244,10 @@ async def version_info():
   return {
     "version": PROJECT_VERSION,
     "display": DISPLAY_VERSION,
-    "tag": f"v{PROJECT_VERSION}"
+    "tag": f"v{PROJECT_VERSION}",
+    "branch": GIT_BRANCH,
+    "commit": GIT_SHORT_COMMIT,
+    "is_testing": IS_TESTING_BUILD,
   }
 
 

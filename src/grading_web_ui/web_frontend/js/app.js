@@ -235,6 +235,10 @@ async function loadVersionTag() {
     }
     const data = await response.json();
     tagEl.textContent = data.display || data.tag || data.version || '';
+    const isTesting = data.is_testing === true;
+    tagEl.style.color = isTesting ? '#991b1b' : 'var(--gray-700)';
+    tagEl.style.background = isTesting ? '#fef2f2' : '#eef2ff';
+    tagEl.style.borderColor = isTesting ? '#fecaca' : '#c7d2fe';
     if (!tagEl.textContent) {
       tagEl.style.display = 'none';
     }

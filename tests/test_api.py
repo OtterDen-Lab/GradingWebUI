@@ -51,6 +51,19 @@ def client(tmp_path, monkeypatch):
     yield test_client
 
 
+def test_version_info_reports_deployment_metadata(client):
+  response = client.get("/api/version")
+
+  assert response.status_code == 200
+  payload = response.json()
+  assert payload["display"]
+  assert "branch" in payload
+  assert "commit" in payload
+  assert payload["is_testing"] is (payload["branch"] == "testing")
+  if payload["is_testing"]:
+    assert payload["display"] == f"testing · {payload['commit']}"
+
+
 def create_test_session(client, assignment_name: str = "Test Session") -> int:
   """Create a session through API and return session_id."""
   response = client.post("/api/sessions",
