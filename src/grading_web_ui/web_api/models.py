@@ -135,6 +135,13 @@ class ProblemResponse(BaseModel):
   # AI grading metadata
   ai_reasoning: Optional[str] = None
 
+  # Structured handwriting-analysis metadata. These are kept separate from
+  # is_blank, which is the import/manual/AI grading blank flag.
+  transcription_is_blank: Optional[bool] = None
+  transcription_is_effectively_blank: Optional[bool] = None
+  transcription_is_relevant: Optional[bool] = None
+  transcription_model: Optional[str] = None
+
   # QR code availability flag (for "Show Answer" button)
   has_qr_data: bool = False
 

@@ -46,16 +46,17 @@ def _is_ahead_of_tag(version: str) -> bool:
   if not (repo_root / ".git").exists():
     return False
   tag_name = f"v{version}"
+  git_command = ["git", "-c", f"safe.directory={repo_root}"]
   try:
     tag_result = subprocess.run(
-      ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag_name}^{{commit}}"],
+      [*git_command, "rev-parse", "--verify", "--quiet", f"refs/tags/{tag_name}^{{commit}}"],
       cwd=repo_root,
       check=False,
       capture_output=True,
       text=True,
     )
     head_result = subprocess.run(
-      ["git", "rev-parse", "HEAD"],
+      [*git_command, "rev-parse", "HEAD"],
       cwd=repo_root,
       check=False,
       capture_output=True,

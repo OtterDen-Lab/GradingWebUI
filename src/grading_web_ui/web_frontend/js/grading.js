@@ -1937,6 +1937,8 @@ function displayCurrentProblem() {
         if (oldAiIndicator) oldAiIndicator.remove();
     }
 
+    renderHandwritingAnalysisIndicator();
+
     // Load feedback tags and default feedback for this problem number
     if (currentSession && currentProblemNumber) {
         loadFeedbackTags(currentSession.id, currentProblemNumber);
@@ -1946,6 +1948,48 @@ function displayCurrentProblem() {
 
     // Set explanation UI state (avoid eager regeneration fetch on every navigation)
     loadExplanation({ eager: false });
+}
+
+function renderHandwritingAnalysisIndicator() {
+    const existing = document.getElementById('handwriting-analysis-indicator');
+    if (existing) existing.remove();
+
+    const analysisAvailable = [
+        currentProblem.transcription_is_blank,
+        currentProblem.transcription_is_effectively_blank,
+        currentProblem.transcription_is_relevant,
+    ].some((value) => value !== null && value !== undefined);
+    if (!analysisAvailable) return;
+
+    const badges = [];
+    if (currentProblem.transcription_is_blank === true) {
+        badges.push('<span style="background:#4b5563;color:white;padding:3px 7px;border-radius:999px;">AI handwriting: blank</span>');
+    } else if (currentProblem.transcription_is_effectively_blank === true) {
+        badges.push('<span style="background:#9a3412;color:white;padding:3px 7px;border-radius:999px;">AI handwriting: effectively blank</span>');
+    } else if (currentProblem.transcription_is_relevant === false) {
+        badges.push('<span style="background:#7f1d1d;color:white;padding:3px 7px;border-radius:999px;">AI handwriting: irrelevant</span>');
+    } else if (currentProblem.transcription_is_relevant === true) {
+        badges.push('<span style="background:#166534;color:white;padding:3px 7px;border-radius:999px;">AI handwriting: relevant</span>');
+    }
+
+    const heuristicBlank = Boolean(currentProblem.is_blank);
+    const handwritingBlank = currentProblem.transcription_is_blank;
+    if (typeof handwritingBlank === 'boolean' && heuristicBlank !== handwritingBlank) {
+        badges.push(
+            `<span style="background:#b45309;color:white;padding:3px 7px;border-radius:999px;">Blank detectors disagree: ${heuristicBlank ? 'heuristic says blank' : 'heuristic says not blank'}, AI says ${handwritingBlank ? 'blank' : 'not blank'}</span>`
+        );
+    }
+
+    const indicator = document.createElement('div');
+    indicator.id = 'handwriting-analysis-indicator';
+    indicator.style.cssText = 'background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:10px 12px;font-size:13px;color:#1e3a8a;';
+    indicator.innerHTML = `
+        <strong>✍️ Handwriting analysis</strong>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;">${badges.join('')}</div>
+    `;
+
+    const indicatorContainer = document.getElementById('grading-indicators');
+    if (indicatorContainer) indicatorContainer.appendChild(indicator);
 }
 
 // Load problem for current problem number (ungraded if available, otherwise most recent)
