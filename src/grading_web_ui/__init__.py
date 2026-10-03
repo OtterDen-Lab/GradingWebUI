@@ -54,7 +54,9 @@ def setup_logging() -> None:
       print(f"Could not initialize file logging: {error}; using console logging",
             file=sys.stderr)
   else:
-    # Fallback to basic configuration if logging.yaml is not found
+    # This should not happen in a deployed application. Make it visible rather
+    # than silently losing the rotating file handlers.
+    print("Logging configuration not found; using console logging", file=sys.stderr)
     logging.basicConfig(level=logging.INFO)
 
 
