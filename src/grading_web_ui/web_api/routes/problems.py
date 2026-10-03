@@ -1440,21 +1440,23 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
 
         if question_text:
           classification_response = query_followup(
-            "Determine whether the student's transcribed response attempts to "
-            "answer the exam question. This is a relevance judgment, not a "
+            "Determine whether the student's transcribed response plausibly "
+            "represents an attempt to answer this specific exam question. This is "
+            "a relevance judgment, not a "
             "correctness, completeness, quality, or syntax judgment. Return only "
             "JSON: {\"is_relevant\": true or false}.\n\n"
-            "Set is_relevant=true for any recognizable attempt to answer, including "
-            "a short answer, a partial answer, an incorrect answer, intermediate "
-            "work, equations, notation, pseudocode, identifiers, code fragments, "
-            "or code in any language. For programming questions, treat code as "
-            "relevant even if it is incomplete, non-compiling, poorly formatted, "
-            "or lacks explanation. Do not require the response to match a reference "
+            "Set is_relevant=true only for a recognizable attempt to answer this "
+            "question. The attempt may be a short or partial answer, an incorrect "
+            "answer, intermediate work, equations, notation, a diagram description, "
+            "or another response format appropriate to the task. Do not require the "
+            "response to be correct, complete, polished, or to match a reference "
             "answer.\n"
-            "Set is_relevant=false only when the response is clearly unrelated to "
+            "Set is_relevant=false when the response does not plausibly represent "
+            "an attempt at this question: for example, it is "
             "the question, is conversational text, is a name/doodle, or is random "
             "letters/symbols with no plausible connection. Do not mark a response "
-            "relevant solely because it contains letters, arrows, or punctuation.\n\n"
+            "relevant solely because it contains letters, arrows, punctuation, or "
+            "any other isolated marks.\n\n"
             f"Question:\n{question_text}\n\n"
             f"Student response:\n{transcription}",
             [], 256, json_output=True)
