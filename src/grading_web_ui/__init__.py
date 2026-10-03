@@ -1,6 +1,7 @@
 import logging.config
 import os
 import re
+import sys
 from pathlib import Path
 import yaml
 
@@ -43,9 +44,9 @@ def setup_logging() -> None:
     except OSError as error:
       # Keep a directly launched development server usable when its user does
       # not have permission to create the production log directory.
-      logging.basicConfig(level=logging.INFO)
-      logging.getLogger(__name__).warning(
-        "Could not initialize file logging: %s; using console logging", error)
+      logging.basicConfig(level=logging.INFO, force=True)
+      print(f"Could not initialize file logging: {error}; using console logging",
+            file=sys.stderr)
   else:
     # Fallback to basic configuration if logging.yaml is not found
     logging.basicConfig(level=logging.INFO)

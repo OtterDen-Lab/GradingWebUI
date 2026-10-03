@@ -151,7 +151,7 @@ lxc-install:
 	$(SUDO) scripts/install_lxc_service.sh --app-dir "$(LXC_APP_DIR)" --state-dir "$(LXC_STATE_DIR)" --service-user "$(LXC_SERVICE_USER)"
 
 lxc-deploy:
-	$(SUDO) scripts/deploy_lxc_service.sh --app-dir "$(LXC_APP_DIR)" --service-user "$(LXC_SERVICE_USER)"
+	$(SUDO) scripts/deploy_lxc_service.sh --app-dir "$(LXC_APP_DIR)" --state-dir "$(LXC_STATE_DIR)" --service-user "$(LXC_SERVICE_USER)"
 
 lxc-backup:
 	@if [ -z "$(BACKUP_DIR)" ]; then \
