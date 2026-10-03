@@ -8,11 +8,17 @@ import yaml
 
 def setup_logging() -> None:
   env_path = os.environ.get("LOGGING_CONFIG")
+  app_dir = Path(os.environ.get("GRADING_APP_DIR", Path.cwd()))
   package_dir = Path(__file__).resolve().parent
   repo_root = package_dir.parent.parent
 
   candidates = [
     Path(env_path) if env_path else None,
+    # Native deployments install the package into a virtual environment, where
+    # package_dir is under site-packages rather than the checkout. The service
+    # intentionally sets GRADING_APP_DIR to the checkout containing this file.
+    app_dir / "logging.yaml",
+    Path.cwd() / "logging.yaml",
     repo_root / "logging.yaml",
     package_dir / "logging.yaml",
   ]
