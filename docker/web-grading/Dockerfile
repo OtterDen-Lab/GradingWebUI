@@ -38,8 +38,8 @@ RUN pip install --no-cache-dir uv
 # Avoid persistent uv cache in containerized build environments with tight disk limits.
 RUN uv pip install --system --no-cache -e /app
 
-# Create data directory for database
-RUN mkdir -p /data
+# Create data and log directories for database and rotating application logs.
+RUN mkdir -p /data /var/logs
 
 # Set working directory to app root
 WORKDIR /app

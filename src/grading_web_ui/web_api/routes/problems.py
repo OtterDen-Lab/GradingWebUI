@@ -6,9 +6,10 @@ import os
 import asyncio
 import threading
 import hashlib
+from uuid import uuid4
 from time import perf_counter
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
 from datetime import datetime
 from typing import Optional
 import base64
@@ -56,6 +57,9 @@ _regeneration_cache_lock = threading.Lock()
 _regeneration_cache_max_entries = 2000
 _session_prefetch_tasks = {}
 _session_prefetch_tasks_lock = threading.Lock()
+_handwriting_jobs = {}
+_handwriting_jobs_lock = threading.Lock()
+_HANDWRITING_MAX_RESPONSE_TOKENS = 4096
 
 _DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "above_beyond", "label": "Above and beyond", "color": "#16a34a"},
@@ -1158,18 +1162,70 @@ async def get_problem_in_context(
   }
 
 
-@router.post("/{problem_id}/decipher")
-async def decipher_handwriting(
-  problem_id: int,
-  model: str = "default",
-  current_user: dict = Depends(get_current_user)
-):
-  """Use AI to transcribe handwritten text from a problem image (requires auth and session access)
+def _parse_handwriting_analysis(
+    raw_response: str) -> tuple[str, bool, bool | None, bool | None]:
+  """Parse structured transcription, tolerating smaller-model JSON variants."""
+  payload_text = (raw_response or "").strip()
+  if payload_text.startswith("```") and payload_text.endswith("```"):
+    payload_text = "\n".join(payload_text.splitlines()[1:-1]).strip()
+  try:
+    payload = json.loads(payload_text)
+  except (TypeError, json.JSONDecodeError) as error:
+    # Some smaller vision models prepend a short explanation despite the
+    # instruction. Accept a JSON object embedded in that response, but do not
+    # fall back to treating arbitrary prose as a transcription result.
+    start = payload_text.find("{")
+    if start < 0:
+      raise ValueError("Model did not return handwriting-analysis JSON") from error
+    try:
+      payload, _ = json.JSONDecoder().raw_decode(payload_text[start:])
+    except json.JSONDecodeError as nested_error:
+      raise ValueError("Model did not return valid handwriting-analysis JSON") from nested_error
 
-    Args:
-        problem_id: ID of the problem to transcribe
-        model: "default", a tier (small/medium/large), or provider:model.
-               Defaults resolve from the current user's saved settings.
+  if not isinstance(payload, dict):
+    raise ValueError("Handwriting-analysis JSON must be an object")
+
+  missing = object()
+
+  def read_bool(field: str, *aliases: str, required: bool = False) -> bool | None:
+    value = next((payload[key] for key in (field, *aliases) if key in payload),
+                 missing)
+    if value is missing:
+      if required:
+        raise ValueError(f"Handwriting-analysis JSON is missing {field}")
+      return None
+    if isinstance(value, bool):
+      return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+      return value.strip().lower() == "true"
+    raise ValueError(f"Handwriting-analysis {field} must be true or false")
+
+  is_blank = read_bool("is_blank", "blank", required=True)
+  is_effectively_blank = read_bool(
+    "is_effectively_blank", "effectively_blank")
+  is_relevant = read_bool("is_relevant", "relevant")
+  text = payload.get("text", payload.get("transcription"))
+  if not isinstance(text, str):
+    raise ValueError("Handwriting-analysis text must be a string")
+
+  transcription = text.strip()
+  if not transcription and not is_blank:
+    raise ValueError("Model returned an empty transcription without marking it blank")
+  if is_blank:
+    # A blank response is the final category in sorting, regardless of an
+    # inconsistent optional classification emitted by the model.
+    is_effectively_blank = False
+    is_relevant = False
+  return transcription, is_blank, is_effectively_blank, is_relevant
+
+
+def _decipher_handwriting(problem_id: int, model: str, user_id: int,
+                          skip_cached: bool = False) -> dict:
+  """Transcribe and persist one response; optionally leave a cached result intact.
+
+    This is deliberately synchronous: the batch caller runs it in FastAPI's
+    background-task thread pool, one response at a time, to avoid saturating
+    the configured AI provider.
     """
   problem_repo = ProblemRepository()
   submission_repo = SubmissionRepository()
@@ -1178,19 +1234,23 @@ async def decipher_handwriting(
   if not problem:
     raise HTTPException(status_code=404, detail="Problem not found")
 
-  # Check if user has access to this session
-  if current_user["role"] != "instructor":
-    from ..repositories.session_assignment_repository import SessionAssignmentRepository
-    assignment_repo = SessionAssignmentRepository()
-    if not assignment_repo.is_user_assigned(problem.session_id, current_user["user_id"]):
-      raise HTTPException(status_code=403, detail="You do not have access to this grading session")
+  if skip_cached and problem.transcription and problem.transcription.strip():
+    return {
+      "problem_id": problem_id,
+      "transcription": problem.transcription,
+      "model": problem.transcription_model,
+      "is_blank": problem.transcription_is_blank,
+      "is_effectively_blank": problem.transcription_is_effectively_blank,
+      "is_relevant": problem.transcription_is_relevant,
+      "cached": True,
+    }
 
   # Get image data (extract from PDF if needed)
   image_base64 = get_problem_image_data(problem, submission_repo)
 
   query = BUILT_IN_TRANSCRIPTION_INSTRUCTIONS
   additional_instructions = get_transcription_additional_instructions(
-    current_user["user_id"])["text"]
+    user_id)["text"]
   if additional_instructions:
     query += f"\n\nAdditional transcription instructions:\n{additional_instructions}"
 
@@ -1201,7 +1261,7 @@ async def decipher_handwriting(
   try:
     selected_model = (model or "default").strip().lower()
     if selected_model == "default":
-      selected_model = get_handwriting_default(current_user["user_id"])["target"]
+      selected_model = get_handwriting_default(user_id)["target"]
 
     if selected_model == "ollama":
       server = ollama_settings.get_active_server()
@@ -1214,7 +1274,10 @@ async def decipher_handwriting(
       timing_provider = "ollama"
       timing_model = server["active_model"]
       timing_server = server["name"]
-      transcription, usage = ai.query_ai(query, attachments=[("png", image_base64)])
+      transcription, usage = ai.query_ai(
+        query, attachments=[("png", image_base64)],
+        max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS,
+        json_output=True)
       model_name = f"Ollama ({usage.get('model', server['active_model'])} on {server['name']})"
     else:
 
@@ -1228,7 +1291,7 @@ async def decipher_handwriting(
         provider, explicit_model = selected_model.split(":", 1)
         tier = "medium"
       try:
-        selection = resolve_model(current_user["user_id"], provider, tier,
+        selection = resolve_model(user_id, provider, tier,
                                   explicit_model)
       except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -1241,26 +1304,34 @@ async def decipher_handwriting(
       timing_model = selection.model_id
       response, usage = ai.query_ai(
         query, attachments=[("png", image_base64)],
-        candidate_models=[selection.model_id])
+        candidate_models=[selection.model_id],
+        max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS)
       transcription = response
       timing_model = usage.get("model", timing_model)
       model_name = f"Anthropic ({usage.get('model', selection.model_id)})"
 
-    # Validate transcription is not empty
-    if not transcription or not transcription.strip():
-      error_msg = "Model returned empty transcription. Try another configured model."
-      log.warning(
-        f"Empty transcription from {model_name} for problem {problem_id}")
-      raise HTTPException(status_code=500, detail=error_msg)
+    try:
+      transcription, is_blank, is_effectively_blank, is_relevant = \
+        _parse_handwriting_analysis(transcription)
+    except ValueError as error:
+      log.warning("Invalid handwriting-analysis result from %s for problem %s: %s",
+                  model_name, problem_id, error)
+      raise HTTPException(status_code=500, detail=str(error)) from error
 
     model_latency.record(
       "handwriting", timing_provider, timing_model,
       (perf_counter() - timing_start) * 1000, "success", timing_server)
+    problem_repo.update_transcription(
+      problem_id, transcription, model_name, is_blank, is_effectively_blank,
+      is_relevant)
 
     return {
       "problem_id": problem_id,
-      "transcription": transcription.strip(),
-      "model": model_name
+      "transcription": transcription,
+      "model": model_name,
+      "is_blank": is_blank,
+      "is_effectively_blank": is_effectively_blank,
+      "is_relevant": is_relevant,
     }
   except HTTPException:
     if timing_start is not None:
@@ -1277,6 +1348,115 @@ async def decipher_handwriting(
     log.error(f"Transcription failed: {traceback.format_exc()}")
     raise HTTPException(status_code=500,
                         detail=f"Transcription failed: {str(e)}")
+
+
+def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
+                                user_id: int, overwrite: bool) -> None:
+  """Fill a batch while exposing progress and continuing after failures."""
+  with _handwriting_jobs_lock:
+    _handwriting_jobs[job_id]["status"] = "running"
+  for problem_id in problem_ids:
+    try:
+      result = _decipher_handwriting(problem_id, model, user_id,
+                                     skip_cached=not overwrite)
+    except Exception as error:
+      log.warning("Batch transcription failed for problem %s: %s", problem_id, error)
+      with _handwriting_jobs_lock:
+        _handwriting_jobs[job_id]["failed"] += 1
+    else:
+      with _handwriting_jobs_lock:
+        _handwriting_jobs[job_id]["succeeded"] += 1
+        if result.get("is_blank"):
+          _handwriting_jobs[job_id]["reported_blank"] += 1
+        if result.get("is_effectively_blank"):
+          _handwriting_jobs[job_id]["reported_effectively_blank"] += 1
+        if result.get("is_relevant"):
+          _handwriting_jobs[job_id]["reported_relevant"] += 1
+        elif result.get("is_relevant") is False and \
+            not result.get("is_blank") and not result.get("is_effectively_blank"):
+          _handwriting_jobs[job_id]["reported_irrelevant"] += 1
+        if result.get("is_effectively_blank") is None or \
+            result.get("is_relevant") is None:
+          _handwriting_jobs[job_id]["classification_incomplete"] += 1
+    finally:
+      with _handwriting_jobs_lock:
+        _handwriting_jobs[job_id]["processed"] += 1
+  with _handwriting_jobs_lock:
+    _handwriting_jobs[job_id]["status"] = "completed"
+
+
+@router.post("/{problem_id}/decipher")
+async def decipher_handwriting(
+  problem_id: int,
+  model: str = "default",
+  current_user: dict = Depends(get_current_user)
+):
+  """Use AI to transcribe handwritten text from one accessible problem image."""
+  problem = ProblemRepository().get_by_id(problem_id)
+  if not problem:
+    raise HTTPException(status_code=404, detail="Problem not found")
+  if current_user["role"] != "instructor":
+    from ..repositories.session_assignment_repository import SessionAssignmentRepository
+    if not SessionAssignmentRepository().is_user_assigned(
+        problem.session_id, current_user["user_id"]):
+      raise HTTPException(status_code=403, detail="You do not have access to this grading session")
+  # The normal/default action reads a pre-populated result. Explicit model
+  # choices remain an intentional re-analysis and replace the cached value.
+  return _decipher_handwriting(
+    problem_id, model, current_user["user_id"],
+    skip_cached=(model or "default").strip().lower() == "default")
+
+
+@router.post("/session/{session_id}/{problem_number}/decipher-all")
+async def decipher_all_handwriting(
+  session_id: int,
+  problem_number: int,
+  background_tasks: BackgroundTasks,
+  model: str = "default",
+  overwrite: bool = False,
+  current_user: dict = Depends(require_session_access())
+):
+  """Queue handwriting analysis for all submissions of a problem."""
+  problem_ids = [
+    problem.id for problem in ProblemRepository().get_for_handwriting_analysis(
+      session_id, problem_number, overwrite)
+  ]
+  job_id = str(uuid4())
+  with _handwriting_jobs_lock:
+    _handwriting_jobs[job_id] = {
+      "session_id": session_id,
+      "problem_number": problem_number,
+      "status": "queued",
+      "total": len(problem_ids),
+      "processed": 0,
+      "succeeded": 0,
+      "failed": 0,
+      "reported_blank": 0,
+      "reported_effectively_blank": 0,
+      "reported_irrelevant": 0,
+      "reported_relevant": 0,
+      "classification_incomplete": 0,
+    }
+  background_tasks.add_task(
+    _batch_decipher_handwriting, job_id, problem_ids, model,
+    current_user["user_id"], overwrite)
+  return {"job_id": job_id, "status": "queued", "queued": len(problem_ids)}
+
+
+@router.get("/session/{session_id}/{problem_number}/decipher-all/{job_id}")
+async def get_decipher_all_status(
+  session_id: int,
+  problem_number: int,
+  job_id: str,
+  current_user: dict = Depends(require_session_access())
+):
+  """Return progress for an in-process handwriting-analysis batch."""
+  with _handwriting_jobs_lock:
+    job = _handwriting_jobs.get(job_id)
+    if not job or job["session_id"] != session_id or \
+        job["problem_number"] != problem_number:
+      raise HTTPException(status_code=404, detail="Handwriting analysis job not found")
+    return dict(job)
 
 
 @router.get("/{session_id}/{problem_number}/graded")

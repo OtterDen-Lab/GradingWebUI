@@ -1451,6 +1451,7 @@ function setupGradingControls() {
     document.getElementById('subjective-clear-btn').onclick = clearSubjectiveTriage;
     document.getElementById('subjective-finalize-btn').onclick = openSubjectiveFinalizeDialog;
     document.getElementById('subjective-reopen-btn').onclick = () => submitSubjectiveReopen({ openFinalizeDialog: true });
+    document.getElementById('clear-problem-grades-btn').onclick = clearGradesForCurrentProblem;
     document.getElementById('next-problem-btn').onclick = loadNextProblem;
     document.getElementById('back-problem-btn').onclick = loadPreviousProblem;
     document.getElementById('view-stats-btn').onclick = () => {
@@ -1748,6 +1749,8 @@ function autoSizeProblemContainerToImage(problemImage) {
 // Display the current problem (common display logic)
 function displayCurrentProblem() {
     if (!currentProblem) return;
+
+    clearStaleHandwritingBatchStatus();
 
     // Display problem
     const problemImage = document.getElementById('problem-image');
@@ -2255,6 +2258,47 @@ async function loadNextProblem(options = {}) {
     } catch (error) {
         console.error('Failed to load problem:', error);
         alert('Failed to load problem');
+    }
+}
+
+async function clearGradesForCurrentProblem() {
+    if (!currentSession || currentProblemNumber === null || currentProblemNumber === undefined) return;
+
+    const problemLabel = `problem ${currentProblemNumber}`;
+    const confirmed = confirm(
+        `Remove every submitted grade for ${problemLabel}?\n\n` +
+        'This clears scores, feedback, manual/AI blank grades, and AI grading reasoning for all submissions of this problem. Handwriting analysis and grouping assignments are kept. This cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    const button = document.getElementById('clear-problem-grades-btn');
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Removing Grades…';
+
+    try {
+        const response = await fetch(
+            `${API_BASE}/sessions/${currentSession.id}/problems/${currentProblemNumber}/clear-grades`,
+            { method: 'POST' }
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(payload.detail || 'Unable to remove grades');
+        }
+
+        invalidateNextProblemPrefetch();
+        lastGradedProblemNumber = null;
+        await updateOverallProgress();
+        await loadNextProblem({ reset: true });
+        showNotification(
+            `Removed grades from ${payload.cleared_count} submission${payload.cleared_count === 1 ? '' : 's'} for ${problemLabel}.`
+        );
+    } catch (error) {
+        console.error('Failed to remove grades for problem:', error);
+        alert(`Failed to remove grades: ${error.message}`);
+    } finally {
+        button.disabled = false;
+        button.textContent = originalText;
     }
 }
 
@@ -4442,6 +4486,13 @@ const transcriptionActions = document.getElementById('transcription-actions');
 const modelUsed = document.getElementById('model-used');
 const closeTranscription = document.getElementById('close-transcription');
 const decipherBtn = document.getElementById('decipher-btn');
+const decipherAllBtn = document.getElementById('decipher-all-btn');
+const decipherAllStatus = document.getElementById('decipher-all-status');
+const handwritingBatchDialog = document.getElementById('handwriting-batch-dialog');
+const handwritingBatchModel = document.getElementById('handwriting-batch-model');
+const handwritingBatchOverwrite = document.getElementById('handwriting-batch-overwrite');
+const handwritingBatchCancel = document.getElementById('handwriting-batch-cancel');
+const handwritingBatchStart = document.getElementById('handwriting-batch-start');
 const retryPremiumBtn = document.getElementById('retry-premium-btn');
 let transcriptionModelOptions = null;
 
@@ -4781,6 +4832,129 @@ decipherBtn.addEventListener('click', async () => {
         document.getElementById('retry-large-btn').addEventListener('click', () => retryWithModel('large'));
         document.getElementById('retry-ollama-btn').addEventListener('click', () => retryWithModel('ollama'));
     }
+});
+
+async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
+    const response = await fetch(
+        `${API_BASE}/problems/session/${sessionId}/${problemNumber}/decipher-all/${jobId}`
+    );
+    if (!response.ok) throw new Error('Unable to check handwriting-analysis progress');
+    const job = await response.json();
+    // The user may have navigated to another problem while the job runs.
+    // Stop polling rather than reviving a status message for the old problem.
+    if (String(currentSession?.id) !== String(sessionId) ||
+        String(currentProblemNumber) !== String(problemNumber)) {
+        return true;
+    }
+    decipherAllStatus.dataset.sessionId = String(sessionId);
+    decipherAllStatus.dataset.problemNumber = String(problemNumber);
+    const blankSummary = `; ${job.reported_blank || 0} blank`;
+    const effectivelyBlankSummary =
+        `; ${job.reported_effectively_blank || 0} effectively blank`;
+    const irrelevantSummary = `; ${job.reported_irrelevant || 0} irrelevant`;
+    const incompleteSummary = job.classification_incomplete
+        ? `; ${job.classification_incomplete} classification incomplete` : '';
+    const classifiedNonRelevant = (job.reported_blank || 0) +
+        (job.reported_effectively_blank || 0) + (job.reported_irrelevant || 0);
+    // Infer this for a batch already running during an app upgrade, whose
+    // in-memory job record does not yet have reported_relevant.
+    const relevantCount = job.reported_relevant ??
+        Math.max((job.succeeded || 0) - classifiedNonRelevant, 0);
+    const relevantSummary = `; ${relevantCount} relevant`;
+    const failureSummary = job.failed ? `; ${job.failed} failed` : '';
+    decipherAllStatus.textContent = job.status === 'completed'
+        ? `Complete: ${job.succeeded}/${job.total} analyzed${relevantSummary}${irrelevantSummary}${effectivelyBlankSummary}${blankSummary}${incompleteSummary}${failureSummary}`
+        : `Analyzing: ${job.processed}/${job.total}${relevantSummary}${irrelevantSummary}${effectivelyBlankSummary}${blankSummary}${incompleteSummary}${failureSummary}`;
+    return job.status === 'completed';
+}
+
+function clearStaleHandwritingBatchStatus() {
+    if (!decipherAllStatus?.textContent) return;
+    if (decipherAllStatus.dataset.sessionId !== String(currentSession?.id) ||
+        decipherAllStatus.dataset.problemNumber !== String(currentProblemNumber)) {
+        decipherAllStatus.textContent = '';
+        delete decipherAllStatus.dataset.sessionId;
+        delete decipherAllStatus.dataset.problemNumber;
+    }
+}
+
+async function openHandwritingBatchDialog() {
+    if (!currentSession?.id || !currentProblemNumber) {
+        alert('Choose a problem first.');
+        return;
+    }
+
+    handwritingBatchDialog.style.display = 'flex';
+    handwritingBatchModel.innerHTML = '<option value="default">Loading configured default…</option>';
+    const choices = ['default', 'ollama', 'small', 'medium', 'large'];
+    const labels = await Promise.all(choices.map(getTranscriptionModelLabel));
+    handwritingBatchModel.innerHTML = choices.map((choice, index) =>
+        `<option value="${choice}">${escapeAI(labels[index])}</option>`).join('');
+}
+
+function closeHandwritingBatchDialog() {
+    handwritingBatchDialog.style.display = 'none';
+}
+
+// Queue every response for the current question, including ones marked blank.
+// Existing transcriptions are retained unless the overwrite option is selected.
+async function startHandwritingBatch() {
+    if (!currentSession?.id || !currentProblemNumber) return;
+
+    const problemNumber = Number(currentProblemNumber);
+    const sessionId = currentSession.id;
+    const overwrite = handwritingBatchOverwrite.checked;
+    const model = handwritingBatchModel.value;
+
+    const originalLabel = decipherAllBtn.textContent;
+    decipherAllBtn.disabled = true;
+    decipherAllBtn.textContent = 'Queueing…';
+    handwritingBatchStart.disabled = true;
+    try {
+        const response = await fetch(
+            `${API_BASE}/problems/session/${sessionId}/${problemNumber}/decipher-all?model=${encodeURIComponent(model)}&overwrite=${overwrite}`,
+            { method: 'POST' }
+        );
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.detail || 'Unable to queue handwriting analysis');
+        }
+        const result = await response.json();
+        decipherAllStatus.dataset.sessionId = String(sessionId);
+        decipherAllStatus.dataset.problemNumber = String(problemNumber);
+        closeHandwritingBatchDialog();
+        decipherAllStatus.textContent = result.queued
+            ? `Queued: 0/${result.queued}`
+            : 'Complete: nothing to analyze';
+        if (result.queued) {
+            const timer = setInterval(async () => {
+                try {
+                    if (await watchHandwritingAnalysis(
+                        sessionId, problemNumber, result.job_id)) {
+                        clearInterval(timer);
+                    }
+                } catch (error) {
+                    clearInterval(timer);
+                    console.error('Failed to check handwriting-analysis progress:', error);
+                    decipherAllStatus.textContent = error.message;
+                }
+            }, 1000);
+        }
+    } catch (error) {
+        console.error('Failed to queue handwriting analysis:', error);
+        alert(error.message);
+    } finally {
+        decipherAllBtn.disabled = false;
+        decipherAllBtn.textContent = originalLabel;
+        handwritingBatchStart.disabled = false;
+    }
+}
+
+decipherAllBtn.addEventListener('click', openHandwritingBatchDialog);
+handwritingBatchCancel.addEventListener('click', closeHandwritingBatchDialog);
+handwritingBatchStart.addEventListener('click', startHandwritingBatch);
+handwritingBatchDialog.addEventListener('click', (event) => {
+    if (event.target === handwritingBatchDialog) closeHandwritingBatchDialog();
 });
 
 // =============================================================================

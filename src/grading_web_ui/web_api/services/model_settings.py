@@ -12,10 +12,17 @@ MAX_TRANSCRIPTION_ADDITIONAL_INSTRUCTIONS = 2000
 BUILT_IN_TRANSCRIPTION_INSTRUCTIONS = (
   "Transcribe only the student's handwritten response.\n\n"
   "Do not solve, grade, interpret, correct, summarize, or editorialize.\n"
-  "Ignore all printed text, including the question, instructions, labels, and point values.\n"
+  "Do not transcribe printed text, including the question, instructions, labels, and point values.\n"
+  "Use the printed question only to determine whether the student's response is relevant; never include it in text.\n"
   "Preserve the student's wording, spelling, notation, and line breaks where possible.\n"
   "Use [illegible] only for text that cannot reasonably be determined from the visible handwriting.\n"
-  "Return only the transcription.")
+  "Set is_blank=true only when there is no meaningful handwritten response.\n"
+  "Set is_effectively_blank=true for doodles, stray marks, or other non-answer content.\n"
+  "Set is_relevant=true only when the substantive response attempts to answer the printed question.\n\n"
+  "Return only a JSON object with exactly these fields: "
+  "{\"is_blank\": true or false, \"is_effectively_blank\": true or false, "
+  "\"is_relevant\": true or false, \"text\": \"the transcription\"}. "
+  "Set text to an empty string when is_blank is true. Do not use Markdown fences.")
 
 
 @dataclass(frozen=True)

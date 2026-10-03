@@ -1,17 +1,24 @@
 import logging.config
 import os
 import re
+import sys
 from pathlib import Path
 import yaml
 
 
 def setup_logging() -> None:
   env_path = os.environ.get("LOGGING_CONFIG")
+  app_dir = Path(os.environ.get("GRADING_APP_DIR", Path.cwd()))
   package_dir = Path(__file__).resolve().parent
   repo_root = package_dir.parent.parent
 
   candidates = [
     Path(env_path) if env_path else None,
+    # Native deployments install the package into a virtual environment, where
+    # package_dir is under site-packages rather than the checkout. The service
+    # intentionally sets GRADING_APP_DIR to the checkout containing this file.
+    app_dir / "logging.yaml",
+    Path.cwd() / "logging.yaml",
     repo_root / "logging.yaml",
     package_dir / "logging.yaml",
   ]
@@ -34,9 +41,22 @@ def setup_logging() -> None:
     config_text = re.sub(r'\$\{([^}:]+):-([^}]+)\}', replace_env_vars,
                          config_text)
     config = yaml.safe_load(config_text)
-    logging.config.dictConfig(config)
+    try:
+      for handler in config.get("handlers", {}).values():
+        filename = handler.get("filename")
+        if filename:
+          Path(filename).parent.mkdir(parents=True, exist_ok=True)
+      logging.config.dictConfig(config)
+    except OSError as error:
+      # Keep a directly launched development server usable when its user does
+      # not have permission to create the production log directory.
+      logging.basicConfig(level=logging.INFO, force=True)
+      print(f"Could not initialize file logging: {error}; using console logging",
+            file=sys.stderr)
   else:
-    # Fallback to basic configuration if logging.yaml is not found
+    # This should not happen in a deployed application. Make it visible rather
+    # than silently losing the rotating file handlers.
+    print("Logging configuration not found; using console logging", file=sys.stderr)
     logging.basicConfig(level=logging.INFO)
 
 

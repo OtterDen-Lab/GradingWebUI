@@ -1160,7 +1160,9 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
   class _FakeAnthropic:
     @classmethod
     def query_ai(cls, *args, **kwargs):
-      return ("transcribed text", {"model": "claude-sonnet-4-5"})
+      return ('{"is_blank": false, "is_effectively_blank": false, '
+              '"is_relevant": true, "text": "transcribed text"}',
+              {"model": "claude-sonnet-4-5"})
 
   monkeypatch.setattr(problems_routes.ai_helper, "AI_Helper__Anthropic", _FakeAnthropic)
 
@@ -1168,7 +1170,60 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
   assert response.status_code == 200
   payload = response.json()
   assert payload["transcription"] == "transcribed text"
+  assert payload["is_blank"] is False
+  assert payload["is_effectively_blank"] is False
+  assert payload["is_relevant"] is True
   assert payload["model"] == "Anthropic (claude-sonnet-4-5)"
+
+  with get_db_connection() as conn:
+    cached = conn.execute(
+      "SELECT transcription, transcription_model, transcription_is_blank, "
+      "transcription_is_effectively_blank, transcription_is_relevant "
+      "FROM problems WHERE id = ?",
+      (problem_id,)
+    ).fetchone()
+  assert cached["transcription"] == "transcribed text"
+  assert cached["transcription_model"] == "Anthropic (claude-sonnet-4-5)"
+  assert cached["transcription_is_blank"] == 0
+  assert cached["transcription_is_effectively_blank"] == 0
+  assert cached["transcription_is_relevant"] == 1
+
+
+def test_decipher_all_queues_uncached_responses_including_blanks(client, monkeypatch):
+  """Batch analysis includes blank responses but leaves cached ones alone by default."""
+  from grading_web_ui.web_api.routes import problems as problems_routes
+
+  session_id = create_test_session(client, "Batch Decipher")
+  _, queued_problem_id = seed_submission_with_problem(
+    session_id, document_id=1, problem_number=8)
+  _, cached_problem_id = seed_submission_with_problem(
+    session_id, document_id=2, problem_number=8)
+  _, blank_problem_id = seed_submission_with_problem(
+    session_id, document_id=3, problem_number=8, is_blank=True)
+  with get_db_connection() as conn:
+    conn.execute(
+      "UPDATE problems SET transcription = 'already cached' WHERE id = ?",
+      (cached_problem_id,)
+    )
+
+  queued_calls = []
+  monkeypatch.setattr(
+    problems_routes,
+    "_batch_decipher_handwriting",
+    lambda job_id, problem_ids, model, user_id, overwrite: queued_calls.append(
+      (job_id, problem_ids, model, user_id, overwrite))
+  )
+
+  response = client.post(
+    f"/api/problems/session/{session_id}/8/decipher-all")
+
+  assert response.status_code == 200
+  assert response.json()["status"] == "queued"
+  assert response.json()["queued"] == 2
+  assert response.json()["job_id"]
+  assert len(queued_calls) == 1
+  assert queued_calls[0][1:3] == ([queued_problem_id, blank_problem_id], "default")
+  assert queued_calls[0][4] is False
 
 
 def test_subjective_finalize_applies_bucket_scores(client):
@@ -1613,6 +1668,66 @@ def test_subjective_reopen_restores_triaged_state(client):
       assert row["graded"] == 0
       assert row["score"] is None
       assert row["feedback"] is None
+
+
+def test_clear_grades_for_problem_only_resets_selected_problem(client):
+  session_id = create_test_session(client, "Clear One Problem's Grades")
+  _, target_problem_id = seed_submission_with_problem(
+    session_id,
+    document_id=1,
+    problem_number=5,
+    graded=True,
+    score=7.0,
+    feedback="Needs one more justification.",
+    is_blank=True,
+    blank_method="manual",
+  )
+  _, other_problem_id = seed_submission_with_problem(
+    session_id,
+    document_id=2,
+    problem_number=6,
+    graded=True,
+    score=4.0,
+    feedback="Other problem grade.",
+  )
+  with get_db_connection() as conn:
+    conn.execute(
+      "UPDATE problems SET ai_reasoning = ?, transcription = ? WHERE id = ?",
+      ("Prior AI grade", "Saved handwriting", target_problem_id),
+    )
+
+  response = client.post(
+    f"/api/sessions/{session_id}/problems/5/clear-grades"
+  )
+
+  assert response.status_code == 200
+  assert response.json()["cleared_count"] == 1
+  with get_db_connection() as conn:
+    target = conn.execute(
+      """SELECT graded, score, feedback, ai_reasoning, is_blank, blank_method,
+                transcription
+         FROM problems WHERE id = ?""",
+      (target_problem_id,),
+    ).fetchone()
+    other = conn.execute(
+      "SELECT graded, score, feedback FROM problems WHERE id = ?",
+      (other_problem_id,),
+    ).fetchone()
+
+  assert dict(target) == {
+    "graded": 0,
+    "score": None,
+    "feedback": None,
+    "ai_reasoning": None,
+    "is_blank": 0,
+    "blank_method": None,
+    "transcription": "Saved handwriting",
+  }
+  assert dict(other) == {
+    "graded": 1,
+    "score": 4.0,
+    "feedback": "Other problem grade.",
+  }
 
 
 def test_subjective_previous_falls_back_to_last_graded_after_finalize(client, monkeypatch):

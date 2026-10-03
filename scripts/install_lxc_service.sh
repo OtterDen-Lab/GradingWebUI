@@ -68,6 +68,8 @@ fi
 install -d -m 0750 -o root -g "$service_user" "$state_dir"
 install -d -m 0700 -o "$service_user" -g "$service_user" \
   "$state_dir/data" "$state_dir/tmp" "$state_dir/backup-staging" "$state_dir/logs"
+# /var/log is root-owned, so the service needs its own writable subdirectory.
+install -d -m 0750 -o "$service_user" -g "$service_user" /var/log/grading-ui
 install -d -m 0750 -o root -g root "$state_dir/config"
 if [ ! -e "$state_dir/config/web.env" ]; then
   install -m 0600 -o root -g root "$app_dir/.env.example" \

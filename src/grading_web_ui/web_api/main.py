@@ -13,6 +13,8 @@ import tomllib
 import logging
 from time import perf_counter
 
+from grading_web_ui import setup_logging
+
 # Load environment variables from .env file
 load_dotenv()
 # Version helpers
@@ -45,16 +47,23 @@ def _is_ahead_of_tag(version: str) -> bool:
     return False
   tag_name = f"v{version}"
   try:
-    result = subprocess.run(
-      ["git", "describe", "--tags", "--exact-match"],
+    tag_result = subprocess.run(
+      ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag_name}^{{commit}}"],
       cwd=repo_root,
       check=False,
       capture_output=True,
       text=True,
     )
-    if result.returncode != 0:
+    head_result = subprocess.run(
+      ["git", "rev-parse", "HEAD"],
+      cwd=repo_root,
+      check=False,
+      capture_output=True,
+      text=True,
+    )
+    if tag_result.returncode != 0 or head_result.returncode != 0:
       return True
-    return result.stdout.strip() != tag_name
+    return tag_result.stdout.strip() != head_result.stdout.strip()
   except Exception:
     return False
 
@@ -98,6 +107,10 @@ except ImportError:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   """Lifespan event handler for startup/shutdown"""
+  # Uvicorn configures its own console logging while loading the app. Reapply
+  # our configuration here so the rotating application file handlers remain
+  # attached in the running service process.
+  setup_logging()
   log = logging.getLogger(__name__)
 
   # Ensure QuizGenerator key access does not mutate process env at runtime.

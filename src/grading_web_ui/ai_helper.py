@@ -236,6 +236,7 @@ class AI_Helper__Ollama(AI_Helper):
                message: str,
                attachments: List[Tuple[str, str]],
                max_response_tokens: int = DEFAULT_MAX_TOKENS,
+               json_output: bool = False,
                **_kwargs) -> Tuple[str, Dict]:
     images = [contents for file_type, contents in attachments if file_type == "png"]
     payload = {
@@ -248,6 +249,8 @@ class AI_Helper__Ollama(AI_Helper):
       "messages": [{"role": "user", "content": message, "images": images}],
       "options": {"num_predict": max_response_tokens},
     }
+    if json_output:
+      payload["format"] = "json"
     response = httpx.post(f"{self.base_url}/api/chat", json=payload, timeout=300.0)
     response.raise_for_status()
     body = response.json()

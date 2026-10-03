@@ -13,8 +13,9 @@ WorkingDirectory=__APP_DIR__
 EnvironmentFile=__STATE_DIR__/config/web.env
 Environment=GRADING_DB_PATH=__STATE_DIR__/data/grading.db
 Environment=TMPDIR=__STATE_DIR__/tmp
-Environment=LOG_FILE=__STATE_DIR__/logs/grading-web.log
-Environment=ERROR_LOG_FILE=__STATE_DIR__/logs/grading-web-errors.log
+Environment=GRADING_LOG_FILE=/var/log/grading-ui/grading-ui.log
+Environment=GRADING_ERROR_LOG_FILE=/var/log/grading-ui/grading-ui-errors.log
+Environment=LOGGING_CONFIG=__APP_DIR__/logging.yaml
 Environment=PYTHONUNBUFFERED=1
 Environment=GRADING_APP_DIR=__APP_DIR__
 ExecStart=__APP_DIR__/scripts/run_lxc_service.sh

@@ -207,7 +207,12 @@ Configure Caddy/nginx for HTTPS to the chosen address and keep
 `AUTH_COOKIE_SECURE=false` explicitly.
 
 For an upgrade, update the checkout using your normal Git/release process, then
-run `make lxc-deploy`. To create a consistent database snapshot, run:
+run `make lxc-deploy`. To deploy an exact immutable release tag in one step,
+run `make lxc-deploy v0.12.1`; the command fetches that tag, refuses to replace
+a checkout with uncommitted changes, switches to the tag in detached-HEAD mode,
+and then synchronizes dependencies and restarts the service. An exact tag
+checkout displays its release version without a `+` suffix in the UI. To create
+a consistent database snapshot, run:
 
 ```bash
 make lxc-backup BACKUP_DIR=/mnt/off-host-backups/grading-web

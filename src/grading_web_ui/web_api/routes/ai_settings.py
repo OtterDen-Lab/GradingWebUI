@@ -45,7 +45,8 @@ async def get_settings(current_user: dict = Depends(get_current_user)):
       model_settings.BUILT_IN_TRANSCRIPTION_INSTRUCTIONS,
     "transcription_additional_instructions":
       model_settings.get_transcription_additional_instructions(current_user["user_id"]),
-    "ollama_active": ({"server_name": ollama_server["name"],
+    "ollama_active": ({"server_id": ollama_server["id"],
+                       "server_name": ollama_server["name"],
                        "model_id": ollama_server["active_model"]}
                       if ollama_server else None),
   }

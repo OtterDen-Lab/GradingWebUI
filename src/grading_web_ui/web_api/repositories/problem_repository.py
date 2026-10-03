@@ -61,7 +61,19 @@ class ProblemRepository(BaseRepository[Problem]):
       qr_encrypted_data=row["qr_encrypted_data"],
       transcription=row["transcription"],
       transcription_model=row["transcription_model"],
-      transcription_cached_at=transcription_cached_at
+      transcription_cached_at=transcription_cached_at,
+      transcription_is_blank=(
+        bool(row["transcription_is_blank"])
+        if row["transcription_is_blank"] is not None else None
+      ),
+      transcription_is_effectively_blank=(
+        bool(row["transcription_is_effectively_blank"])
+        if row["transcription_is_effectively_blank"] is not None else None
+      ),
+      transcription_is_relevant=(
+        bool(row["transcription_is_relevant"])
+        if row["transcription_is_relevant"] is not None else None
+      )
     )
 
   def _canvas_user_filter_clause(self,
@@ -145,6 +157,24 @@ class ProblemRepository(BaseRepository[Problem]):
         ORDER BY submission_id, problem_number
         """,
         (session_id,)
+      )
+
+  def get_for_handwriting_analysis(self, session_id: int, problem_number: int,
+                                   overwrite: bool = False) -> List[Problem]:
+    """Return every response, or only responses without saved analysis."""
+    cache_filter = "" if overwrite else """
+          AND (transcription IS NULL OR TRIM(transcription) = '')"""
+    with self._get_connection() as conn:
+      return self._execute_and_fetch_all(
+        conn,
+        f"""
+        SELECT * FROM problems
+        WHERE session_id = ?
+          AND problem_number = ?
+          {cache_filter}
+        ORDER BY id
+        """,
+        (session_id, problem_number)
       )
 
   def get_comparison_rows_for_session(self, session_id: int) -> List[Dict]:
@@ -332,7 +362,12 @@ class ProblemRepository(BaseRepository[Problem]):
           """
           SELECT * FROM problems
           WHERE session_id = ? AND problem_number = ? AND graded = 0
-          ORDER BY is_blank ASC, RANDOM()
+          ORDER BY CASE
+            WHEN transcription_is_blank = 1 THEN 3
+            WHEN transcription_is_effectively_blank = 1 THEN 2
+            WHEN transcription_is_relevant = 0 THEN 1
+            ELSE 0
+          END, is_blank ASC, RANDOM()
           LIMIT 1
           """,
           (session_id, problem_number)
@@ -344,7 +379,12 @@ class ProblemRepository(BaseRepository[Problem]):
         SELECT * FROM problems
         WHERE session_id = ? AND problem_number = ? AND graded = 0
           AND id NOT IN ({placeholders})
-        ORDER BY is_blank ASC, RANDOM()
+        ORDER BY CASE
+          WHEN transcription_is_blank = 1 THEN 3
+          WHEN transcription_is_effectively_blank = 1 THEN 2
+          WHEN transcription_is_relevant = 0 THEN 1
+          ELSE 0
+        END, is_blank ASC, RANDOM()
         LIMIT 1
       """, (session_id, problem_number, *exclude_ids))
       row = cursor.fetchone()
@@ -375,7 +415,12 @@ class ProblemRepository(BaseRepository[Problem]):
           LEFT JOIN subjective_triage st ON st.problem_id = p.id
           WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
             AND st.problem_id IS NULL
-          ORDER BY p.is_blank ASC, RANDOM()
+          ORDER BY CASE
+            WHEN p.transcription_is_blank = 1 THEN 3
+            WHEN p.transcription_is_effectively_blank = 1 THEN 2
+            WHEN p.transcription_is_relevant = 0 THEN 1
+            ELSE 0
+          END, p.is_blank ASC, RANDOM()
           LIMIT 1
           """,
           (session_id, problem_number)
@@ -390,7 +435,12 @@ class ProblemRepository(BaseRepository[Problem]):
         WHERE p.session_id = ? AND p.problem_number = ? AND p.graded = 0
           AND st.problem_id IS NULL
           AND p.id NOT IN ({placeholders})
-        ORDER BY p.is_blank ASC, RANDOM()
+        ORDER BY CASE
+          WHEN p.transcription_is_blank = 1 THEN 3
+          WHEN p.transcription_is_effectively_blank = 1 THEN 2
+          WHEN p.transcription_is_relevant = 0 THEN 1
+          ELSE 0
+        END, p.is_blank ASC, RANDOM()
         LIMIT 1
       """, (session_id, problem_number, *exclude_ids))
       row = cursor.fetchone()
@@ -633,7 +683,47 @@ class ProblemRepository(BaseRepository[Problem]):
       """, tuple(problem_ids))
       return int(cursor.rowcount or 0)
 
-  def update_transcription(self, problem_id: int, transcription: str, model: str) -> None:
+  def clear_grades_for_problem_number(self, session_id: int,
+                                      problem_number: int) -> int:
+    """Clear every submitted grade for one problem in a session.
+
+    Handwriting analysis and subjective triage assignments are intentionally
+    retained, so the problem can be regraded without repeating that work.
+    Manual and AI blank decisions are grade outcomes, and are reset along with
+    the score; import-time blank heuristics are preserved.
+    """
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        UPDATE problems
+        SET score = NULL,
+            feedback = NULL,
+            ai_reasoning = NULL,
+            graded = 0,
+            graded_at = NULL,
+            is_blank = CASE
+              WHEN LOWER(COALESCE(blank_method, '')) IN ('manual', 'ai') THEN 0
+              ELSE is_blank
+            END,
+            blank_confidence = CASE
+              WHEN LOWER(COALESCE(blank_method, '')) IN ('manual', 'ai') THEN NULL
+              ELSE blank_confidence
+            END,
+            blank_method = CASE
+              WHEN LOWER(COALESCE(blank_method, '')) IN ('manual', 'ai') THEN NULL
+              ELSE blank_method
+            END,
+            blank_reasoning = CASE
+              WHEN LOWER(COALESCE(blank_method, '')) IN ('manual', 'ai') THEN NULL
+              ELSE blank_reasoning
+            END
+        WHERE session_id = ? AND problem_number = ? AND graded = 1
+      """, (session_id, problem_number))
+      return int(cursor.rowcount or 0)
+
+  def update_transcription(self, problem_id: int, transcription: str, model: str,
+                           is_blank: bool, is_effectively_blank: Optional[bool],
+                           is_relevant: Optional[bool]) -> None:
     """
     Cache transcription for a problem.
 
@@ -641,14 +731,22 @@ class ProblemRepository(BaseRepository[Problem]):
       problem_id: Problem primary key
       transcription: Transcribed text
       model: Model name used for transcription
+      is_blank: Blank judgment returned by the transcription model
+      is_effectively_blank: Whether content is only doodles or stray marks
+      is_relevant: Whether content attempts to answer the printed question
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
       cursor.execute("""
         UPDATE problems
-        SET transcription = ?, transcription_model = ?, transcription_cached_at = CURRENT_TIMESTAMP
+        SET transcription = ?, transcription_model = ?,
+            transcription_is_blank = ?, transcription_is_effectively_blank = ?,
+            transcription_is_relevant = ?, transcription_cached_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      """, (transcription, model, problem_id))
+      """, (transcription, model, 1 if is_blank else 0,
+            None if is_effectively_blank is None else int(is_effectively_blank),
+            None if is_relevant is None else int(is_relevant),
+            problem_id))
 
   def update_qr_data(self, problem_id: int, max_points: float, encrypted_data: Optional[str] = None) -> None:
     """
