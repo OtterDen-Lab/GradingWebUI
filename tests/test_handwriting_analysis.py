@@ -3,9 +3,8 @@
 import pytest
 
 from grading_web_ui.web_api.routes.problems import (
-  _html_to_plain_text,
   _parse_handwriting_analysis,
-  _parse_text_classification,
+  _parse_relevance_classification,
 )
 
 
@@ -46,13 +45,5 @@ def test_rejects_non_json_handwriting_analysis():
     _parse_handwriting_analysis("This is not JSON")
 
 
-def test_parses_text_only_classification_json():
-  assert _parse_text_classification(
-    '{"is_effectively_blank": "true", "is_relevant": false}'
-  ) == (True, False)
-
-
-def test_regenerated_question_html_is_compacted_for_text_classifier():
-  assert _html_to_plain_text("<p>Solve <strong>x + 2 = 5</strong>.</p>") == (
-    "Solve x + 2 = 5."
-  )
+def test_parses_text_only_relevance_json():
+  assert _parse_relevance_classification('{"is_relevant": "false"}') is False

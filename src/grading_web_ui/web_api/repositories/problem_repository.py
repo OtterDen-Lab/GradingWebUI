@@ -364,7 +364,6 @@ class ProblemRepository(BaseRepository[Problem]):
           WHERE session_id = ? AND problem_number = ? AND graded = 0
           ORDER BY CASE
             WHEN transcription_is_blank = 1 THEN 3
-            WHEN transcription_is_effectively_blank = 1 THEN 2
             WHEN transcription_is_relevant = 0 THEN 1
             ELSE 0
           END, is_blank ASC, RANDOM()
@@ -381,7 +380,6 @@ class ProblemRepository(BaseRepository[Problem]):
           AND id NOT IN ({placeholders})
         ORDER BY CASE
           WHEN transcription_is_blank = 1 THEN 3
-          WHEN transcription_is_effectively_blank = 1 THEN 2
           WHEN transcription_is_relevant = 0 THEN 1
           ELSE 0
         END, is_blank ASC, RANDOM()
@@ -417,7 +415,6 @@ class ProblemRepository(BaseRepository[Problem]):
             AND st.problem_id IS NULL
           ORDER BY CASE
             WHEN p.transcription_is_blank = 1 THEN 3
-            WHEN p.transcription_is_effectively_blank = 1 THEN 2
             WHEN p.transcription_is_relevant = 0 THEN 1
             ELSE 0
           END, p.is_blank ASC, RANDOM()
@@ -437,7 +434,6 @@ class ProblemRepository(BaseRepository[Problem]):
           AND p.id NOT IN ({placeholders})
         ORDER BY CASE
           WHEN p.transcription_is_blank = 1 THEN 3
-          WHEN p.transcription_is_effectively_blank = 1 THEN 2
           WHEN p.transcription_is_relevant = 0 THEN 1
           ELSE 0
         END, p.is_blank ASC, RANDOM()

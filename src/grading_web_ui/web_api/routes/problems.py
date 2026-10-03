@@ -6,8 +6,6 @@ import os
 import asyncio
 import threading
 import hashlib
-import re
-from html import unescape
 from uuid import uuid4
 from time import perf_counter
 
@@ -380,18 +378,6 @@ def _build_regeneration_response(problem_id: int, problem,
   return response
 
 
-def _html_to_plain_text(value: str) -> str:
-  """Convert regenerated question HTML into compact text for AI context."""
-  text = re.sub(r"<(?:br|/p|/div|/li|/tr|/h[1-6])\\b[^>]*>", "\n",
-                value or "", flags=re.IGNORECASE)
-  text = re.sub(r"<[^>]+>", " ", text)
-  text = unescape(text)
-  text = re.sub(r"[ \t]+", " ", text)
-  text = re.sub(r"\s+([,.;:!?])", r"\1", text)
-  text = re.sub(r"\n\s*\n+", "\n", text)
-  return text.strip()
-
-
 def _get_regenerated_question_text(problem) -> Optional[str]:
   """Regenerate the exact seeded question for one QR-backed response.
 
@@ -421,7 +407,7 @@ def _get_regenerated_question_text(problem) -> Optional[str]:
   question_html = response.get("answer_key_html")
   if not isinstance(question_html, str) or not question_html.strip():
     return None
-  return _html_to_plain_text(question_html)
+  return question_html.strip()
 
 
 async def _regenerate_answer_payload(problem) -> dict:
@@ -1291,17 +1277,17 @@ def _parse_handwriting_analysis(
   return transcription, is_blank, is_effectively_blank, is_relevant
 
 
-def _parse_text_classification(raw_response: str) -> tuple[bool, bool]:
-  """Parse the lightweight relevance/effectively-blank JSON response."""
+def _parse_relevance_classification(raw_response: str) -> bool:
+  """Parse the lightweight text-only relevance JSON response."""
   payload_text = (raw_response or "").strip()
   if payload_text.startswith("```") and payload_text.endswith("```"):
     payload_text = "\n".join(payload_text.splitlines()[1:-1]).strip()
   try:
     payload = json.loads(payload_text)
   except (TypeError, json.JSONDecodeError) as error:
-    raise ValueError("Model did not return text-classification JSON") from error
+    raise ValueError("Model did not return relevance-classification JSON") from error
   if not isinstance(payload, dict):
-    raise ValueError("Text-classification JSON must be an object")
+    raise ValueError("Relevance-classification JSON must be an object")
 
   def read_bool(field: str) -> bool:
     value = payload.get(field)
@@ -1309,9 +1295,9 @@ def _parse_text_classification(raw_response: str) -> tuple[bool, bool]:
       return value
     if isinstance(value, str) and value.strip().lower() in ("true", "false"):
       return value.strip().lower() == "true"
-    raise ValueError(f"Text-classification {field} must be true or false")
+    raise ValueError(f"Relevance-classification {field} must be true or false")
 
-  return read_bool("is_effectively_blank"), read_bool("is_relevant")
+  return read_bool("is_relevant")
 
 
 def _decipher_handwriting(problem_id: int, model: str, user_id: int,
@@ -1373,6 +1359,8 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
         query, attachments=[("png", image_base64)],
         max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS,
         json_output=True)
+      log.debug("Ollama handwriting transcription response for problem %s: %r",
+                problem_id, transcription)
       model_name = f"Ollama ({usage.get('model', server['active_model'])} on {server['name']})"
     else:
 
@@ -1413,22 +1401,22 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
                   model_name, problem_id, error)
       raise HTTPException(status_code=500, detail=str(error)) from error
 
-    # Relevance and effectively-blank judgments are intentionally a second,
-    # text-only pass. The vision crop includes printed question material, which
-    # is useful for transcription but can distort those semantic judgments.
+    # Relevance is intentionally a second, text-only pass. The vision crop
+    # includes printed question material, which can distort semantic judgment.
     def query_followup(prompt: str, attachments: list[tuple[str, str]],
                        max_tokens: int, json_output: bool = False) -> str:
       if selected_model == "ollama":
         response_text, _ = ai.query_ai(
           prompt, attachments=attachments, max_response_tokens=max_tokens,
           json_output=json_output)
+        log.debug("Ollama handwriting follow-up response for problem %s: %r",
+                  problem_id, response_text)
       else:
         response_text, _ = ai.query_ai(
           prompt, attachments=attachments, max_response_tokens=max_tokens,
           candidate_models=[selection.model_id])
       return response_text.strip()
 
-    is_effectively_blank = None
     is_relevant = None
     if transcription and not is_blank:
       metadata_repo = ProblemMetadataRepository()
@@ -1452,19 +1440,25 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
 
         if question_text:
           classification_response = query_followup(
-            "Classify a student's transcribed exam response against its question. "
-            "Return only JSON with exactly these boolean fields: "
-            "{\"is_effectively_blank\": true or false, "
-            "\"is_relevant\": true or false}. "
-            "is_effectively_blank is true when the response is only a doodle, "
-            "stray mark, name, isolated symbol, or other non-answer content. "
-            "is_relevant is true only when the substantive response attempts to "
-            "answer the question.\n\n"
+            "Determine whether the student's transcribed response attempts to "
+            "answer the exam question. This is a relevance judgment, not a "
+            "correctness, completeness, quality, or syntax judgment. Return only "
+            "JSON: {\"is_relevant\": true or false}.\n\n"
+            "Set is_relevant=true for any recognizable attempt to answer, including "
+            "a short answer, a partial answer, an incorrect answer, intermediate "
+            "work, equations, notation, pseudocode, identifiers, code fragments, "
+            "or code in any language. For programming questions, treat code as "
+            "relevant even if it is incomplete, non-compiling, poorly formatted, "
+            "or lacks explanation. Do not require the response to match a reference "
+            "answer.\n"
+            "Set is_relevant=false only when the response is clearly unrelated to "
+            "the question, is conversational text, is a name/doodle, or is random "
+            "letters/symbols with no plausible connection. Do not mark a response "
+            "relevant solely because it contains letters, arrows, or punctuation.\n\n"
             f"Question:\n{question_text}\n\n"
             f"Student response:\n{transcription}",
             [], 256, json_output=True)
-          is_effectively_blank, is_relevant = _parse_text_classification(
-            classification_response)
+          is_relevant = _parse_relevance_classification(classification_response)
       except Exception as error:
         # Preserve a successful transcription even if the optional semantic
         # classifier or one-time question extraction fails.
@@ -1475,7 +1469,7 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       "handwriting", timing_provider, timing_model,
       (perf_counter() - timing_start) * 1000, "success", timing_server)
     problem_repo.update_transcription(
-      problem_id, transcription, model_name, is_blank, is_effectively_blank,
+      problem_id, transcription, model_name, is_blank, None,
       is_relevant)
 
     return {
@@ -1483,7 +1477,7 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       "transcription": transcription,
       "model": model_name,
       "is_blank": is_blank,
-      "is_effectively_blank": is_effectively_blank,
+      "is_effectively_blank": None,
       "is_relevant": is_relevant,
     }
   except HTTPException:
@@ -1521,15 +1515,14 @@ def _batch_decipher_handwriting(job_id: str, problem_ids: list[int], model: str,
         _handwriting_jobs[job_id]["succeeded"] += 1
         if result.get("is_blank"):
           _handwriting_jobs[job_id]["reported_blank"] += 1
-        if result.get("is_effectively_blank"):
-          _handwriting_jobs[job_id]["reported_effectively_blank"] += 1
         if result.get("is_relevant"):
           _handwriting_jobs[job_id]["reported_relevant"] += 1
         elif result.get("is_relevant") is False and \
-            not result.get("is_blank") and not result.get("is_effectively_blank"):
+            not result.get("is_blank"):
           _handwriting_jobs[job_id]["reported_irrelevant"] += 1
-        if result.get("is_effectively_blank") is None or \
-            result.get("is_relevant") is None:
+        # Blank responses intentionally skip the text-only classifier. Count
+        # only nonblank responses that should have received that second pass.
+        if not result.get("is_blank") and result.get("is_relevant") is None:
           _handwriting_jobs[job_id]["classification_incomplete"] += 1
     finally:
       with _handwriting_jobs_lock:
@@ -1585,7 +1578,6 @@ async def decipher_all_handwriting(
       "succeeded": 0,
       "failed": 0,
       "reported_blank": 0,
-      "reported_effectively_blank": 0,
       "reported_irrelevant": 0,
       "reported_relevant": 0,
       "classification_incomplete": 0,

@@ -1956,7 +1956,6 @@ function renderHandwritingAnalysisIndicator() {
 
     const analysisAvailable = [
         currentProblem.transcription_is_blank,
-        currentProblem.transcription_is_effectively_blank,
         currentProblem.transcription_is_relevant,
     ].some((value) => value !== null && value !== undefined);
     if (!analysisAvailable) return;
@@ -1964,8 +1963,6 @@ function renderHandwritingAnalysisIndicator() {
     const badges = [];
     if (currentProblem.transcription_is_blank === true) {
         badges.push('<span style="background:#4b5563;color:white;padding:3px 7px;border-radius:999px;">AI handwriting: blank</span>');
-    } else if (currentProblem.transcription_is_effectively_blank === true) {
-        badges.push('<span style="background:#9a3412;color:white;padding:3px 7px;border-radius:999px;">AI handwriting: effectively blank</span>');
     } else if (currentProblem.transcription_is_relevant === false) {
         badges.push('<span style="background:#7f1d1d;color:white;padding:3px 7px;border-radius:999px;">AI handwriting: irrelevant</span>');
     } else if (currentProblem.transcription_is_relevant === true) {
@@ -4897,13 +4894,11 @@ async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
     decipherAllStatus.dataset.sessionId = String(sessionId);
     decipherAllStatus.dataset.problemNumber = String(problemNumber);
     const blankSummary = `; ${job.reported_blank || 0} blank`;
-    const effectivelyBlankSummary =
-        `; ${job.reported_effectively_blank || 0} effectively blank`;
     const irrelevantSummary = `; ${job.reported_irrelevant || 0} irrelevant`;
     const incompleteSummary = job.classification_incomplete
-        ? `; ${job.classification_incomplete} classification incomplete` : '';
+        ? `; ${job.classification_incomplete} secondary classifications unavailable` : '';
     const classifiedNonRelevant = (job.reported_blank || 0) +
-        (job.reported_effectively_blank || 0) + (job.reported_irrelevant || 0);
+        (job.reported_irrelevant || 0);
     // Infer this for a batch already running during an app upgrade, whose
     // in-memory job record does not yet have reported_relevant.
     const relevantCount = job.reported_relevant ??
@@ -4911,8 +4906,8 @@ async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
     const relevantSummary = `; ${relevantCount} relevant`;
     const failureSummary = job.failed ? `; ${job.failed} failed` : '';
     decipherAllStatus.textContent = job.status === 'completed'
-        ? `Complete: ${job.succeeded}/${job.total} analyzed${relevantSummary}${irrelevantSummary}${effectivelyBlankSummary}${blankSummary}${incompleteSummary}${failureSummary}`
-        : `Analyzing: ${job.processed}/${job.total}${relevantSummary}${irrelevantSummary}${effectivelyBlankSummary}${blankSummary}${incompleteSummary}${failureSummary}`;
+        ? `Complete: ${job.succeeded}/${job.total} analyzed${relevantSummary}${irrelevantSummary}${blankSummary}${incompleteSummary}${failureSummary}`
+        : `Analyzing: ${job.processed}/${job.total}${relevantSummary}${irrelevantSummary}${blankSummary}${incompleteSummary}${failureSummary}`;
     return job.status === 'completed';
 }
 
