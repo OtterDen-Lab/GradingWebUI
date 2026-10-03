@@ -18,8 +18,8 @@ def test_accepts_full_handwriting_analysis_json():
 
 def test_accepts_legacy_two_field_json_from_smaller_models():
   assert _parse_handwriting_analysis(
-    '{"is_blank": true, "text": ""}'
-  ) == ("", True, None, None)
+    '{"is_blank": true, "text": "[blank]"}'
+  ) == ("[blank]", True, None, None)
 
 
 def test_marks_legacy_nonblank_json_as_classification_incomplete():

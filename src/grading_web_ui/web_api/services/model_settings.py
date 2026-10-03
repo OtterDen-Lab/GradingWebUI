@@ -20,11 +20,15 @@ BUILT_IN_TRANSCRIPTION_INSTRUCTIONS = (
   "even if the image contains printed question text, instructions, answer boxes, "
   "ruled lines, page labels, QR codes, scan shadows, or other pre-printed material.\n"
   "Do not set is_blank=false merely because printed text or form elements are visible.\n"
+  "Before reading the printed question, first look for clearly visible student-created ink. "
+  "If there is no such ink, do not infer or answer the question: return the blank marker.\n"
   "Do not decide whether the response is relevant or effectively blank; a separate "
   "text-only analysis performs those classifications.\n\n"
   "Return only a JSON object with exactly these fields: "
   "{\"is_blank\": true or false, \"text\": \"the transcription\"}. "
-  "Set text to an empty string when is_blank is true. Do not use Markdown fences.")
+  "When is_blank is true, set text to exactly \"[blank]\". \"[blank]\" is the "
+  "correct answer for an empty response; never replace it with an inferred answer. "
+  "Do not use Markdown fences.")
 
 
 @dataclass(frozen=True)

@@ -1423,7 +1423,7 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
 
     is_effectively_blank = None
     is_relevant = None
-    if transcription:
+    if transcription and not is_blank:
       metadata_repo = ProblemMetadataRepository()
       try:
         question_text = _get_regenerated_question_text(problem)

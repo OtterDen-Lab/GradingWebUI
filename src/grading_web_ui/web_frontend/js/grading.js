@@ -1974,10 +1974,14 @@ function renderHandwritingAnalysisIndicator() {
 
     const heuristicBlank = Boolean(currentProblem.is_blank);
     const handwritingBlank = currentProblem.transcription_is_blank;
-    if (typeof handwritingBlank === 'boolean' && heuristicBlank !== handwritingBlank) {
-        badges.push(
-            `<span style="background:#b45309;color:white;padding:3px 7px;border-radius:999px;">Blank detectors disagree: ${heuristicBlank ? 'heuristic says blank' : 'heuristic says not blank'}, AI says ${handwritingBlank ? 'blank' : 'not blank'}</span>`
-        );
+    if (typeof handwritingBlank === 'boolean') {
+        if (heuristicBlank && handwritingBlank) {
+            badges.push('<span style="background:#1d4ed8;color:white;padding:3px 7px;border-radius:999px;">Strong blank signal: heuristic and AI agree</span>');
+        } else if (heuristicBlank !== handwritingBlank) {
+            badges.push(
+                `<span style="background:#b45309;color:white;padding:3px 7px;border-radius:999px;">Blank detectors disagree: ${heuristicBlank ? 'heuristic says blank' : 'heuristic says not blank'}, AI says ${handwritingBlank ? 'blank' : 'not blank'}</span>`
+            );
+        }
     }
 
     const indicator = document.createElement('div');
