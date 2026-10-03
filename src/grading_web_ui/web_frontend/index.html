@@ -1121,17 +1121,28 @@
 
     <!-- Batch Handwriting Analysis Dialog -->
     <div id="handwriting-batch-dialog" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:2100;align-items:center;justify-content:center;">
-        <div style="background:white;border-radius:8px;padding:22px;width:min(460px,calc(100vw - 32px));box-sizing:border-box;">
-            <h3 style="margin:0 0 10px;">Analyze All Handwriting</h3>
-            <p style="margin:0 0 16px;color:var(--gray-700);">Analyze all submissions for the current problem, including responses marked blank.</p>
-            <label style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
-                Model
-                <select id="handwriting-batch-model"></select>
-            </label>
-            <label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:20px;">
-                <input id="handwriting-batch-overwrite" type="checkbox" style="margin-top:3px;">
-                <span><strong>Overwrite existing analysis</strong><br><small style="color:var(--gray-700);">Re-run responses that already have a saved transcription.</small></span>
-            </label>
+        <div style="background:white;border-radius:8px;padding:22px;width:min(520px,calc(100vw - 32px));box-sizing:border-box;">
+            <h3 id="handwriting-batch-title" style="margin:0 0 10px;">Analyze All Handwriting</h3>
+            <p id="handwriting-batch-description" style="margin:0 0 16px;color:var(--gray-700);">Analyze all submissions for the current problem, including responses marked blank.</p>
+            <div id="handwriting-batch-options">
+                <label style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
+                    Model
+                    <select id="handwriting-batch-model"></select>
+                </label>
+                <label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:20px;">
+                    <input id="handwriting-batch-overwrite" type="checkbox" style="margin-top:3px;">
+                    <span><strong>Overwrite existing analysis</strong><br><small style="color:var(--gray-700);">Re-run responses that already have a saved transcription.</small></span>
+                </label>
+            </div>
+            <div id="handwriting-batch-progress" style="display:none;margin:8px 0 20px;">
+                <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-weight:600;">
+                    <span>Overall progress</span><span id="handwriting-batch-overall-label">0 / 0</span>
+                </div>
+                <div style="height:12px;background:var(--gray-200);border-radius:999px;overflow:hidden;margin-bottom:16px;">
+                    <div id="handwriting-batch-overall-fill" style="height:100%;width:0;background:#2563eb;transition:width 180ms ease,background-color 180ms ease;"></div>
+                </div>
+                <div id="handwriting-batch-buckets" style="display:flex;flex-direction:column;gap:9px;"></div>
+            </div>
             <div style="display:flex;justify-content:flex-end;gap:10px;">
                 <button id="handwriting-batch-cancel" class="btn" type="button">Cancel</button>
                 <button id="handwriting-batch-start" class="btn btn-primary" type="button">Start Analysis</button>

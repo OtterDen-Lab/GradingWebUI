@@ -4538,8 +4538,16 @@ const handwritingBatchModel = document.getElementById('handwriting-batch-model')
 const handwritingBatchOverwrite = document.getElementById('handwriting-batch-overwrite');
 const handwritingBatchCancel = document.getElementById('handwriting-batch-cancel');
 const handwritingBatchStart = document.getElementById('handwriting-batch-start');
+const handwritingBatchTitle = document.getElementById('handwriting-batch-title');
+const handwritingBatchDescription = document.getElementById('handwriting-batch-description');
+const handwritingBatchOptions = document.getElementById('handwriting-batch-options');
+const handwritingBatchProgress = document.getElementById('handwriting-batch-progress');
+const handwritingBatchOverallLabel = document.getElementById('handwriting-batch-overall-label');
+const handwritingBatchOverallFill = document.getElementById('handwriting-batch-overall-fill');
+const handwritingBatchBuckets = document.getElementById('handwriting-batch-buckets');
 const retryPremiumBtn = document.getElementById('retry-premium-btn');
 let transcriptionModelOptions = null;
+let completedHandwritingBatch = null;
 
 async function getTranscriptionModelLabel(selection) {
     try {
@@ -4908,7 +4916,51 @@ async function watchHandwritingAnalysis(sessionId, problemNumber, jobId) {
     decipherAllStatus.textContent = job.status === 'completed'
         ? `Complete: ${job.succeeded}/${job.total} analyzed${relevantSummary}${irrelevantSummary}${blankSummary}${incompleteSummary}${failureSummary}`
         : `Analyzing: ${job.processed}/${job.total}${relevantSummary}${irrelevantSummary}${blankSummary}${incompleteSummary}${failureSummary}`;
+    if (job.status === 'completed') {
+        completedHandwritingBatch = { sessionId, problemNumber };
+    }
+    renderHandwritingBatchProgress(job);
     return job.status === 'completed';
+}
+
+function renderHandwritingBatchProgress(job) {
+    const total = Math.max(Number(job.total) || 0, 1);
+    const processed = Number(job.processed) || 0;
+    const relevant = Number(job.reported_relevant) || 0;
+    const irrelevant = Number(job.reported_irrelevant) || 0;
+    const blank = Number(job.reported_blank) || 0;
+    const unavailable = Number(job.classification_incomplete) || 0;
+    const failed = Number(job.failed) || 0;
+    const complete = job.status === 'completed';
+    const bucketRows = [
+        ['Relevant', relevant, '#15803d'],
+        ['Irrelevant', irrelevant, '#b91c1c'],
+        ['Blank', blank, '#4b5563'],
+        ['Secondary classification unavailable', unavailable, '#b45309'],
+        ['Failed', failed, '#dc2626'],
+    ];
+
+    handwritingBatchOverallLabel.textContent = `${processed} / ${job.total || 0}`;
+    handwritingBatchOverallFill.style.width = `${Math.min((processed / total) * 100, 100)}%`;
+    handwritingBatchOverallFill.style.backgroundColor = complete ? '#16a34a' : '#2563eb';
+    handwritingBatchBuckets.innerHTML = bucketRows.map(([label, count, color]) => `
+        <div>
+            <div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:3px;">
+                <span>${label}</span><strong>${count}</strong>
+            </div>
+            <div style="height:8px;background:var(--gray-200);border-radius:999px;overflow:hidden;">
+                <div style="height:100%;width:${Math.min((count / total) * 100, 100)}%;background:${color};transition:width 180ms ease;"></div>
+            </div>
+        </div>
+    `).join('');
+
+    if (complete) {
+        handwritingBatchTitle.textContent = 'Handwriting Analysis Complete';
+        handwritingBatchDescription.textContent = 'Review the summary, then select Done to refresh the current response.';
+        handwritingBatchCancel.textContent = 'Done';
+        handwritingBatchCancel.style.display = '';
+        handwritingBatchStart.style.display = 'none';
+    }
 }
 
 function clearStaleHandwritingBatchStatus() {
@@ -4928,6 +4980,13 @@ async function openHandwritingBatchDialog() {
     }
 
     handwritingBatchDialog.style.display = 'flex';
+    completedHandwritingBatch = null;
+    handwritingBatchTitle.textContent = 'Analyze All Handwriting';
+    handwritingBatchDescription.textContent = 'Analyze all submissions for the current problem, including responses marked blank.';
+    handwritingBatchOptions.style.display = '';
+    handwritingBatchProgress.style.display = 'none';
+    handwritingBatchCancel.textContent = 'Cancel';
+    handwritingBatchStart.style.display = '';
     handwritingBatchModel.innerHTML = '<option value="default">Loading configured default…</option>';
     const choices = ['default', 'ollama', 'small', 'medium', 'large'];
     const labels = await Promise.all(choices.map(getTranscriptionModelLabel));
@@ -4937,6 +4996,14 @@ async function openHandwritingBatchDialog() {
 
 function closeHandwritingBatchDialog() {
     handwritingBatchDialog.style.display = 'none';
+}
+
+async function refreshCurrentProblemAfterHandwritingBatch() {
+    if (!currentProblem?.id) return;
+    const response = await fetch(`${API_BASE}/problems/${currentProblem.id}`);
+    if (!response.ok) throw new Error('Unable to refresh the current response');
+    currentProblem = await response.json();
+    displayCurrentProblem();
 }
 
 // Queue every response for the current question, including ones marked blank.
@@ -4965,7 +5032,15 @@ async function startHandwritingBatch() {
         const result = await response.json();
         decipherAllStatus.dataset.sessionId = String(sessionId);
         decipherAllStatus.dataset.problemNumber = String(problemNumber);
-        closeHandwritingBatchDialog();
+        handwritingBatchOptions.style.display = 'none';
+        handwritingBatchProgress.style.display = '';
+        handwritingBatchCancel.style.display = 'none';
+        handwritingBatchStart.style.display = 'none';
+        renderHandwritingBatchProgress({
+            status: 'running', total: result.queued, processed: 0,
+            reported_relevant: 0, reported_irrelevant: 0, reported_blank: 0,
+            classification_incomplete: 0, failed: 0,
+        });
         decipherAllStatus.textContent = result.queued
             ? `Queued: 0/${result.queued}`
             : 'Complete: nothing to analyze';
@@ -4980,8 +5055,18 @@ async function startHandwritingBatch() {
                     clearInterval(timer);
                     console.error('Failed to check handwriting-analysis progress:', error);
                     decipherAllStatus.textContent = error.message;
+                    handwritingBatchDescription.textContent = error.message;
+                    handwritingBatchCancel.textContent = 'Close';
+                    handwritingBatchCancel.style.display = '';
                 }
             }, 1000);
+        } else {
+            completedHandwritingBatch = { sessionId, problemNumber };
+            renderHandwritingBatchProgress({
+                status: 'completed', total: 0, processed: 0,
+                reported_relevant: 0, reported_irrelevant: 0, reported_blank: 0,
+                classification_incomplete: 0, failed: 0,
+            });
         }
     } catch (error) {
         console.error('Failed to queue handwriting analysis:', error);
@@ -4994,10 +5079,21 @@ async function startHandwritingBatch() {
 }
 
 decipherAllBtn.addEventListener('click', openHandwritingBatchDialog);
-handwritingBatchCancel.addEventListener('click', closeHandwritingBatchDialog);
+handwritingBatchCancel.addEventListener('click', async () => {
+    if (completedHandwritingBatch) {
+        try {
+            await refreshCurrentProblemAfterHandwritingBatch();
+        } catch (error) {
+            console.error('Failed to refresh response after handwriting analysis:', error);
+            alert(error.message);
+            return;
+        }
+    }
+    closeHandwritingBatchDialog();
+});
 handwritingBatchStart.addEventListener('click', startHandwritingBatch);
-handwritingBatchDialog.addEventListener('click', (event) => {
-    if (event.target === handwritingBatchDialog) closeHandwritingBatchDialog();
+handwritingBatchDialog.addEventListener('click', () => {
+    // Keep this workflow in the modal until the user chooses Cancel or Done.
 });
 
 // =============================================================================
