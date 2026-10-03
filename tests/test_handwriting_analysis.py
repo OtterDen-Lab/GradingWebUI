@@ -2,7 +2,11 @@
 
 import pytest
 
-from grading_web_ui.web_api.routes.problems import _parse_handwriting_analysis
+from grading_web_ui.web_api.routes.problems import (
+  _html_to_plain_text,
+  _parse_handwriting_analysis,
+  _parse_text_classification,
+)
 
 
 def test_accepts_full_handwriting_analysis_json():
@@ -15,7 +19,7 @@ def test_accepts_full_handwriting_analysis_json():
 def test_accepts_legacy_two_field_json_from_smaller_models():
   assert _parse_handwriting_analysis(
     '{"is_blank": true, "text": ""}'
-  ) == ("", True, False, False)
+  ) == ("", True, None, None)
 
 
 def test_marks_legacy_nonblank_json_as_classification_incomplete():
@@ -34,3 +38,15 @@ def test_accepts_embedded_json_and_boolean_strings():
 def test_rejects_non_json_handwriting_analysis():
   with pytest.raises(ValueError, match="JSON"):
     _parse_handwriting_analysis("This is not JSON")
+
+
+def test_parses_text_only_classification_json():
+  assert _parse_text_classification(
+    '{"is_effectively_blank": "true", "is_relevant": false}'
+  ) == (True, False)
+
+
+def test_regenerated_question_html_is_compacted_for_text_classifier():
+  assert _html_to_plain_text("<p>Solve <strong>x + 2 = 5</strong>.</p>") == (
+    "Solve x + 2 = 5."
+  )

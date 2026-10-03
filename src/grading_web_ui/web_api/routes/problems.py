@@ -6,6 +6,8 @@ import os
 import asyncio
 import threading
 import hashlib
+import re
+from html import unescape
 from uuid import uuid4
 from time import perf_counter
 
@@ -376,6 +378,50 @@ def _build_regeneration_response(problem_id: int, problem,
     response['explanation_markdown'] = result['explanation_markdown']
 
   return response
+
+
+def _html_to_plain_text(value: str) -> str:
+  """Convert regenerated question HTML into compact text for AI context."""
+  text = re.sub(r"<(?:br|/p|/div|/li|/tr|/h[1-6])\\b[^>]*>", "\n",
+                value or "", flags=re.IGNORECASE)
+  text = re.sub(r"<[^>]+>", " ", text)
+  text = unescape(text)
+  text = re.sub(r"[ \t]+", " ", text)
+  text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+  text = re.sub(r"\n\s*\n+", "\n", text)
+  return text.strip()
+
+
+def _get_regenerated_question_text(problem) -> Optional[str]:
+  """Regenerate the exact seeded question for one QR-backed response.
+
+  The frozen YAML is session-scoped, but a QR seed may make the rendered
+  question different for each student. Therefore this deliberately uses the
+  per-problem regeneration cache instead of problem_metadata.question_text.
+  """
+  if not problem.qr_encrypted_data:
+    return None
+
+  session_metadata = SessionRepository().get_metadata(problem.session_id) or {}
+  quiz_yaml_text = session_metadata.get("quiz_yaml_text")
+  if not isinstance(quiz_yaml_text, str) or not quiz_yaml_text.strip():
+    quiz_yaml_text = None
+  cache_key = _cache_key_for_regeneration(problem, quiz_yaml_text)
+  response = _get_cached_regeneration(problem.id, cache_key)
+  if response is None:
+    result = regenerate_from_encrypted_compat(
+      encrypted_data=problem.qr_encrypted_data,
+      points=problem.max_points or 0.0,
+      yaml_text=quiz_yaml_text,
+      image_mode="none",
+    )
+    response = _build_regeneration_response(problem.id, problem, result)
+    _set_cached_regeneration(problem.id, cache_key, response)
+
+  question_html = response.get("answer_key_html")
+  if not isinstance(question_html, str) or not question_html.strip():
+    return None
+  return _html_to_plain_text(question_html)
 
 
 async def _regenerate_answer_payload(problem) -> dict:
@@ -1235,12 +1281,30 @@ def _parse_handwriting_analysis(
   transcription = text.strip()
   if not transcription and not is_blank:
     raise ValueError("Model returned an empty transcription without marking it blank")
-  if is_blank:
-    # A blank response is the final category in sorting, regardless of an
-    # inconsistent optional classification emitted by the model.
-    is_effectively_blank = False
-    is_relevant = False
   return transcription, is_blank, is_effectively_blank, is_relevant
+
+
+def _parse_text_classification(raw_response: str) -> tuple[bool, bool]:
+  """Parse the lightweight relevance/effectively-blank JSON response."""
+  payload_text = (raw_response or "").strip()
+  if payload_text.startswith("```") and payload_text.endswith("```"):
+    payload_text = "\n".join(payload_text.splitlines()[1:-1]).strip()
+  try:
+    payload = json.loads(payload_text)
+  except (TypeError, json.JSONDecodeError) as error:
+    raise ValueError("Model did not return text-classification JSON") from error
+  if not isinstance(payload, dict):
+    raise ValueError("Text-classification JSON must be an object")
+
+  def read_bool(field: str) -> bool:
+    value = payload.get(field)
+    if isinstance(value, bool):
+      return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+      return value.strip().lower() == "true"
+    raise ValueError(f"Text-classification {field} must be true or false")
+
+  return read_bool("is_effectively_blank"), read_bool("is_relevant")
 
 
 def _decipher_handwriting(problem_id: int, model: str, user_id: int,
@@ -1341,6 +1405,64 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       log.warning("Invalid handwriting-analysis result from %s for problem %s: %s",
                   model_name, problem_id, error)
       raise HTTPException(status_code=500, detail=str(error)) from error
+
+    # Relevance and effectively-blank judgments are intentionally a second,
+    # text-only pass. The vision crop includes printed question material, which
+    # is useful for transcription but can distort those semantic judgments.
+    def query_followup(prompt: str, attachments: list[tuple[str, str]],
+                       max_tokens: int, json_output: bool = False) -> str:
+      if selected_model == "ollama":
+        response_text, _ = ai.query_ai(
+          prompt, attachments=attachments, max_response_tokens=max_tokens,
+          json_output=json_output)
+      else:
+        response_text, _ = ai.query_ai(
+          prompt, attachments=attachments, max_response_tokens=max_tokens,
+          candidate_models=[selection.model_id])
+      return response_text.strip()
+
+    is_effectively_blank = None
+    is_relevant = None
+    if transcription:
+      metadata_repo = ProblemMetadataRepository()
+      try:
+        question_text = _get_regenerated_question_text(problem)
+        if not question_text:
+          question_text = metadata_repo.get_question_text(
+            problem.session_id, problem.problem_number)
+        if not question_text:
+          # This is only a legacy fallback for exams without QR regeneration
+          # or saved question text. QR-backed exams use their exact frozen-YAML
+          # question and per-student seed above.
+          question_text = query_followup(
+            "Extract only the printed exam question from this image. Ignore all "
+            "student handwriting, answer boxes, and page furniture. Return plain "
+            "question text only.",
+            [("png", image_base64)], 2000)
+          if question_text:
+            metadata_repo.upsert_question_text(
+              problem.session_id, problem.problem_number, question_text)
+
+        if question_text:
+          classification_response = query_followup(
+            "Classify a student's transcribed exam response against its question. "
+            "Return only JSON with exactly these boolean fields: "
+            "{\"is_effectively_blank\": true or false, "
+            "\"is_relevant\": true or false}. "
+            "is_effectively_blank is true when the response is only a doodle, "
+            "stray mark, name, isolated symbol, or other non-answer content. "
+            "is_relevant is true only when the substantive response attempts to "
+            "answer the question.\n\n"
+            f"Question:\n{question_text}\n\n"
+            f"Student response:\n{transcription}",
+            [], 256, json_output=True)
+          is_effectively_blank, is_relevant = _parse_text_classification(
+            classification_response)
+      except Exception as error:
+        # Preserve a successful transcription even if the optional semantic
+        # classifier or one-time question extraction fails.
+        log.warning("Text classification failed for problem %s: %s",
+                    problem_id, error)
 
     model_latency.record(
       "handwriting", timing_provider, timing_model,

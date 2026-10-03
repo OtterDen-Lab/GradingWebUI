@@ -13,7 +13,6 @@ BUILT_IN_TRANSCRIPTION_INSTRUCTIONS = (
   "Transcribe only the student's handwritten response.\n\n"
   "Do not solve, grade, interpret, correct, summarize, or editorialize.\n"
   "Do not transcribe printed text, including the question, instructions, labels, and point values.\n"
-  "Use the printed question only to determine whether the student's response is relevant; never include it in text.\n"
   "Preserve the student's wording, spelling, notation, and line breaks where possible.\n"
   "Use [illegible] only for text that cannot reasonably be determined from the visible handwriting.\n"
   "For is_blank, evaluate only marks made by the student in the response area. "
@@ -21,12 +20,10 @@ BUILT_IN_TRANSCRIPTION_INSTRUCTIONS = (
   "even if the image contains printed question text, instructions, answer boxes, "
   "ruled lines, page labels, QR codes, scan shadows, or other pre-printed material.\n"
   "Do not set is_blank=false merely because printed text or form elements are visible.\n"
-  "Set is_effectively_blank=true (and is_blank=false) for only doodles, stray marks, "
-  "a name, an isolated symbol, or other student-created non-answer content.\n"
-  "Set is_relevant=true only when the substantive response attempts to answer the printed question.\n\n"
+  "Do not decide whether the response is relevant or effectively blank; a separate "
+  "text-only analysis performs those classifications.\n\n"
   "Return only a JSON object with exactly these fields: "
-  "{\"is_blank\": true or false, \"is_effectively_blank\": true or false, "
-  "\"is_relevant\": true or false, \"text\": \"the transcription\"}. "
+  "{\"is_blank\": true or false, \"text\": \"the transcription\"}. "
   "Set text to an empty string when is_blank is true. Do not use Markdown fences.")
 
 
