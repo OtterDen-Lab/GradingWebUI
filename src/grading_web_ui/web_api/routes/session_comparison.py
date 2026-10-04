@@ -71,28 +71,53 @@ async def compare_sessions(request: SessionComparisonRequest,
           float(row["max_points"]) <= 0:
         continue
       submissions.setdefault(row["submission_id"], []).append(row)
-    normalized_totals = []
+    equal_weight_normalized = []
+    actual_scores = []
+    total_possible_scores = []
     for problems in submissions.values():
       if not all(row["graded"] and row["score"] is not None for row in problems):
         continue
       total_points = sum(float(row["max_points"]) for row in problems)
-      normalized_totals.append(max(0.0, min(
-        1.0, sum(float(row["score"]) for row in problems) / total_points)))
-    distribution = []
+      actual_score = sum(float(row["score"]) for row in problems)
+      # Treat each question equally here, unlike raw exam points where an
+      # eight-point question deliberately carries eight times the weight.
+      equal_weight_normalized.append(statistics.mean(
+        max(0.0, min(1.0, float(row["score"]) / float(row["max_points"])))
+        for row in problems))
+      actual_scores.append(actual_score)
+      total_possible_scores.append(total_points)
+    normalized_distribution = []
     for lower, upper in _BINS:
-      count = sum(lower / 100 <= value < upper / 100 for value in normalized_totals)
-      distribution.append({"label": f"{lower}–{100 if upper == 101 else upper}%",
-                           "count": count,
-                           "percentage": (count / len(normalized_totals) * 100)
-                           if normalized_totals else 0})
+      count = sum(lower / 100 <= value < upper / 100 for value in equal_weight_normalized)
+      normalized_distribution.append({"label": f"{lower}–{100 if upper == 101 else upper}%",
+                                      "count": count,
+                                      "percentage": (count / len(equal_weight_normalized) * 100)
+                                      if equal_weight_normalized else 0})
+    max_total_points = max(total_possible_scores, default=0.0)
+    actual_distribution = []
+    for lower, upper in _BINS:
+      lower_score = max_total_points * lower / 100
+      upper_score = max_total_points * (100 if upper == 101 else upper) / 100
+      count = sum(lower_score <= value < upper_score if upper != 101
+                  else lower_score <= value <= upper_score for value in actual_scores)
+      actual_distribution.append({
+        "label": f"{lower_score:g}–{upper_score:g}",
+        "count": count,
+        "percentage": (count / len(actual_scores) * 100) if actual_scores else 0,
+      })
     exam_distributions.append({
       "session": sessions[session_id],
       "exam_count": len(submissions),
-      "scored_exam_count": len(normalized_totals),
-      "mean_normalized": statistics.mean(normalized_totals) if normalized_totals else None,
-      "stddev_normalized": statistics.pstdev(normalized_totals)
-      if len(normalized_totals) > 1 else 0 if normalized_totals else None,
-      "distribution": distribution,
+      "scored_exam_count": len(equal_weight_normalized),
+      "mean_normalized": statistics.mean(equal_weight_normalized) if equal_weight_normalized else None,
+      "stddev_normalized": statistics.pstdev(equal_weight_normalized)
+      if len(equal_weight_normalized) > 1 else 0 if equal_weight_normalized else None,
+      "mean_actual_score": statistics.mean(actual_scores) if actual_scores else None,
+      "stddev_actual_score": statistics.pstdev(actual_scores)
+      if len(actual_scores) > 1 else 0 if actual_scores else None,
+      "max_total_points": max_total_points,
+      "normalized_distribution": normalized_distribution,
+      "actual_distribution": actual_distribution,
     })
   bucket_specs = [("All questions", None)]
   for bucket in request.buckets:
