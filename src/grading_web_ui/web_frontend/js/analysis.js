@@ -12,6 +12,7 @@
   const cancelButton = document.querySelector('#cancel-run');
   let activeRunId = null;
   let pollTimer = null;
+  const shownImages = new Map();
 
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -74,8 +75,8 @@
     resultContainer.innerHTML = [...grouped.entries()].map(([problemId, results], index) => {
       const heuristic = results[0].heuristic_is_blank ? '<span class="badge blank">Heuristic blank</span>' : '<span class="badge">Heuristic nonblank</span>';
       return `<article class="response"><h3>Response ${index + 1} ${heuristic}</h3>
-        <button type="button" class="show-image" data-problem-id="${problemId}">Show crop</button>
-        <div class="image-holder"></div><div class="model-grid">${results.map(result =>
+        <button type="button" class="show-image" data-problem-id="${problemId}">${shownImages.has(problemId) ? 'Crop shown' : 'Show crop'}</button>
+        <div class="image-holder">${shownImages.has(problemId) ? `<img class="response-image" alt="Response crop" src="data:image/png;base64,${shownImages.get(problemId)}">` : ''}</div><div class="model-grid">${results.sort((left, right) => run.models.indexOf(left.model_id) - run.models.indexOf(right.model_id)).map(result =>
           `<div class="model-result"><strong>${escapeHtml(result.model_id)}</strong> ${resultBadge(result)}
           <p><strong>Transcription</strong></p><pre>${escapeHtml(result.transcription || result.error || '—')}</pre>
           <details><summary>Raw responses and timing (${Math.round(result.duration_ms || 0)} ms)</summary>
@@ -87,13 +88,21 @@
   }
 
   async function showImage(button) {
-    const holder = button.nextElementSibling;
-    if (holder.querySelector('img')) return;
+    const problemId = Number(button.dataset.problemId);
+    if (shownImages.has(problemId)) return;
     button.disabled = true;
     try {
-      const image = await api(`/api/analysis/runs/${activeRunId}/problems/${button.dataset.problemId}/image`);
-      holder.innerHTML = `<img class="response-image" alt="Response crop" src="data:image/png;base64,${image.image_data}">`;
-    } catch (error) { holder.textContent = error.message; }
+      const image = await api(`/api/analysis/runs/${activeRunId}/problems/${problemId}/image`);
+      // Polling redraws the result list while a crop is loading. Keep image
+      // data outside the transient DOM so the next redraw displays it too.
+      shownImages.set(problemId, image.image_data);
+      const holder = button.nextElementSibling;
+      if (holder) holder.innerHTML = `<img class="response-image" alt="Response crop" src="data:image/png;base64,${image.image_data}">`;
+      button.textContent = 'Crop shown';
+    } catch (error) {
+      const holder = button.nextElementSibling;
+      if (holder) holder.textContent = error.message;
+    }
     button.disabled = false;
   }
 
@@ -119,6 +128,7 @@
       if (sampleSize.value) payload.sample_size = Number(sampleSize.value);
       const run = await api('/api/analysis/runs', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
       activeRunId = run.run_id;
+      shownImages.clear();
       panel.hidden = false;
       resultContainer.innerHTML = '';
       progressText.textContent = 'Queued…';

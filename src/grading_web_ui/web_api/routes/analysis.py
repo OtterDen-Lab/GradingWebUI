@@ -184,7 +184,9 @@ async def get_run(run_id: str, current_user: dict = Depends(get_current_user)):
     rows = conn.execute("""
       SELECT r.*, p.is_blank AS heuristic_is_blank
       FROM handwriting_analysis_results r JOIN problems p ON p.id = r.problem_id
-      WHERE r.run_id = ? ORDER BY r.problem_id, r.model_id
+      -- Result IDs reflect insertion order, which follows the requested
+      -- model order for every response in this run.
+      WHERE r.run_id = ? ORDER BY r.problem_id, r.id
     """, (run_id,)).fetchall()
   run["models"] = json.loads(run.pop("models_json"))
   run["problem_ids"] = json.loads(run.pop("problem_ids_json"))
