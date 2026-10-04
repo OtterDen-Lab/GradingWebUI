@@ -13,6 +13,7 @@
   let activeRunId = null;
   let pollTimer = null;
   const shownImages = new Map();
+  const expandedRawResponses = new Set();
 
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -75,20 +76,24 @@
     resultContainer.innerHTML = [...grouped.entries()].map(([problemId, results], index) => {
       const heuristic = results[0].heuristic_is_blank ? '<span class="badge blank">Heuristic blank</span>' : '<span class="badge">Heuristic nonblank</span>';
       return `<article class="response"><h3>Response ${index + 1} ${heuristic}</h3>
-        <button type="button" class="show-image" data-problem-id="${problemId}">${shownImages.has(problemId) ? 'Crop shown' : 'Show crop'}</button>
-        <div class="image-holder">${shownImages.has(problemId) ? `<img class="response-image" alt="Response crop" src="data:image/png;base64,${shownImages.get(problemId)}">` : ''}</div><div class="model-grid">${results.sort((left, right) => run.models.indexOf(left.model_id) - run.models.indexOf(right.model_id)).map(result =>
+        <button type="button" class="show-image" data-problem-id="${problemId}">${shownImages.has(String(problemId)) ? 'Crop shown' : 'Show crop'}</button>
+        <div class="image-holder">${shownImages.has(String(problemId)) ? `<img class="response-image" alt="Response crop" src="data:image/png;base64,${shownImages.get(String(problemId))}">` : ''}</div><div class="model-grid">${results.sort((left, right) => run.models.indexOf(left.model_id) - run.models.indexOf(right.model_id)).map(result =>
           `<div class="model-result"><strong>${escapeHtml(result.model_id)}</strong> ${resultBadge(result)}
           <p><strong>Transcription</strong></p><pre>${escapeHtml(result.transcription || result.error || '—')}</pre>
-          <details><summary>Raw responses and timing (${Math.round(result.duration_ms || 0)} ms)</summary>
+          <details class="raw-response" data-result-key="${escapeHtml(`${problemId}:${result.model_id}`)}" ${expandedRawResponses.has(`${problemId}:${result.model_id}`) ? 'open' : ''}><summary>Raw responses and timing (${Math.round(result.duration_ms || 0)} ms)</summary>
           <pre>${escapeHtml(result.raw_transcription_response || 'No transcription response recorded')}</pre>
           <pre>${escapeHtml(result.raw_relevance_response || 'No relevance response recorded')}</pre></details></div>`
         ).join('')}</div></article>`;
     }).join('') || '<p>Waiting for the first result…</p>';
     resultContainer.querySelectorAll('.show-image').forEach(button => button.addEventListener('click', () => showImage(button)));
+    resultContainer.querySelectorAll('.raw-response').forEach(details => details.addEventListener('toggle', () => {
+      if (details.open) expandedRawResponses.add(details.dataset.resultKey);
+      else expandedRawResponses.delete(details.dataset.resultKey);
+    }));
   }
 
   async function showImage(button) {
-    const problemId = Number(button.dataset.problemId);
+    const problemId = String(button.dataset.problemId);
     if (shownImages.has(problemId)) return;
     button.disabled = true;
     try {
@@ -129,6 +134,7 @@
       const run = await api('/api/analysis/runs', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
       activeRunId = run.run_id;
       shownImages.clear();
+      expandedRawResponses.clear();
       panel.hidden = false;
       resultContainer.innerHTML = '';
       progressText.textContent = 'Queued…';
