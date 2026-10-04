@@ -1,5 +1,6 @@
 """Cross-session, point-bucketed grading outcome comparisons."""
 import statistics
+import math
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -95,10 +96,13 @@ async def compare_sessions(request: SessionComparisonRequest,
                                       if equal_weight_normalized else 0})
     max_total_points = max(total_possible_scores, default=0.0)
     actual_distribution = []
-    for lower, upper in _BINS:
-      lower_score = max_total_points * lower / 100
-      upper_score = max_total_points * (100 if upper == 101 else upper) / 100
-      count = sum(lower_score <= value < upper_score if upper != 101
+    actual_bin_width = 10
+    actual_bin_count = max(1, math.ceil(max_total_points / actual_bin_width))
+    for index in range(actual_bin_count):
+      lower_score = index * actual_bin_width
+      upper_score = min((index + 1) * actual_bin_width, max_total_points)
+      is_last = index == actual_bin_count - 1
+      count = sum(lower_score <= value < upper_score if not is_last
                   else lower_score <= value <= upper_score for value in actual_scores)
       actual_distribution.append({
         "label": f"{lower_score:g}–{upper_score:g}",
@@ -116,6 +120,7 @@ async def compare_sessions(request: SessionComparisonRequest,
       "stddev_actual_score": statistics.pstdev(actual_scores)
       if len(actual_scores) > 1 else 0 if actual_scores else None,
       "max_total_points": max_total_points,
+      "actual_bin_width": actual_bin_width,
       "normalized_distribution": normalized_distribution,
       "actual_distribution": actual_distribution,
     })
