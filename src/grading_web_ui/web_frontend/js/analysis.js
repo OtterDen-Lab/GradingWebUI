@@ -51,7 +51,8 @@
     for (const session of sessions) {
       const option = document.createElement('option');
       option.value = session.id;
-      option.textContent = session.name || `Session ${session.id}`;
+      const name = session.session_name || session.assignment_name || 'Untitled session';
+      option.textContent = `${name} (Session ${session.id})`;
       sessionSelect.append(option);
     }
     modelCatalog = catalog.models;

@@ -122,7 +122,7 @@ from .database import init_database, get_db_connection
 from .services.quiz_encryption import install_quizgenerator_key_provider
 from .services.runtime_metrics import RuntimeMetrics
 from .startup_config import validate_startup_configuration
-from .routes import sessions, problems, uploads, canvas, matching, finalize, ai_grader, alignment, feedback_tags, auth, assignments, ai_settings, analysis
+from .routes import sessions, problems, uploads, canvas, matching, finalize, ai_grader, alignment, feedback_tags, auth, assignments, ai_settings, analysis, session_comparison
 from .auth import require_instructor
 
 # Optional debug routes (may not exist on all deployments)
@@ -257,6 +257,11 @@ async def handwriting_analysis_page():
   return FileResponse(Path(__file__).parent.parent / "web_frontend" / "analysis.html")
 
 
+@app.get("/comparison", include_in_schema=False)
+async def session_comparison_page():
+  return FileResponse(Path(__file__).parent.parent / "web_frontend" / "comparison.html")
+
+
 # Include routers
 app.include_router(auth.router,           prefix="/api/auth",           tags=["auth"])
 app.include_router(ai_settings.router,    prefix="/api/ai-settings",    tags=["ai-settings"])
@@ -271,6 +276,7 @@ app.include_router(ai_grader.router,      prefix="/api/ai-grader",      tags=["a
 app.include_router(alignment.router,      prefix="/api/alignment",      tags=["alignment"])
 app.include_router(feedback_tags.router,  prefix="/api/feedback-tags",  tags=["feedback-tags"])
 app.include_router(analysis.router,       prefix="/api/analysis",       tags=["analysis"])
+app.include_router(session_comparison.router, prefix="/api/session-comparison", tags=["session-comparison"])
 
 # Conditionally include debug routes if available
 if has_debug_routes:

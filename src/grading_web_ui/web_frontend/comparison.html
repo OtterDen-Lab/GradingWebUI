@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Session Comparison</title><link rel="stylesheet" href="/css/style.css">
+  <style>
+    main { max-width: 1600px; margin: 2rem auto; padding: 0 1rem 3rem; } .panel { background:#fff; border:1px solid #dbe3ef; border-radius:8px; padding:1.25rem; margin:1rem 0; }
+    .session-list, .bucket-list { display:grid; gap:.45rem; } .session-option { display:flex; gap:.5rem; align-items:center; padding:.35rem; border-bottom:1px solid #edf2f7; }
+    .bucket { display:grid; grid-template-columns: minmax(150px,1fr) minmax(180px,2fr) auto; gap:.5rem; align-items:center; } input, button { font:inherit; padding:.45rem; } input[type=text] { width:100%; box-sizing:border-box; }
+    button { border:0; border-radius:5px; background:#2563eb; color:#fff; cursor:pointer; } button.secondary { background:#64748b; } button.danger { background:#b91c1c; }
+    table { width:100%; border-collapse:collapse; font-size:.92rem; } th, td { padding:.55rem; text-align:left; border-bottom:1px solid #dbe3ef; vertical-align:top; } th { background:#f8fafc; }
+    .hist { display:flex; min-width:300px; height:20px; border-radius:4px; overflow:hidden; background:#e2e8f0; } .hist span { display:block; min-width:0; } .hist span:nth-child(1){background:#dc2626}.hist span:nth-child(2){background:#f97316}.hist span:nth-child(3){background:#eab308}.hist span:nth-child(4){background:#65a30d}.hist span:nth-child(5){background:#16a34a}
+    .legend { display:flex; gap:.8rem; flex-wrap:wrap; font-size:.82rem; color:#475569; margin:.4rem 0; } .metric { white-space:nowrap; font-variant-numeric:tabular-nums; }
+  </style>
+</head>
+<body><main>
+  <p><a href="/">← Back to grading</a></p><h1>Cross-Session Comparison</h1>
+  <p>Compare response-level outcomes across exams after normalizing each score by its question’s point value.</p>
+  <section class="panel"><h2>Sessions</h2><div id="sessions" class="session-list">Loading sessions…</div></section>
+  <section class="panel"><h2>Comparable question buckets</h2><p>Enter the point values that should be treated as comparable across selected sessions.</p><div id="buckets" class="bucket-list"></div><button class="secondary" id="add-bucket" type="button">Add bucket</button><button id="compare" type="button">Compare selected sessions</button></section>
+  <section class="panel" id="results-panel" hidden><h2>Results</h2><p>Score metrics include responses with a recorded score. Blank percentage uses all responses in the bucket and the existing grading blank flag.</p><div class="legend"><span>Distribution:</span><span>0–20%</span><span>20–40%</span><span>40–60%</span><span>60–80%</span><span>80–100%</span></div><div id="results"></div></section>
+</main><script src="/js/comparison.js"></script></body></html>
