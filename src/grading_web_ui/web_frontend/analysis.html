@@ -30,7 +30,11 @@
     .model-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-top: .5rem; }
     .model-list { border: 1px solid #dbe3ef; border-radius: 6px; padding: .5rem; max-height: 280px; overflow: auto; }
     .model-option, .selected-model { display: flex; gap: .55rem; align-items: center; padding: .35rem; border-bottom: 1px solid #edf2f7; }
-    .selected-model button { margin: 0 0 0 auto; padding: .2rem .45rem; }
+    .selected-actions { margin-left: auto; display: flex; gap: .3rem; }
+    .selected-actions button { margin: 0; padding: .2rem .45rem; }
+    .filters { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0; }
+    .filter-button { margin: 0; background: #64748b; }
+    .filter-button.active { background: #1d4ed8; }
   </style>
 </head>
 <body>
@@ -63,6 +67,12 @@
       </div>
       <div class="progress"><div id="progress-bar"></div></div>
       <p class="summary" id="progress-text"></p>
+      <div class="filters" id="result-filters" hidden>
+        <button type="button" class="filter-button" data-filter="heuristic_blank">Heuristic blank</button>
+        <button type="button" class="filter-button" data-filter="ai_blank">AI blank</button>
+        <button type="button" class="filter-button" data-filter="not_relevant">AI not relevant</button>
+        <button type="button" class="filter-button" data-filter="clear">Clear filters</button>
+      </div>
       <div id="results"></div>
     </section>
   </main>

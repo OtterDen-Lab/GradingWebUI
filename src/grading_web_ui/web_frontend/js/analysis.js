@@ -12,6 +12,7 @@
   const resultContainer = document.querySelector('#results');
   const cancelButton = document.querySelector('#cancel-run');
   const exportButton = document.querySelector('#export-csv');
+  const filters = document.querySelector('#result-filters');
   let activeRunId = null;
   let pollTimer = null;
   const shownImages = new Map();
@@ -19,6 +20,7 @@
   let modelCatalog = [];
   let selectedTargets = [];
   let currentRun = null;
+  const activeFilters = new Set();
 
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -70,7 +72,7 @@
     }));
     selectedModels.innerHTML = selectedTargets.length ? selectedTargets.map((target, index) => {
       const model = modelCatalog.find(item => item.id === target);
-      return `<div class="selected-model"><span>${index + 1}. ${escapeHtml(model?.label || target)}</span><button type="button" data-move="up" data-index="${index}" ${index ? '' : 'disabled'}>↑</button><button type="button" data-move="down" data-index="${index}" ${index < selectedTargets.length - 1 ? '' : 'disabled'}>↓</button></div>`;
+      return `<div class="selected-model"><span>${index + 1}. ${escapeHtml(model?.label || target)}</span><span class="selected-actions"><button type="button" data-move="up" data-index="${index}" ${index ? '' : 'disabled'}>↑</button><button type="button" data-move="down" data-index="${index}" ${index < selectedTargets.length - 1 ? '' : 'disabled'}>↓</button></span></div>`;
     }).join('') : 'Select one or more models.';
     selectedModels.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
       const index = Number(button.dataset.index);
@@ -105,7 +107,14 @@
       if (!grouped.has(result.problem_id)) grouped.set(result.problem_id, []);
       grouped.get(result.problem_id).push(result);
     }
-    resultContainer.innerHTML = [...grouped.entries()].map(([problemId, results], index) => {
+    filters.hidden = !grouped.size;
+    const visibleResponses = [...grouped.entries()].filter(([, results]) => {
+      if (!activeFilters.size) return true;
+      return (activeFilters.has('heuristic_blank') && results[0].heuristic_is_blank) ||
+        (activeFilters.has('ai_blank') && results.some(result => result.is_blank)) ||
+        (activeFilters.has('not_relevant') && results.some(result => result.is_relevant === false));
+    });
+    resultContainer.innerHTML = visibleResponses.map(([problemId, results], index) => {
       const heuristic = results[0].heuristic_is_blank ? '<span class="badge blank">Heuristic blank</span>' : '<span class="badge">Heuristic nonblank</span>';
       return `<article class="response"><h3>Response ${index + 1} ${heuristic}</h3>
         <button type="button" class="show-image" data-problem-id="${problemId}">${shownImages.has(String(problemId)) ? 'Crop shown' : 'Show crop'}</button>
@@ -116,7 +125,7 @@
           <pre>${escapeHtml(result.raw_transcription_response || 'No transcription response recorded')}</pre>
           <pre>${escapeHtml(result.raw_relevance_response || 'No relevance response recorded')}</pre></details></div>`
         ).join('')}</div></article>`;
-    }).join('') || '<p>Waiting for the first result…</p>';
+    }).join('') || (grouped.size ? '<p>No responses match the active filters.</p>' : '<p>Waiting for the first result…</p>');
     resultContainer.querySelectorAll('.show-image').forEach(button => button.addEventListener('click', () => showImage(button)));
     resultContainer.querySelectorAll('.raw-response').forEach(details => details.addEventListener('toggle', () => {
       if (details.open) expandedRawResponses.add(details.dataset.resultKey);
@@ -171,6 +180,8 @@
       activeRunId = run.run_id;
       shownImages.clear();
       expandedRawResponses.clear();
+      activeFilters.clear();
+      filters.querySelectorAll('[data-filter]').forEach(item => item.classList.remove('active'));
       panel.hidden = false;
       resultContainer.innerHTML = '';
       progressText.textContent = 'Queued…';
@@ -191,6 +202,19 @@
       alert(error.message);
       cancelButton.disabled = false;
     }
+  });
+
+  filters.addEventListener('click', event => {
+    const button = event.target.closest('[data-filter]');
+    if (!button || !currentRun) return;
+    const filter = button.dataset.filter;
+    if (filter === 'clear') activeFilters.clear();
+    else if (activeFilters.has(filter)) activeFilters.delete(filter);
+    else activeFilters.add(filter);
+    filters.querySelectorAll('[data-filter]').forEach(item => {
+      item.classList.toggle('active', activeFilters.has(item.dataset.filter));
+    });
+    render(currentRun);
   });
 
   exportButton.addEventListener('click', () => {
