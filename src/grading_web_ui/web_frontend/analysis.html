@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Handwriting Analysis</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    main { max-width: 1280px; margin: 2rem auto; padding: 0 1rem 3rem; }
+    .panel { background: white; border: 1px solid #dbe3ef; border-radius: 8px; padding: 1.25rem; margin: 1rem 0; }
+    label { display: block; font-weight: 600; margin: .75rem 0 .3rem; }
+    select, input, textarea, button { font: inherit; padding: .5rem; }
+    select, input, textarea { width: 100%; max-width: 520px; box-sizing: border-box; }
+    textarea { min-height: 6rem; }
+    .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .row > div { flex: 1 1 260px; }
+    button { background: #2563eb; color: white; border: 0; border-radius: 5px; cursor: pointer; margin-top: 1rem; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .progress { height: 20px; background: #e5e7eb; border-radius: 10px; overflow: hidden; margin: .5rem 0; }
+    .progress > div { height: 100%; background: #2563eb; transition: width .2s; }
+    .summary { color: #334155; }
+    .response { border-top: 1px solid #dbe3ef; padding: 1rem 0; }
+    .model-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: .75rem; }
+    .model-result { border: 1px solid #dbe3ef; border-radius: 6px; padding: .75rem; }
+    .badge { display: inline-block; border-radius: 999px; padding: .18rem .5rem; font-size: .82rem; font-weight: 600; background: #e2e8f0; }
+    .blank { background: #fef3c7; color: #92400e; } .relevant { background: #dcfce7; color: #166534; }
+    .irrelevant, .failed { background: #fee2e2; color: #991b1b; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font: .9rem/1.35 ui-monospace, monospace; }
+    .response-image { max-width: 100%; max-height: 600px; border: 1px solid #cbd5e1; margin-top: .5rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <p><a href="/">← Back to grading</a></p>
+    <h1>Handwriting Model Analysis</h1>
+    <p>Run a persistent, non-destructive comparison. Results never replace saved handwriting analysis used for grading.</p>
+
+    <section class="panel">
+      <h2>New comparison</h2>
+      <form id="run-form">
+        <div class="row">
+          <div><label for="session">Exam</label><select id="session" required></select></div>
+          <div><label for="question">Question</label><select id="question" required></select></div>
+          <div><label for="sample-size">Responses</label><input id="sample-size" type="number" min="1" max="250" placeholder="All responses"></div>
+        </div>
+        <label for="models">Ollama models, one per line</label>
+        <textarea id="models" required placeholder="qwen3-vl:4b-instruct&#10;qwen3-vl:8b-instruct"></textarea>
+        <small>The selected models run against every chosen response, using the production crop, transcription prompt, and relevance pass.</small><br>
+        <button id="start" type="submit">Run comparison</button>
+      </form>
+    </section>
+
+    <section class="panel" id="run-panel" hidden>
+      <h2 id="run-title">Analysis run</h2>
+      <div class="progress"><div id="progress-bar"></div></div>
+      <p class="summary" id="progress-text"></p>
+      <div id="results"></div>
+    </section>
+  </main>
+  <script src="/js/analysis.js"></script>
+</body>
+</html>

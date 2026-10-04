@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 33
+CURRENT_SCHEMA_VERSION = 34
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -509,6 +509,7 @@ def create_schema(cursor):
   migrate_to_v31(cursor)
   migrate_to_v32(cursor)
   migrate_to_v33(cursor)
+  migrate_to_v34(cursor)
 
   maybe_create_bootstrap_admin(cursor)
 
@@ -652,6 +653,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 33:
     migrate_to_v33(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (33)")
+
+  if from_version < 34:
+    migrate_to_v34(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (34)")
 
 
 def migrate_to_v2(cursor):
@@ -1349,6 +1354,54 @@ def migrate_to_v33(cursor):
       "ALTER TABLE problems ADD COLUMN transcription_is_effectively_blank INTEGER")
   if "transcription_is_relevant" not in existing_columns:
     cursor.execute("ALTER TABLE problems ADD COLUMN transcription_is_relevant INTEGER")
+
+
+def migrate_to_v34(cursor):
+  """Persist handwriting-model comparison experiments separately from grades."""
+  log.info("Migrating to schema version 34: adding handwriting analysis runs")
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS handwriting_analysis_runs (
+      id TEXT PRIMARY KEY,
+      session_id INTEGER NOT NULL,
+      problem_number INTEGER NOT NULL,
+      created_by INTEGER NOT NULL,
+      models_json TEXT NOT NULL,
+      problem_ids_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      total_items INTEGER NOT NULL,
+      completed_items INTEGER NOT NULL DEFAULT 0,
+      failed_items INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      started_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      FOREIGN KEY (session_id) REFERENCES grading_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+  """)
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS handwriting_analysis_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      problem_id INTEGER NOT NULL,
+      model_id TEXT NOT NULL,
+      transcription TEXT,
+      is_blank INTEGER,
+      is_relevant INTEGER,
+      model_label TEXT,
+      duration_ms REAL,
+      raw_transcription_response TEXT,
+      raw_relevance_response TEXT,
+      error TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (run_id) REFERENCES handwriting_analysis_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE CASCADE,
+      UNIQUE(run_id, problem_id, model_id)
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_handwriting_analysis_results_run
+    ON handwriting_analysis_results(run_id, problem_id, model_id)
+  """)
 
 
 def update_problem_stats(session_id: int):
