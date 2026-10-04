@@ -33,7 +33,8 @@
           .reduce((sum, item) => sum + item.percentage, 0);
         return `${percent(binPercentage)} (${percent(cumulative)})`;
       })).join('');
-      return `<tr class="bucket-heading"><td colspan="${sessionOrder.length + 1}">${escapeHtml(bucket)} · ${bucketRow.point_values.join(', ')} point questions</td></tr>` +
+      const pointDescription = bucketRow.point_values.length ? `${bucketRow.point_values.join(', ')} point questions` : 'all positive-point questions';
+      return `<tr class="bucket-heading"><td colspan="${sessionOrder.length + 1}">${escapeHtml(bucket)} · ${pointDescription}</td></tr>` +
         metricRow('Questions included', bucket, row => row?.question_numbers.length ? `Q${row.question_numbers.join(', Q')}` : '—') +
         metricRow('Responses', bucket, row => row ? `${row.scored_count} scored / ${row.response_count} total` : '—') +
         metricRow('Normalized score — mean', bucket, row => fmt(row?.mean_normalized)) +

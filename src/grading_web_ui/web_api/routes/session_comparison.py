@@ -42,7 +42,9 @@ def _session_label(row: dict) -> str:
 @router.post("")
 async def compare_sessions(request: SessionComparisonRequest,
                            current_user: dict = Depends(get_current_user)):
-  session_ids = list(dict.fromkeys(request.session_ids))
+  # A stable numeric column order makes cross-semester comparisons readable
+  # regardless of the order in which sessions were selected in the browser.
+  session_ids = sorted(set(request.session_ids))
   for session_id in session_ids:
     _assert_session_access(session_id, current_user)
 
@@ -61,16 +63,20 @@ async def compare_sessions(request: SessionComparisonRequest,
 
   sessions = {row["id"]: {"id": row["id"], "name": _session_label(row)}
               for row in session_rows}
-  output = []
+  bucket_specs = [("All questions", None)]
   for bucket in request.buckets:
-    point_values = {round(point, 6) for point in bucket.points if point > 0}
-    if not point_values:
+    points = {round(point, 6) for point in bucket.points if point > 0}
+    if not points:
       raise HTTPException(status_code=400,
                           detail=f"Bucket '{bucket.name}' needs a positive point value")
+    bucket_specs.append((bucket.name, points))
+
+  output = []
+  for bucket_name, point_values in bucket_specs:
     for session_id in session_ids:
       rows = [row for row in response_rows if row["session_id"] == session_id and
-              row["max_points"] is not None and
-              round(float(row["max_points"]), 6) in point_values]
+              row["max_points"] is not None and float(row["max_points"]) > 0 and
+              (point_values is None or round(float(row["max_points"]), 6) in point_values)]
       normalized = []
       for row in rows:
         if row["score"] is not None and float(row["max_points"]) > 0:
@@ -83,8 +89,8 @@ async def compare_sessions(request: SessionComparisonRequest,
                           "percentage": (count / len(normalized) * 100) if normalized else 0})
       output.append({
         "session": sessions[session_id],
-        "bucket": bucket.name,
-        "point_values": sorted(point_values),
+        "bucket": bucket_name,
+        "point_values": sorted(point_values) if point_values is not None else [],
         "question_numbers": sorted({row["problem_number"] for row in rows}),
         "response_count": len(rows),
         "scored_count": len(normalized),
