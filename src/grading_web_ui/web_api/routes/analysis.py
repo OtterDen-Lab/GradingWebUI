@@ -55,6 +55,13 @@ def _run_analysis(run_id: str, user_id: int) -> None:
 
   for problem_id in problem_ids:
     for model_id in models:
+      # A provider request already in flight cannot be cancelled safely, but a
+      # cancellation takes effect before the next response/model pair.
+      if _get_run(run_id)["status"] in ("cancelling", "cancelled"):
+        with get_db_connection() as conn:
+          conn.execute("UPDATE handwriting_analysis_runs SET status = 'cancelled', "
+                       "completed_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
+        return
       started = perf_counter()
       result = None
       error_message = None
@@ -92,8 +99,12 @@ def _run_analysis(run_id: str, user_id: int) -> None:
         """, (1 if error_message else 0, run_id))
 
   with get_db_connection() as conn:
-    conn.execute("UPDATE handwriting_analysis_runs SET status = 'completed', "
-                 "completed_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
+    conn.execute("""
+      UPDATE handwriting_analysis_runs
+      SET status = CASE WHEN status IN ('cancelling', 'cancelled') THEN 'cancelled' ELSE 'completed' END,
+          completed_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    """, (run_id,))
 
 
 @router.get("/sessions/{session_id}/questions")
@@ -139,6 +150,29 @@ async def create_run(request: AnalysisRunCreate, background_tasks: BackgroundTas
           "total_items": len(problem_ids) * len(models)}
 
 
+@router.get("/runs")
+async def list_runs(limit: int = 20,
+                    current_user: dict = Depends(get_current_user)):
+  """List recent runs visible to the signed-in grader for refresh recovery."""
+  limit = min(max(limit, 1), 100)
+  with get_db_connection() as conn:
+    rows = conn.execute("""
+      SELECT * FROM handwriting_analysis_runs
+      ORDER BY created_at DESC LIMIT ?
+    """, (limit,)).fetchall()
+  visible_runs = []
+  for row in rows:
+    run = dict(row)
+    try:
+      _assert_session_access(run["session_id"], current_user)
+    except HTTPException:
+      continue
+    run["models"] = json.loads(run.pop("models_json"))
+    run.pop("problem_ids_json", None)
+    visible_runs.append(run)
+  return {"runs": visible_runs}
+
+
 @router.get("/runs/{run_id}")
 async def get_run(run_id: str, current_user: dict = Depends(get_current_user)):
   run = _get_run(run_id)
@@ -153,6 +187,20 @@ async def get_run(run_id: str, current_user: dict = Depends(get_current_user)):
   run["problem_ids"] = json.loads(run.pop("problem_ids_json"))
   run["results"] = [dict(row) for row in rows]
   return run
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: str,
+                     current_user: dict = Depends(get_current_user)):
+  """Request cancellation; the in-flight provider request is allowed to finish."""
+  run = _get_run(run_id)
+  _assert_session_access(run["session_id"], current_user)
+  if run["status"] in ("completed", "cancelled"):
+    return {"run_id": run_id, "status": run["status"]}
+  with get_db_connection() as conn:
+    conn.execute("UPDATE handwriting_analysis_runs SET status = 'cancelled', "
+                 "completed_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
+  return {"run_id": run_id, "status": "cancelled"}
 
 
 @router.get("/runs/{run_id}/problems/{problem_id}/image")

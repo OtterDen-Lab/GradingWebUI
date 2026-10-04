@@ -51,7 +51,9 @@
     </section>
 
     <section class="panel" id="run-panel" hidden>
-      <h2 id="run-title">Analysis run</h2>
+      <div style="display:flex; justify-content:space-between; gap:1rem; align-items:center; flex-wrap:wrap;">
+        <h2 id="run-title">Analysis run</h2><button id="cancel-run" type="button" hidden>Cancel run</button>
+      </div>
       <div class="progress"><div id="progress-bar"></div></div>
       <p class="summary" id="progress-text"></p>
       <div id="results"></div>

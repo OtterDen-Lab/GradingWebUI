@@ -9,6 +9,7 @@
   const progressBar = document.querySelector('#progress-bar');
   const progressText = document.querySelector('#progress-text');
   const resultContainer = document.querySelector('#results');
+  const cancelButton = document.querySelector('#cancel-run');
   let activeRunId = null;
   let pollTimer = null;
 
@@ -61,6 +62,9 @@
     const total = Number(run.total_items);
     progressBar.style.width = `${total ? 100 * complete / total : 0}%`;
     progressText.textContent = `${run.status}: ${complete}/${total} model-response analyses complete; ${run.failed_items} failed.`;
+    cancelButton.hidden = !['queued', 'running', 'cancelling'].includes(run.status);
+    cancelButton.disabled = run.status === 'cancelling';
+    cancelButton.textContent = run.status === 'cancelling' ? 'Cancelling after current request…' : 'Cancel run';
     document.querySelector('#run-title').textContent = `Question ${run.problem_number}: ${run.models.join(' vs ')}`;
     const grouped = new Map();
     for (const result of run.results) {
@@ -98,7 +102,7 @@
     try {
       const run = await api(`/api/analysis/runs/${activeRunId}`);
       render(run);
-      if (run.status === 'completed') clearInterval(pollTimer);
+      if (['completed', 'cancelled'].includes(run.status)) clearInterval(pollTimer);
     } catch (error) {
       progressText.textContent = error.message;
       clearInterval(pollTimer);
@@ -125,5 +129,28 @@
     startButton.disabled = false;
   });
 
-  loadSetup().catch(error => alert(`Could not load analysis setup: ${error.message}`));
+  cancelButton.addEventListener('click', async () => {
+    if (!activeRunId || !confirm('Cancel this analysis? The current model request may finish, but no further work will start.')) return;
+    cancelButton.disabled = true;
+    try {
+      await api(`/api/analysis/runs/${activeRunId}/cancel`, {method: 'POST'});
+      await refreshRun();
+    } catch (error) {
+      alert(error.message);
+      cancelButton.disabled = false;
+    }
+  });
+
+  async function restoreMostRecentRun() {
+    const data = await api('/api/analysis/runs?limit=1');
+    if (!data.runs.length) return;
+    activeRunId = data.runs[0].id;
+    await refreshRun();
+    if (!['completed', 'cancelled'].includes(data.runs[0].status)) {
+      pollTimer = setInterval(refreshRun, 1000);
+    }
+  }
+
+  Promise.all([loadSetup(), restoreMostRecentRun()])
+    .catch(error => alert(`Could not load analysis setup: ${error.message}`));
 })();
