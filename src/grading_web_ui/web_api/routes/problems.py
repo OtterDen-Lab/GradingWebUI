@@ -1285,7 +1285,15 @@ def _parse_relevance_classification(raw_response: str) -> bool:
   try:
     payload = json.loads(payload_text)
   except (TypeError, json.JSONDecodeError) as error:
-    raise ValueError("Model did not return relevance-classification JSON") from error
+    # Some models place a valid result in a fence and then append explanation.
+    # Preserve that explanation in raw output, but use the first JSON object.
+    start = payload_text.find("{")
+    if start < 0:
+      raise ValueError("Model did not return relevance-classification JSON") from error
+    try:
+      payload, _ = json.JSONDecoder().raw_decode(payload_text[start:])
+    except json.JSONDecodeError as nested_error:
+      raise ValueError("Model did not return valid relevance-classification JSON") from nested_error
   if not isinstance(payload, dict):
     raise ValueError("Relevance-classification JSON must be an object")
 
@@ -1478,7 +1486,8 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
             "the question, is conversational text, is a name/doodle, or is random "
             "letters/symbols with no plausible connection. Do not mark a response "
             "relevant solely because it contains letters, arrows, punctuation, or "
-            "any other isolated marks.\n\n"
+            "any other isolated marks. Return exactly one JSON object: no Markdown "
+            "fence, explanation, notes, or text before or after it.\n\n"
             f"Question:\n{question_text}\n\n"
             f"Student response:\n{transcription}",
             [], 256, json_output=True)
