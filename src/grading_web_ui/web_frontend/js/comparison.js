@@ -26,7 +26,13 @@
     const metricRow = (label, bucket, display) => `<tr><th class="metric-label">${label}</th>${sessionOrder.map(session => `<td>${display(rowFor(bucket, session.id))}</td>`).join('')}</tr>`;
     const sections = bucketOrder.map(bucketRow => {
       const bucket = bucketRow.bucket;
-      const distributionRows = bucketRow.distribution.map((bin, index) => metricRow(`Distribution: ${bin.label}`, bucket, row => row ? percent(row.distribution[index].percentage) : '—')).join('');
+      const distributionRows = bucketRow.distribution.map((bin, index) => metricRow(`Distribution: ${bin.label}`, bucket, row => {
+        if (!row) return '—';
+        const binPercentage = row.distribution[index].percentage;
+        const cumulative = row.distribution.slice(0, index + 1)
+          .reduce((sum, item) => sum + item.percentage, 0);
+        return `${percent(binPercentage)} (${percent(cumulative)})`;
+      })).join('');
       return `<tr class="bucket-heading"><td colspan="${sessionOrder.length + 1}">${escapeHtml(bucket)} · ${bucketRow.point_values.join(', ')} point questions</td></tr>` +
         metricRow('Questions included', bucket, row => row?.question_numbers.length ? `Q${row.question_numbers.join(', Q')}` : '—') +
         metricRow('Responses', bucket, row => row ? `${row.scored_count} scored / ${row.response_count} total` : '—') +
