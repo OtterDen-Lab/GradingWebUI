@@ -10,6 +10,7 @@ from ..database import get_db_connection
 
 router = APIRouter()
 _BINS = [(0, 20), (20, 40), (40, 60), (60, 80), (80, 101)]
+_EXAM_NORMALIZED_BINS = [(start, start + 10) for start in range(0, 100, 10)]
 
 
 class PointBucket(BaseModel):
@@ -88,7 +89,7 @@ async def compare_sessions(request: SessionComparisonRequest,
       actual_scores.append(actual_score)
       total_possible_scores.append(total_points)
     normalized_distribution = []
-    for lower, upper in _BINS:
+    for lower, upper in _EXAM_NORMALIZED_BINS:
       count = sum(lower / 100 <= value < upper / 100 for value in equal_weight_normalized)
       normalized_distribution.append({"label": f"{lower}–{100 if upper == 101 else upper}%",
                                       "count": count,
@@ -121,9 +122,29 @@ async def compare_sessions(request: SessionComparisonRequest,
       if len(actual_scores) > 1 else 0 if actual_scores else None,
       "max_total_points": max_total_points,
       "actual_bin_width": actual_bin_width,
+      "_actual_scores": actual_scores,
       "normalized_distribution": normalized_distribution,
       "actual_distribution": actual_distribution,
     })
+  # Rebuild raw-score bins on one shared scale so sessions can be placed in a
+  # single grouped histogram. Heights remain within-session percentages.
+  shared_actual_max = max((exam["max_total_points"] for exam in exam_distributions), default=0.0)
+  shared_actual_bin_count = max(1, math.ceil(shared_actual_max / 10))
+  for exam in exam_distributions:
+    actual_scores = exam.pop("_actual_scores")
+    shared_distribution = []
+    for index in range(shared_actual_bin_count):
+      lower_score = index * 10
+      upper_score = min((index + 1) * 10, shared_actual_max)
+      is_last = index == shared_actual_bin_count - 1
+      count = sum(lower_score <= value < upper_score if not is_last
+                  else lower_score <= value <= upper_score for value in actual_scores)
+      shared_distribution.append({
+        "label": f"{lower_score:g}–{upper_score:g}",
+        "count": count,
+        "percentage": (count / len(actual_scores) * 100) if actual_scores else 0,
+      })
+    exam["actual_distribution"] = shared_distribution
   bucket_specs = [("All questions", None)]
   for bucket in request.buckets:
     points = {round(point, 6) for point in bucket.points if point > 0}
