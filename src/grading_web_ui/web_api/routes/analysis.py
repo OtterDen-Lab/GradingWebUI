@@ -53,8 +53,11 @@ def _run_analysis(run_id: str, user_id: int) -> None:
   # crop, prompts, parser, and relevance classifier exactly.
   from .problems import _decipher_handwriting
 
-  for problem_id in problem_ids:
-    for model_id in models:
+  # Keep one model resident for its complete response set. Alternating models
+  # for each submission defeats Ollama's model cache and makes large-model
+  # comparisons disproportionately slow.
+  for model_id in models:
+    for problem_id in problem_ids:
       # A provider request already in flight cannot be cancelled safely, but a
       # cancellation takes effect before the next response/model pair.
       if _get_run(run_id)["status"] in ("cancelling", "cancelled"):
