@@ -285,7 +285,9 @@ class AI_Helper__OpenAI(AI_Helper):
                message: str,
                attachments: List[Tuple[str, str]],
                max_response_tokens: int = DEFAULT_MAX_TOKENS,
-               max_retries: int = DEFAULT_MAX_RETRIES) -> Tuple[Dict, Dict]:
+               max_retries: int = DEFAULT_MAX_RETRIES,
+               candidate_models: Optional[List[str]] = None,
+               return_raw: bool = False) -> Tuple[Dict | str, Dict]:
     messages = []
 
     attachment_messages = []
@@ -308,7 +310,7 @@ class AI_Helper__OpenAI(AI_Helper):
     })
 
     response = cls._client.chat.completions.create(
-      model="gpt-4.1-nano",
+      model=(candidate_models or ["gpt-4.1-nano"])[0],
       response_format={"type": "json_object"},
       messages=messages,
       temperature=1,
@@ -327,15 +329,19 @@ class AI_Helper__OpenAI(AI_Helper):
       "total_tokens":
       response.usage.total_tokens if response.usage else 0,
       "provider":
-      "openai"
+      "openai",
+      "model": (candidate_models or ["gpt-4.1-nano"])[0],
     }
 
+    raw_content = response.choices[0].message.content
+    if return_raw:
+      return raw_content or "", usage_info
     try:
-      content = json.loads(response.choices[0].message.content)
+      content = json.loads(raw_content)
       return content, usage_info
     except TypeError:
       if max_retries > 0:
         return cls.query_ai(message, attachments, max_response_tokens,
-                            max_retries - 1)
+                            max_retries - 1, candidate_models, return_raw)
       else:
         return {}, usage_info

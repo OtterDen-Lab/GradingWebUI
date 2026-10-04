@@ -1285,7 +1285,15 @@ def _parse_relevance_classification(raw_response: str) -> bool:
   try:
     payload = json.loads(payload_text)
   except (TypeError, json.JSONDecodeError) as error:
-    raise ValueError("Model did not return relevance-classification JSON") from error
+    # Some models place a valid result in a fence and then append explanation.
+    # Preserve that explanation in raw output, but use the first JSON object.
+    start = payload_text.find("{")
+    if start < 0:
+      raise ValueError("Model did not return relevance-classification JSON") from error
+    try:
+      payload, _ = json.JSONDecoder().raw_decode(payload_text[start:])
+    except json.JSONDecodeError as nested_error:
+      raise ValueError("Model did not return valid relevance-classification JSON") from nested_error
   if not isinstance(payload, dict):
     raise ValueError("Relevance-classification JSON must be an object")
 
@@ -1301,8 +1309,9 @@ def _parse_relevance_classification(raw_response: str) -> bool:
 
 
 def _decipher_handwriting(problem_id: int, model: str, user_id: int,
-                          skip_cached: bool = False) -> dict:
-  """Transcribe and persist one response; optionally leave a cached result intact.
+                          skip_cached: bool = False,
+                          persist: bool = True) -> dict:
+  """Analyze one response, optionally persisting it to the grading cache.
 
     This is deliberately synchronous: the batch caller runs it in FastAPI's
     background-task thread pool, one response at a time, to avoid saturating
@@ -1315,7 +1324,7 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
   if not problem:
     raise HTTPException(status_code=404, detail="Problem not found")
 
-  if skip_cached and problem.transcription and problem.transcription.strip():
+  if persist and skip_cached and problem.transcription and problem.transcription.strip():
     return {
       "problem_id": problem_id,
       "transcription": problem.transcription,
@@ -1339,8 +1348,16 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
   timing_provider = None
   timing_model = None
   timing_server = None
+  raw_transcription_response = None
+  raw_relevance_response = None
   try:
     selected_model = (model or "default").strip().lower()
+    requested_ollama_model = None
+    if selected_model.startswith("ollama:"):
+      requested_ollama_model = model.split(":", 1)[1].strip()
+      if not requested_ollama_model:
+        raise HTTPException(status_code=400, detail="Ollama model cannot be empty")
+      selected_model = "ollama"
     if selected_model == "default":
       selected_model = get_handwriting_default(user_id)["target"]
 
@@ -1350,10 +1367,11 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
         raise HTTPException(
           status_code=400,
           detail="No active Ollama model is configured in Settings")
-      ai = ai_helper.AI_Helper__Ollama(server["base_url"], server["active_model"])
+      ollama_model = requested_ollama_model or server["active_model"]
+      ai = ai_helper.AI_Helper__Ollama(server["base_url"], ollama_model)
       timing_start = perf_counter()
       timing_provider = "ollama"
-      timing_model = server["active_model"]
+      timing_model = ollama_model
       timing_server = server["name"]
       transcription, usage = ai.query_ai(
         query, attachments=[("png", image_base64)],
@@ -1361,7 +1379,7 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
         json_output=True)
       log.debug("Ollama handwriting transcription response for problem %s: %r",
                 problem_id, transcription)
-      model_name = f"Ollama ({usage.get('model', server['active_model'])} on {server['name']})"
+      model_name = f"Ollama ({usage.get('model', ollama_model)} on {server['name']})"
     else:
 
     # Compatibility aliases preserve old links while all choices now resolve
@@ -1378,20 +1396,27 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
                                   explicit_model)
       except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-      if selection.provider != "anthropic":
+      if selection.provider not in ("anthropic", "openai"):
         raise HTTPException(status_code=400,
                             detail="Handwriting support is not yet available for this provider")
-      ai = ai_helper.AI_Helper__Anthropic()
+      ai = (ai_helper.AI_Helper__Anthropic() if selection.provider == "anthropic"
+            else ai_helper.AI_Helper__OpenAI())
       timing_start = perf_counter()
       timing_provider = "anthropic"
       timing_model = selection.model_id
-      response, usage = ai.query_ai(
-        query, attachments=[("png", image_base64)],
-        candidate_models=[selection.model_id],
-        max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS)
+      query_options = {
+        "attachments": [("png", image_base64)],
+        "candidate_models": [selection.model_id],
+        "max_response_tokens": _HANDWRITING_MAX_RESPONSE_TOKENS,
+      }
+      if selection.provider == "openai":
+        query_options["return_raw"] = True
+      response, usage = ai.query_ai(query, **query_options)
       transcription = response
       timing_model = usage.get("model", timing_model)
-      model_name = f"Anthropic ({usage.get('model', selection.model_id)})"
+      model_name = f"{selection.provider.title()} ({usage.get('model', selection.model_id)})"
+
+    raw_transcription_response = transcription
 
     try:
       transcription, is_blank, is_effectively_blank, is_relevant = \
@@ -1412,9 +1437,14 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
         log.debug("Ollama handwriting follow-up response for problem %s: %r",
                   problem_id, response_text)
       else:
-        response_text, _ = ai.query_ai(
-          prompt, attachments=attachments, max_response_tokens=max_tokens,
-          candidate_models=[selection.model_id])
+        followup_options = {
+          "attachments": attachments,
+          "max_response_tokens": max_tokens,
+          "candidate_models": [selection.model_id],
+        }
+        if selection.provider == "openai":
+          followup_options["return_raw"] = True
+        response_text, _ = ai.query_ai(prompt, **followup_options)
       return response_text.strip()
 
     is_relevant = None
@@ -1456,10 +1486,12 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
             "the question, is conversational text, is a name/doodle, or is random "
             "letters/symbols with no plausible connection. Do not mark a response "
             "relevant solely because it contains letters, arrows, punctuation, or "
-            "any other isolated marks.\n\n"
+            "any other isolated marks. Return exactly one JSON object: no Markdown "
+            "fence, explanation, notes, or text before or after it.\n\n"
             f"Question:\n{question_text}\n\n"
             f"Student response:\n{transcription}",
             [], 256, json_output=True)
+          raw_relevance_response = classification_response
           is_relevant = _parse_relevance_classification(classification_response)
       except Exception as error:
         # Preserve a successful transcription even if the optional semantic
@@ -1470,9 +1502,10 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
     model_latency.record(
       "handwriting", timing_provider, timing_model,
       (perf_counter() - timing_start) * 1000, "success", timing_server)
-    problem_repo.update_transcription(
-      problem_id, transcription, model_name, is_blank, is_effectively_blank,
-      is_relevant)
+    if persist:
+      problem_repo.update_transcription(
+        problem_id, transcription, model_name, is_blank, is_effectively_blank,
+        is_relevant)
 
     return {
       "problem_id": problem_id,
@@ -1481,6 +1514,8 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       "is_blank": is_blank,
       "is_effectively_blank": is_effectively_blank,
       "is_relevant": is_relevant,
+      "raw_transcription_response": raw_transcription_response,
+      "raw_relevance_response": raw_relevance_response,
     }
   except HTTPException:
     if timing_start is not None:

@@ -53,6 +53,12 @@ def test_parses_text_only_relevance_json():
   assert _parse_relevance_classification('{"is_relevant": "false"}') is False
 
 
+def test_parses_relevance_json_followed_by_model_explanation():
+  assert _parse_relevance_classification(
+    '```json\n{"is_relevant": true}\n```\nExplanation follows.'
+  ) is True
+
+
 def test_batch_retries_a_failed_transcription_once(monkeypatch):
   calls = []
 
