@@ -57,12 +57,43 @@ async def compare_sessions(request: SessionComparisonRequest,
     if len(session_rows) != len(session_ids):
       raise HTTPException(status_code=404, detail="One or more sessions were not found")
     response_rows = [dict(row) for row in conn.execute(f"""
-      SELECT session_id, problem_number, score, max_points, graded, is_blank
+      SELECT session_id, submission_id, problem_number, score, max_points, graded, is_blank
       FROM problems WHERE session_id IN ({placeholders})
     """, session_ids).fetchall()]
 
   sessions = {row["id"]: {"id": row["id"], "name": _session_label(row)}
               for row in session_rows}
+  exam_distributions = []
+  for session_id in session_ids:
+    submissions = {}
+    for row in response_rows:
+      if row["session_id"] != session_id or row["max_points"] is None or \
+          float(row["max_points"]) <= 0:
+        continue
+      submissions.setdefault(row["submission_id"], []).append(row)
+    normalized_totals = []
+    for problems in submissions.values():
+      if not all(row["graded"] and row["score"] is not None for row in problems):
+        continue
+      total_points = sum(float(row["max_points"]) for row in problems)
+      normalized_totals.append(max(0.0, min(
+        1.0, sum(float(row["score"]) for row in problems) / total_points)))
+    distribution = []
+    for lower, upper in _BINS:
+      count = sum(lower / 100 <= value < upper / 100 for value in normalized_totals)
+      distribution.append({"label": f"{lower}–{100 if upper == 101 else upper}%",
+                           "count": count,
+                           "percentage": (count / len(normalized_totals) * 100)
+                           if normalized_totals else 0})
+    exam_distributions.append({
+      "session": sessions[session_id],
+      "exam_count": len(submissions),
+      "scored_exam_count": len(normalized_totals),
+      "mean_normalized": statistics.mean(normalized_totals) if normalized_totals else None,
+      "stddev_normalized": statistics.pstdev(normalized_totals)
+      if len(normalized_totals) > 1 else 0 if normalized_totals else None,
+      "distribution": distribution,
+    })
   bucket_specs = [("All questions", None)]
   for bucket in request.buckets:
     points = {round(point, 6) for point in bucket.points if point > 0}
@@ -100,4 +131,4 @@ async def compare_sessions(request: SessionComparisonRequest,
         "blank_percentage": (sum(bool(row["is_blank"]) for row in rows) / len(rows) * 100) if rows else None,
         "distribution": histogram,
       })
-  return {"rows": output}
+  return {"rows": output, "exam_distributions": exam_distributions}
