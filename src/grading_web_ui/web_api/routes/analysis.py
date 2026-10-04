@@ -190,7 +190,15 @@ async def get_run(run_id: str, current_user: dict = Depends(get_current_user)):
     """, (run_id,)).fetchall()
   run["models"] = json.loads(run.pop("models_json"))
   run["problem_ids"] = json.loads(run.pop("problem_ids_json"))
-  run["results"] = [dict(row) for row in rows]
+  run["results"] = []
+  for row in rows:
+    result = dict(row)
+    # SQLite represents persisted booleans as 0/1. Return actual JSON
+    # booleans so clients can distinguish false from unavailable (NULL).
+    for field in ("is_blank", "is_relevant", "heuristic_is_blank"):
+      if result[field] is not None:
+        result[field] = bool(result[field])
+    run["results"].append(result)
   return run
 
 
