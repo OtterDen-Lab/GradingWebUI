@@ -1471,7 +1471,7 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       "handwriting", timing_provider, timing_model,
       (perf_counter() - timing_start) * 1000, "success", timing_server)
     problem_repo.update_transcription(
-      problem_id, transcription, model_name, is_blank, None,
+      problem_id, transcription, model_name, is_blank, is_effectively_blank,
       is_relevant)
 
     return {
@@ -1479,7 +1479,7 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       "transcription": transcription,
       "model": model_name,
       "is_blank": is_blank,
-      "is_effectively_blank": None,
+      "is_effectively_blank": is_effectively_blank,
       "is_relevant": is_relevant,
     }
   except HTTPException:
