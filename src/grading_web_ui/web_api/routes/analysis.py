@@ -11,6 +11,7 @@ from ..auth import get_current_user
 from ..database import get_db_connection
 from ..repositories import ProblemRepository, SubmissionRepository
 from ..services import ollama_settings
+from ..services import model_settings
 from grading_web_ui import ai_helper
 
 router = APIRouter()
@@ -80,13 +81,15 @@ def _run_analysis(run_id: str, user_id: int) -> None:
   # for each submission defeats Ollama's model cache and makes large-model
   # comparisons disproportionately slow.
   for model_id in models:
-    try:
-      _warm_ollama_model(model_id, problem_ids[0])
-      log.info("Analysis run %s warmed Ollama model %s", run_id, model_id)
-    except Exception as error:
-      # Preserve the actual comparison when a provider does not support this
-      # small warm-up request; its first measured response may simply be cold.
-      log.warning("Analysis run %s could not warm %s: %s", run_id, model_id, error)
+    target = model_id if ":" in model_id else f"ollama:{model_id}"
+    if target.startswith("ollama:"):
+      try:
+        _warm_ollama_model(target.split(":", 1)[1], problem_ids[0])
+        log.info("Analysis run %s warmed Ollama model %s", run_id, target)
+      except Exception as error:
+        # Preserve the actual comparison when a provider does not support this
+        # small warm-up request; its first measured response may simply be cold.
+        log.warning("Analysis run %s could not warm %s: %s", run_id, target, error)
     for problem_id in problem_ids:
       # A provider request already in flight cannot be cancelled safely, but a
       # cancellation takes effect before the next response/model pair.
@@ -99,8 +102,7 @@ def _run_analysis(run_id: str, user_id: int) -> None:
       result = None
       error_message = None
       try:
-        result = _decipher_handwriting(
-          problem_id, f"ollama:{model_id}", user_id, persist=False)
+        result = _decipher_handwriting(problem_id, target, user_id, persist=False)
       except Exception as error:
         error_message = str(getattr(error, "detail", error))
         log.warning("Analysis run %s: %s / %s failed: %s", run_id,
@@ -153,13 +155,50 @@ async def list_questions(session_id: int,
   return {"questions": [dict(row) for row in rows]}
 
 
+@router.get("/models")
+async def list_analysis_models(current_user: dict = Depends(get_current_user)):
+  """List runnable local models and configured external-provider defaults."""
+  choices = []
+  server = ollama_settings.get_active_server()
+  if server:
+    try:
+      for model in ollama_settings.list_models(server["id"]):
+        choices.append({
+          "id": f"ollama:{model['id']}", "provider": "ollama",
+          "label": model["display_name"],
+        })
+    except RuntimeError as error:
+      log.warning("Could not list Ollama analysis models: %s", error)
+
+  # These are the provider models deliberately configured for this deployment
+  # (including the current user's overrides), rather than an unbounded remote
+  # catalog which may contain text-only models unsuitable for image analysis.
+  for provider in ("anthropic", "openai"):
+    seen = set()
+    for tier, selection in model_settings.get_effective_settings(
+        current_user["user_id"], provider).items():
+      if selection["model_id"] in seen:
+        continue
+      seen.add(selection["model_id"])
+      choices.append({
+        "id": f"{provider}:{selection['model_id']}", "provider": provider,
+        "label": f"{selection['model_id']} ({tier})",
+      })
+  return {"models": choices}
+
+
 @router.post("/runs")
 async def create_run(request: AnalysisRunCreate, background_tasks: BackgroundTasks,
                      current_user: dict = Depends(get_current_user)):
   _assert_session_access(request.session_id, current_user)
   models = list(dict.fromkeys(model.strip() for model in request.models if model.strip()))
   if not models:
-    raise HTTPException(status_code=400, detail="Select at least one Ollama model")
+    raise HTTPException(status_code=400, detail="Select at least one model")
+  unsupported = [model for model in models if not model.startswith(
+    ("ollama:", "anthropic:", "openai:"))]
+  if unsupported:
+    raise HTTPException(status_code=400,
+                        detail="Model targets must include a provider prefix")
   problems = ProblemRepository().get_for_handwriting_analysis(
     request.session_id, request.problem_number, overwrite=True)
   if request.sample_size:

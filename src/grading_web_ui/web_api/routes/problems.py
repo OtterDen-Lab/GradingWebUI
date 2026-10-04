@@ -1388,20 +1388,25 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
                                   explicit_model)
       except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-      if selection.provider != "anthropic":
+      if selection.provider not in ("anthropic", "openai"):
         raise HTTPException(status_code=400,
                             detail="Handwriting support is not yet available for this provider")
-      ai = ai_helper.AI_Helper__Anthropic()
+      ai = (ai_helper.AI_Helper__Anthropic() if selection.provider == "anthropic"
+            else ai_helper.AI_Helper__OpenAI())
       timing_start = perf_counter()
       timing_provider = "anthropic"
       timing_model = selection.model_id
-      response, usage = ai.query_ai(
-        query, attachments=[("png", image_base64)],
-        candidate_models=[selection.model_id],
-        max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS)
+      query_options = {
+        "attachments": [("png", image_base64)],
+        "candidate_models": [selection.model_id],
+        "max_response_tokens": _HANDWRITING_MAX_RESPONSE_TOKENS,
+      }
+      if selection.provider == "openai":
+        query_options["return_raw"] = True
+      response, usage = ai.query_ai(query, **query_options)
       transcription = response
       timing_model = usage.get("model", timing_model)
-      model_name = f"Anthropic ({usage.get('model', selection.model_id)})"
+      model_name = f"{selection.provider.title()} ({usage.get('model', selection.model_id)})"
 
     raw_transcription_response = transcription
 
@@ -1424,9 +1429,14 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
         log.debug("Ollama handwriting follow-up response for problem %s: %r",
                   problem_id, response_text)
       else:
-        response_text, _ = ai.query_ai(
-          prompt, attachments=attachments, max_response_tokens=max_tokens,
-          candidate_models=[selection.model_id])
+        followup_options = {
+          "attachments": attachments,
+          "max_response_tokens": max_tokens,
+          "candidate_models": [selection.model_id],
+        }
+        if selection.provider == "openai":
+          followup_options["return_raw"] = True
+        response_text, _ = ai.query_ai(prompt, **followup_options)
       return response_text.strip()
 
     is_relevant = None

@@ -6,7 +6,7 @@
   <title>Handwriting Analysis</title>
   <link rel="stylesheet" href="/css/style.css">
   <style>
-    main { max-width: 1280px; margin: 2rem auto; padding: 0 1rem 3rem; }
+    main { max-width: 1800px; margin: 2rem auto; padding: 0 1rem 3rem; }
     .panel { background: white; border: 1px solid #dbe3ef; border-radius: 8px; padding: 1.25rem; margin: 1rem 0; }
     label { display: block; font-weight: 600; margin: .75rem 0 .3rem; }
     select, input, textarea, button { font: inherit; padding: .5rem; }
@@ -27,6 +27,10 @@
     .irrelevant, .failed { background: #fee2e2; color: #991b1b; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; font: .9rem/1.35 ui-monospace, monospace; }
     .response-image { max-width: 100%; max-height: 600px; border: 1px solid #cbd5e1; margin-top: .5rem; }
+    .model-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-top: .5rem; }
+    .model-list { border: 1px solid #dbe3ef; border-radius: 6px; padding: .5rem; max-height: 280px; overflow: auto; }
+    .model-option, .selected-model { display: flex; gap: .55rem; align-items: center; padding: .35rem; border-bottom: 1px solid #edf2f7; }
+    .selected-model button { margin: 0 0 0 auto; padding: .2rem .45rem; }
   </style>
 </head>
 <body>
@@ -43,16 +47,19 @@
           <div><label for="question">Question</label><select id="question" required></select></div>
           <div><label for="sample-size">Responses</label><input id="sample-size" type="number" min="1" max="250" placeholder="All responses"></div>
         </div>
-        <label for="models">Ollama models, one per line</label>
-        <textarea id="models" required placeholder="qwen3-vl:4b-instruct&#10;qwen3-vl:8b-instruct"></textarea>
-        <small>The selected models run against every chosen response, using the production crop, transcription prompt, and relevance pass.</small><br>
+        <label>Models</label>
+        <div class="model-picker">
+          <div><strong>Available</strong><div id="available-models" class="model-list">Loading models…</div></div>
+          <div><strong>Run order</strong><div id="selected-models" class="model-list">Select one or more models.</div></div>
+        </div>
+        <small>Models run top-to-bottom. Use ↑ and ↓ to choose the order. The analysis uses the production crop, transcription prompt, and relevance pass.</small><br>
         <button id="start" type="submit">Run comparison</button>
       </form>
     </section>
 
     <section class="panel" id="run-panel" hidden>
       <div style="display:flex; justify-content:space-between; gap:1rem; align-items:center; flex-wrap:wrap;">
-        <h2 id="run-title">Analysis run</h2><button id="cancel-run" type="button" hidden>Cancel run</button>
+        <h2 id="run-title">Analysis run</h2><div><button id="export-csv" type="button" hidden>Export CSV</button> <button id="cancel-run" type="button" hidden>Cancel run</button></div>
       </div>
       <div class="progress"><div id="progress-bar"></div></div>
       <p class="summary" id="progress-text"></p>

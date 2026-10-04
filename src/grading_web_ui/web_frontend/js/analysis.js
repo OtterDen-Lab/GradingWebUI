@@ -2,7 +2,8 @@
   const form = document.querySelector('#run-form');
   const sessionSelect = document.querySelector('#session');
   const questionSelect = document.querySelector('#question');
-  const modelsInput = document.querySelector('#models');
+  const availableModels = document.querySelector('#available-models');
+  const selectedModels = document.querySelector('#selected-models');
   const sampleSize = document.querySelector('#sample-size');
   const startButton = document.querySelector('#start');
   const panel = document.querySelector('#run-panel');
@@ -10,10 +11,14 @@
   const progressText = document.querySelector('#progress-text');
   const resultContainer = document.querySelector('#results');
   const cancelButton = document.querySelector('#cancel-run');
+  const exportButton = document.querySelector('#export-csv');
   let activeRunId = null;
   let pollTimer = null;
   const shownImages = new Map();
   const expandedRawResponses = new Set();
+  let modelCatalog = [];
+  let selectedTargets = [];
+  let currentRun = null;
 
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -39,7 +44,7 @@
   }
 
   async function loadSetup() {
-    const [sessions, settings] = await Promise.all([api('/api/sessions'), api('/api/ai-settings')]);
+    const [sessions, catalog] = await Promise.all([api('/api/sessions'), api('/api/analysis/models')]);
     sessionSelect.innerHTML = '<option value="">Select an exam…</option>';
     for (const session of sessions) {
       const option = document.createElement('option');
@@ -47,7 +52,32 @@
       option.textContent = session.name || `Session ${session.id}`;
       sessionSelect.append(option);
     }
-    if (settings.ollama_active?.model_id) modelsInput.value = settings.ollama_active.model_id;
+    modelCatalog = catalog.models;
+    renderModelPicker();
+  }
+
+  function renderModelPicker() {
+    if (!modelCatalog.length) {
+      availableModels.textContent = 'No configured models are available.';
+      selectedModels.textContent = 'Select one or more models.';
+      return;
+    }
+    availableModels.innerHTML = modelCatalog.map(model => `<label class="model-option"><input type="checkbox" value="${escapeHtml(model.id)}" ${selectedTargets.includes(model.id) ? 'checked' : ''}><span><strong>${escapeHtml(model.provider)}</strong> · ${escapeHtml(model.label)}</span></label>`).join('');
+    availableModels.querySelectorAll('input').forEach(input => input.addEventListener('change', () => {
+      if (input.checked) selectedTargets.push(input.value);
+      else selectedTargets = selectedTargets.filter(target => target !== input.value);
+      renderModelPicker();
+    }));
+    selectedModels.innerHTML = selectedTargets.length ? selectedTargets.map((target, index) => {
+      const model = modelCatalog.find(item => item.id === target);
+      return `<div class="selected-model"><span>${index + 1}. ${escapeHtml(model?.label || target)}</span><button type="button" data-move="up" data-index="${index}" ${index ? '' : 'disabled'}>↑</button><button type="button" data-move="down" data-index="${index}" ${index < selectedTargets.length - 1 ? '' : 'disabled'}>↓</button></div>`;
+    }).join('') : 'Select one or more models.';
+    selectedModels.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+      const index = Number(button.dataset.index);
+      const neighbor = button.dataset.move === 'up' ? index - 1 : index + 1;
+      [selectedTargets[index], selectedTargets[neighbor]] = [selectedTargets[neighbor], selectedTargets[index]];
+      renderModelPicker();
+    }));
   }
 
   function resultBadge(result) {
@@ -60,11 +90,13 @@
 
   function render(run) {
     panel.hidden = false;
+    currentRun = run;
     const complete = Number(run.completed_items);
     const total = Number(run.total_items);
     progressBar.style.width = `${total ? 100 * complete / total : 0}%`;
     progressText.textContent = `${run.status}: ${complete}/${total} model-response analyses complete; ${run.failed_items} failed.`;
     cancelButton.hidden = !['queued', 'running', 'cancelling'].includes(run.status);
+    exportButton.hidden = !run.results.length;
     cancelButton.disabled = run.status === 'cancelling';
     cancelButton.textContent = run.status === 'cancelling' ? 'Cancelling after current request…' : 'Cancel run';
     document.querySelector('#run-title').textContent = `Question ${run.problem_number}: ${run.models.join(' vs ')}`;
@@ -126,7 +158,11 @@
   sessionSelect.addEventListener('change', () => loadQuestions().catch(error => alert(error.message)));
   form.addEventListener('submit', async event => {
     event.preventDefault();
-    const models = modelsInput.value.split('\n').map(value => value.trim()).filter(Boolean);
+    const models = selectedTargets;
+    if (!models.length) {
+      alert('Select at least one model.');
+      return;
+    }
     startButton.disabled = true;
     try {
       const payload = { session_id: Number(sessionSelect.value), problem_number: Number(questionSelect.value), models };
@@ -155,6 +191,19 @@
       alert(error.message);
       cancelButton.disabled = false;
     }
+  });
+
+  exportButton.addEventListener('click', () => {
+    if (!currentRun) return;
+    const columns = ['run_id', 'session_id', 'problem_number', 'problem_id', 'model_id', 'model_label', 'heuristic_is_blank', 'is_blank', 'is_relevant', 'transcription', 'duration_ms', 'error', 'raw_transcription_response', 'raw_relevance_response'];
+    const csvValue = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const lines = [columns.join(','), ...currentRun.results.map(result => columns.map(column => csvValue(currentRun.id && column === 'run_id' ? currentRun.id : currentRun[column] ?? result[column])).join(','))];
+    const blob = new Blob([lines.join('\n')], {type: 'text/csv;charset=utf-8'});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `handwriting-analysis-${currentRun.id}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
   });
 
   async function restoreMostRecentRun() {
