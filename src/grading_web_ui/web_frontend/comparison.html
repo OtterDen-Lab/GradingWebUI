@@ -5,7 +5,7 @@
   <title>Session Comparison</title><link rel="stylesheet" href="/css/style.css">
   <style>
     main { max-width: 1600px; margin: 2rem auto; padding: 0 1rem 3rem; } .panel { background:#fff; border:1px solid #dbe3ef; border-radius:8px; padding:1.25rem; margin:1rem 0; }
-    .session-list, .bucket-list { display:grid; gap:.45rem; } .session-option { display:flex; gap:.5rem; align-items:center; padding:.35rem; border-bottom:1px solid #edf2f7; }
+    .session-list, .bucket-list { display:grid; gap:.45rem; } .session-option { display:flex; gap:.5rem; align-items:center; padding:.35rem; border-bottom:1px solid #edf2f7; } .status { display:inline-block; padding:.1rem .4rem; border-radius:999px; font-size:.78rem; font-weight:600; } .status-ready{background:#dbeafe;color:#1d4ed8}.status-grading,.status-preprocessing,.status-finalizing{background:#fef3c7;color:#92400e}.status-finalized,.status-complete{background:#dcfce7;color:#166534}.status-error{background:#fee2e2;color:#991b1b}.status-awaiting_alignment,.status-name_matching_needed{background:#f3e8ff;color:#7e22ce}
     .bucket { display:grid; grid-template-columns: minmax(150px,1fr) minmax(180px,2fr) auto; gap:.5rem; align-items:center; } input, button { font:inherit; padding:.45rem; } input[type=text] { width:100%; box-sizing:border-box; }
     button { border:0; border-radius:5px; background:#2563eb; color:#fff; cursor:pointer; } button.secondary { background:#64748b; } button.danger { background:#b91c1c; }
     table { width:100%; border-collapse:collapse; font-size:.92rem; } th, td { padding:.55rem; text-align:left; border-bottom:1px solid #dbe3ef; vertical-align:top; } th { background:#f8fafc; } .bucket-heading td { border-top:3px solid #334155; background:#eaf0f8; font-weight:700; padding-top:.8rem; } .metric-label { width:210px; font-weight:600; background:#f8fafc; }
@@ -16,7 +16,7 @@
 <body><main>
   <p><a href="/">← Back to grading</a></p><h1>Cross-Session Comparison</h1>
   <p>Compare response-level outcomes across exams after normalizing each score by its question’s point value.</p>
-  <section class="panel"><h2>Sessions</h2><div id="sessions" class="session-list">Loading sessions…</div></section>
+  <section class="panel"><h2>Sessions</h2><label for="status-filter">Filter by grading status </label><select id="status-filter"><option value="">All statuses</option></select><div id="sessions" class="session-list">Loading sessions…</div></section>
   <section class="panel"><h2>Comparable question buckets</h2><p>Enter the point values that should be treated as comparable across selected sessions.</p><div id="buckets" class="bucket-list"></div><button class="secondary" id="add-bucket" type="button">Add bucket</button><button id="compare" type="button">Compare selected sessions</button></section>
   <section class="panel" id="results-panel" hidden><h2>Results</h2><p>Score metrics include responses with a recorded score. Blank percentage uses all responses in the bucket and the existing grading blank flag.</p><div class="legend"><span>Distribution:</span><span>0–20%</span><span>20–40%</span><span>40–60%</span><span>60–80%</span><span>80–100%</span></div><div id="results"></div></section>
 </main><script src="/js/comparison.js"></script></body></html>
