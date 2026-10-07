@@ -957,6 +957,12 @@ header h1 {
     background-color: #f0fdf4;
 }
 
+/* AI suggestions are intentionally distinct from confirmed matches. */
+.matching-item.soft-matched {
+    border-left-color: #f59e0b;
+    background-color: #fffbeb;
+}
+
 .matching-info {
     flex: 1;
 }

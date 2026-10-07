@@ -125,18 +125,21 @@ function renderMatchingList() {
         matchingSectionFilter = 'all';
     }
 
-    const unmatchedCount = allSubmissions.filter(s => !s.is_matched).length;
-    const matchedCount = allSubmissions.length - unmatchedCount;
+    const matchedCount = allSubmissions.filter(s => s.is_matched).length;
+    const suggestedCount = allSubmissions.filter(
+        s => !s.is_matched && s.suggested_canvas_user_id
+    ).length;
+    const unmatchedCount = allSubmissions.length - matchedCount - suggestedCount;
     const percentage = allSubmissions.length > 0 ? (matchedCount / allSubmissions.length * 100) : 0;
 
     // Update progress bar
     document.getElementById('matching-progress-fill').style.width = `${percentage}%`;
     document.getElementById('matching-progress-text').textContent =
-        `${matchedCount} of ${allSubmissions.length} matched (${unmatchedCount} remaining)`;
+        `${matchedCount} confirmed, ${suggestedCount} suggested, ${unmatchedCount} need a selection`;
 
     let html = `
         <p style="margin-bottom: 20px;">
-            <strong>${unmatchedCount}</strong> of <strong>${allSubmissions.length}</strong> submission(s) need manual matching.
+            <strong>${matchedCount}</strong> confirmed, <strong>${suggestedCount}</strong> AI suggestion(s) awaiting review, and <strong>${unmatchedCount}</strong> submission(s) needing a selection.
         </p>
         <div style="margin-bottom: 20px; text-align: center;">
             <button id="confirm-all-matches-btn" class="btn btn-primary" onclick="confirmAllMatches()" style="padding: 10px 30px; font-size: 16px;">
@@ -162,14 +165,23 @@ function renderMatchingList() {
                 </div>
             ` : ''}
             <p style="margin-top: 10px; color: var(--gray-600); font-size: 14px;">
-                Select students from the dropdowns below, then click this button to confirm all changes at once.
+                Select students from the dropdowns below, review the yellow AI suggestions, then click this button to confirm all changes at once.
             </p>
         </div>
     `;
 
     allSubmissions.forEach(submission => {
-        const statusClass = submission.is_matched ? 'matched' : 'unmatched';
-        const statusLabel = submission.is_matched ? `✓ Matched to: ${submission.student_name}` : 'Not matched';
+        const suggestedStudent = !submission.is_matched && submission.suggested_canvas_user_id
+            ? allStudents.find((student) => student.user_id === submission.suggested_canvas_user_id)
+            : null;
+        const statusClass = submission.is_matched
+            ? 'matched'
+            : suggestedStudent ? 'soft-matched' : 'unmatched';
+        const statusLabel = submission.is_matched
+            ? `✓ Confirmed match: ${submission.student_name}`
+            : suggestedStudent
+                ? `✓ AI suggestion: ${getStudentDisplayLabel(suggestedStudent)} — review and confirm`
+                : 'No AI suggestion — select a student';
 
         html += `
             <div class="matching-item ${statusClass}" data-submission-id="${submission.id}">
