@@ -17,3 +17,6 @@ records/
 dist/
 .tmp/
 todo.md
+
+.stfolder/
+.stignore
