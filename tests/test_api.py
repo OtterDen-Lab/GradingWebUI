@@ -326,6 +326,25 @@ def test_matching_students_returns_503_when_canvas_and_cache_unavailable(
   assert "no cached roster" in response.json()["detail"].lower()
 
 
+def test_canvas_info_returns_actionable_error_for_invalid_user_key(client,
+                                                                    monkeypatch):
+  """Canvas target failures should be JSON errors suitable for the finalize UI."""
+  from grading_web_ui.web_api.routes import sessions as sessions_routes
+
+  session_id = create_test_session(client, "Invalid Canvas Key")
+
+  def raise_canvas_auth_error(*args, **kwargs):
+    raise RuntimeError("401 Unauthorized")
+
+  monkeypatch.setattr(sessions_routes, "_canvas_for_user", raise_canvas_auth_error)
+
+  response = client.get(f"/api/sessions/{session_id}/canvas-info")
+
+  assert response.status_code == 502
+  assert response.headers["content-type"].startswith("application/json")
+  assert "api key is correct" in response.json()["detail"].lower()
+
+
 def test_matching_students_includes_section_labels_when_available(
     client, monkeypatch):
   """Matching students endpoint should expose Canvas section labels."""

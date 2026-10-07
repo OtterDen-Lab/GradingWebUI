@@ -1045,21 +1045,33 @@ async def get_canvas_info(
     }
 
   use_prod = session.use_prod_canvas
-  canvas = _canvas_for_user(current_user["user_id"], use_prod=use_prod)
+  try:
+    canvas = _canvas_for_user(current_user["user_id"], use_prod=use_prod)
 
-  # Get course and assignment to construct URL
-  course = canvas.get_course(session.course_id)
-  assignment = course.get_assignment(session.assignment_id)
+    # Confirm the saved credential can access the session's Canvas target.
+    course = canvas.get_course(session.course_id)
+    assignment = course.get_assignment(session.assignment_id)
 
-  # Get base URL from Canvas interface
-  # Remove trailing slash and /api/v1 if present
-  base_url = str(canvas.canvas._Canvas__requester.base_url)
-  if base_url.endswith('/api/v1'):
-    base_url = base_url[:-7]
-  base_url = base_url.rstrip('/')
+    # Get base URL from Canvas interface
+    # Remove trailing slash and /api/v1 if present
+    base_url = str(canvas.canvas._Canvas__requester.base_url)
+    if base_url.endswith('/api/v1'):
+      base_url = base_url[:-7]
+    base_url = base_url.rstrip('/')
 
-  # Construct Canvas URL
-  canvas_url = f"{base_url}/courses/{session.course_id}/assignments/{session.assignment_id}"
+    # Construct Canvas URL
+    canvas_url = f"{base_url}/courses/{session.course_id}/assignments/{session.assignment_id}"
+  except Exception as exc:
+    log.warning("Canvas target validation failed for session %s: %s",
+                session_id, exc, exc_info=True)
+    environment = "production" if use_prod else "development"
+    raise HTTPException(
+      status_code=502,
+      detail=(
+        f"Could not access this {environment} Canvas target. "
+        "Check that your Canvas API key is correct and has access to the course and assignment."
+      ),
+    ) from exc
 
   return {
     "course_id": session.course_id,
@@ -1090,9 +1102,9 @@ async def update_canvas_config(
       detail="Mock roster sessions cannot update Canvas configuration."
     )
 
-  # Get course and assignment details from Canvas
-  canvas_interface = _canvas_for_user(current_user["user_id"], use_prod=use_prod)
   try:
+    # Get course and assignment details from Canvas
+    canvas_interface = _canvas_for_user(current_user["user_id"], use_prod=use_prod)
     course = canvas_interface.get_course(course_id)
     assignment = course.get_assignment(assignment_id)
 
@@ -1118,9 +1130,19 @@ async def update_canvas_config(
       "environment": "production" if use_prod else "development"
     }
 
-  except Exception as e:
-    raise HTTPException(status_code=400,
-                        detail=f"Failed to fetch Canvas data: {str(e)}")
+  except HTTPException:
+    raise
+  except Exception as exc:
+    log.warning("Canvas target update failed for session %s: %s",
+                session_id, exc, exc_info=True)
+    environment = "production" if use_prod else "development"
+    raise HTTPException(
+      status_code=502,
+      detail=(
+        f"Could not access the selected {environment} Canvas target. "
+        "Check that your Canvas API key is correct and has access to the course and assignment."
+      ),
+    ) from exc
 
 
 @router.get("/{session_id}/problem-max-points-all")

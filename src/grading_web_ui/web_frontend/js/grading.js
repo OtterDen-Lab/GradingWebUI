@@ -3959,6 +3959,26 @@ const finalizeUploadState = {
     students: [],
 };
 
+async function readCanvasApiResponse(response, fallbackMessage) {
+    const rawBody = await response.text();
+    let payload = null;
+    if (rawBody) {
+        try {
+            payload = JSON.parse(rawBody);
+        } catch (_) {
+            // Reverse proxies and unhandled server failures may return HTML or
+            // plain text. Do not surface a JSON parsing error to instructors.
+        }
+    }
+    if (!response.ok) {
+        throw new Error(payload?.detail || `${fallbackMessage} (HTTP ${response.status}).`);
+    }
+    if (payload === null) {
+        throw new Error(`${fallbackMessage}: the server returned an invalid response.`);
+    }
+    return payload;
+}
+
 function getCanvasTargetControls(kind = 'config') {
     if (kind === 'finalize') {
         return {
@@ -3989,7 +4009,7 @@ async function loadCanvasCoursesFor(controls) {
 
     try {
         const response = await fetch(`${API_BASE}/canvas/courses?use_prod=${useProd}`);
-        const data = await response.json();
+        const data = await readCanvasApiResponse(response, 'Failed to load Canvas courses');
 
         controls.courseSelect.innerHTML = '<option value="">-- Select a Course --</option>';
         data.courses.forEach(course => {
@@ -4018,7 +4038,7 @@ async function loadCanvasAssignmentsFor(controls, courseId) {
 
     try {
         const response = await fetch(`${API_BASE}/canvas/courses/${courseId}/assignments?use_prod=${useProd}`);
-        const data = await response.json();
+        const data = await readCanvasApiResponse(response, 'Failed to load Canvas assignments');
 
         controls.assignmentSelect.innerHTML = '<option value="">-- Select an Assignment --</option>';
         data.assignments.forEach(assignment => {
@@ -4087,7 +4107,7 @@ async function populateCanvasTargetControls(kind, info) {
 
 async function refreshCurrentSession() {
     const response = await fetch(`${API_BASE}/sessions/${currentSession.id}`);
-    currentSession = await response.json();
+    currentSession = await readCanvasApiResponse(response, 'Failed to refresh the grading session');
     updateSessionInfo();
 }
 
@@ -4106,15 +4126,13 @@ async function updateCanvasConfigFromControls(kind) {
         { method: 'PUT' }
     );
 
-    const result = await response.json();
-    if (!response.ok) {
-        throw new Error(result.detail || 'Failed to update Canvas configuration');
-    }
+    const result = await readCanvasApiResponse(response, 'Failed to update Canvas configuration');
 
     await refreshCurrentSession();
 
     const canvasInfoResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}/canvas-info`);
-    finalizeUploadState.canvasInfo = await canvasInfoResponse.json();
+    finalizeUploadState.canvasInfo = await readCanvasApiResponse(
+        canvasInfoResponse, 'Failed to load the updated Canvas target');
     if (kind === 'finalize') {
         updateFinalizeCanvasTargetSummary();
     }
@@ -4237,19 +4255,11 @@ async function openFinalizeUploadDialog() {
         fetch(`${API_BASE}/sessions/${currentSession.id}/student-scores`),
     ]);
 
-    const stats = await statsResponse.json();
-    const canvasInfo = await canvasInfoResponse.json();
-    const scoresData = await scoresResponse.json();
-
-    if (!statsResponse.ok) {
-        throw new Error(stats.detail || 'Failed to load grading statistics');
-    }
-    if (!canvasInfoResponse.ok) {
-        throw new Error(canvasInfo.detail || 'Failed to load Canvas target');
-    }
-    if (!scoresResponse.ok) {
-        throw new Error(scoresData.detail || 'Failed to load student scores');
-    }
+    const [stats, canvasInfo, scoresData] = await Promise.all([
+        readCanvasApiResponse(statsResponse, 'Failed to load grading statistics'),
+        readCanvasApiResponse(canvasInfoResponse, 'Failed to load Canvas target'),
+        readCanvasApiResponse(scoresResponse, 'Failed to load student scores'),
+    ]);
 
     if (stats.problems_graded < stats.total_problems) {
         throw new Error(`Cannot finalize: ${stats.total_problems - stats.problems_graded} problems still ungraded. Please complete all grading first.`);
@@ -4292,10 +4302,9 @@ async function startFinalization(options) {
     });
 
     if (!response.ok) {
-        const error = await response.json();
         progressDiv.style.display = 'none';
         document.getElementById('finalize-btn').disabled = false;
-        throw new Error(error.detail || 'Finalization failed');
+        await readCanvasApiResponse(response, 'Finalization failed');
     }
 
     messageDiv.textContent = 'Starting finalization...';
