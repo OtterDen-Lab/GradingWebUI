@@ -28,7 +28,7 @@ async function loadCanvasCredentialSettings() {
           <h3 style="margin:0 0 6px;">${canvasEnvironmentLabel(environment)}</h3>
           <p style="margin:0 0 12px; color:${status.configured ? 'var(--success-color)' : 'var(--gray-700)'};">${detail}</p>
           <label style="display:block; margin-bottom:8px;">Canvas API key
-            <input type="text" name="api_key" autocomplete="off" autocapitalize="none" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="Paste a new key to save or replace it" style="display:block; width:100%; margin-top:4px; box-sizing:border-box; -webkit-text-security:disc;" aria-label="Canvas API key (masked)">
+            <textarea name="api_key" rows="2" autocomplete="off" autocapitalize="none" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="Paste a new key to save or replace it" style="display:block; width:100%; margin-top:4px; box-sizing:border-box; resize:vertical; font-family:monospace;" aria-label="Canvas API key"></textarea>
           </label>
           <div style="display:flex; gap:8px;">
             <button type="submit" class="btn btn-primary">Save key</button>
