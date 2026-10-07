@@ -218,13 +218,14 @@ class ExamProcessor:
       
       auto_matched_student = None
       if suggested_match and match_confidence >= NAME_SIMILARITY_THRESHOLD:
-        auto_matched_student = suggested_match
+        # Suggestions are intentionally non-binding.  Removing the student
+        # from this extraction pass merely prevents duplicate pre-selections.
         unmatched_students = [
           student for student in unmatched_students
           if student["user_id"] != suggested_match["user_id"]
         ]
         log.info(
-          "  Auto-accepted match: %s (%s%%) - still requires Confirm All Matches to proceed",
+          "  Suggested match: %s (%s%%) - requires human confirmation",
           suggested_match["name"],
           match_confidence
         )

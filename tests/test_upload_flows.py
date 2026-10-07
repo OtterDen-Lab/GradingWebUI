@@ -562,7 +562,7 @@ def test_process_exam_names_mock_roster_sets_awaiting_alignment(
   assert session.status.value == "awaiting_alignment"
 
 
-def test_process_exam_names_auto_matches_high_confidence_names(
+def test_process_exam_names_keeps_high_confidence_names_as_suggestions(
     client, tmp_path, monkeypatch):
   """Name extraction worker should persist high-confidence auto-matches."""
   from grading_web_ui.web_api.routes import uploads as uploads_routes
@@ -629,8 +629,9 @@ def test_process_exam_names_auto_matches_high_confidence_names(
 
   submissions = SubmissionRepository().get_by_session(session_id)
   assert len(submissions) == 1
-  assert submissions[0].canvas_user_id == 101
-  assert submissions[0].student_name == "Ethan Peregoy"
+  assert submissions[0].canvas_user_id is None
+  assert submissions[0].student_name is None
+  assert submissions[0].suggested_canvas_user_id == 101
 
   session = session_repo.get_by_id(session_id)
   assert session is not None
@@ -778,11 +779,9 @@ def test_process_exam_names_auto_match_does_not_reuse_student(
 
   submissions = SubmissionRepository().get_by_session(session_id)
   assert len(submissions) == 2
-  matched = [s for s in submissions if s.canvas_user_id is not None]
-  unmatched = [s for s in submissions if s.canvas_user_id is None]
-  assert len(matched) == 1
-  assert len(unmatched) == 1
-  assert matched[0].canvas_user_id == 101
+  assert all(s.canvas_user_id is None for s in submissions)
+  assert submissions[0].suggested_canvas_user_id == 101
+  assert submissions[1].suggested_canvas_user_id is None
 
 
 def test_process_exam_splits_creates_problems_and_marks_session_ready(

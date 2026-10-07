@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 35
+CURRENT_SCHEMA_VERSION = 36
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -310,6 +310,7 @@ def create_schema(cursor):
             student_name TEXT,
             display_name TEXT,
             canvas_user_id INTEGER,
+            suggested_canvas_user_id INTEGER,
             page_mappings TEXT NOT NULL,
             total_score REAL,
             graded_at TIMESTAMP,
@@ -662,6 +663,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 35:
     migrate_to_v35(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (35)")
+
+  if from_version < 36:
+    migrate_to_v36(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (36)")
 
 
 def migrate_to_v2(cursor):
@@ -1422,6 +1427,19 @@ def migrate_to_v35(cursor):
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   """)
+
+
+def migrate_to_v36(cursor):
+  """Store AI name suggestions separately from confirmed name matches."""
+  log.info("Migrating to schema version 36: adding submission name suggestions")
+  cursor.execute(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'submissions'")
+  if cursor.fetchone() is None:
+    # Some historical partial schemas predate submissions entirely.  Their
+    # normal bootstrap path will create the current table definition.
+    return
+  cursor.execute(
+    "ALTER TABLE submissions ADD COLUMN suggested_canvas_user_id INTEGER")
 
 
 def update_problem_stats(session_id: int):

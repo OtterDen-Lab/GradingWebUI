@@ -10,7 +10,7 @@ import fitz  # PyMuPDF
 import logging
 from lms_interface.canvas_interface import CanvasInterface
 
-from ..models import NameMatchRequest
+from ..models import NameMatchRequest, NameUnmatchRequest
 from ..database import get_db_connection
 from ..repositories import SessionRepository, SubmissionRepository
 from ..auth import require_session_access
@@ -207,6 +207,7 @@ async def get_all_submissions(
       "name_image_data": sub.name_image_data,
       "student_name": sub.student_name,
       "canvas_user_id": sub.canvas_user_id,
+      "suggested_canvas_user_id": sub.suggested_canvas_user_id,
       "is_matched": sub.is_matched()
     })
 
@@ -391,3 +392,19 @@ async def match_submission(
     "remaining_unmatched": unmatched_count,
     "reassigned_from": None
   }
+
+
+@router.post("/{session_id}/unmatch")
+async def unmatch_submission(
+  session_id: int,
+  match: NameUnmatchRequest,
+  current_user: dict = Depends(require_session_access())
+):
+  """Clear a confirmed match so a review pass can move or swap students."""
+  submission_repo = SubmissionRepository()
+  submission = submission_repo.get_by_id(match.submission_id)
+  if not submission or submission.session_id != session_id:
+    raise HTTPException(status_code=404, detail="Submission not found")
+
+  submission_repo.clear_match(match.submission_id)
+  return {"status": "unmatched"}

@@ -7,7 +7,7 @@ def _stub_redaction(*args, **kwargs):
   return "pdf-base64", []
 
 
-def test_process_exams_persists_auto_match_at_threshold(monkeypatch):
+def test_process_exams_keeps_auto_match_at_threshold_as_suggestion(monkeypatch):
   processor = ExamProcessor()
 
   monkeypatch.setattr(
@@ -27,10 +27,11 @@ def test_process_exams_persists_auto_match_at_threshold(monkeypatch):
     canvas_students=[{"name": "Ethan Peregoy", "user_id": 101}],
   )
 
-  assert len(matched) == 1
-  assert len(unmatched) == 0
-  assert matched[0].canvas_user_id == 101
-  assert matched[0].student_name == "Ethan Peregoy"
+  assert len(matched) == 0
+  assert len(unmatched) == 1
+  assert unmatched[0].canvas_user_id is None
+  assert unmatched[0].student_name is None
+  assert unmatched[0].suggested_canvas_user_id == 101
 
 
 def test_process_exams_does_not_auto_match_below_threshold(monkeypatch):
@@ -74,7 +75,8 @@ def test_process_exams_does_not_auto_assign_same_student_twice(monkeypatch):
     canvas_students=[{"name": "Ethan Peregoy", "user_id": 101}],
   )
 
-  assert len(matched) == 1
-  assert len(unmatched) == 1
-  assert matched[0].canvas_user_id == 101
-  assert unmatched[0].canvas_user_id is None
+  assert len(matched) == 0
+  assert len(unmatched) == 2
+  assert unmatched[0].suggested_canvas_user_id == 101
+  assert unmatched[1].canvas_user_id is None
+  assert unmatched[1].suggested_canvas_user_id is None

@@ -1444,22 +1444,26 @@ async def process_exam_names(
           )
 
         if suggested_match and match_confidence >= NAME_SIMILARITY_THRESHOLD:
-          student_name = suggested_match["name"]
-          canvas_user_id = suggested_match["user_id"]
+          # Reserve a suggestion only while extracting this batch, so two
+          # exams are not pre-filled with the same student.  It is not a
+          # confirmed match: the matching screen remains the single place
+          # where Canvas assignments are committed.
+          suggested_canvas_user_id = suggested_match["user_id"]
           unmatched_students = [
             student for student in unmatched_students
             if student["user_id"] != suggested_match["user_id"]
           ]
-          matched_count += 1
           log.info(
-            "Auto-accepted name match for %s: %s (%s%%)",
+            "Suggested name match for %s: %s (%s%%)",
             pdf_path.name,
-            student_name,
+            suggested_match["name"],
             match_confidence
           )
         else:
-          student_name = None
-          canvas_user_id = None
+          suggested_canvas_user_id = None
+
+        student_name = None
+        canvas_user_id = None
 
       submission = Submission(
         id=0,
@@ -1471,6 +1475,9 @@ async def process_exam_names(
         display_name=None,
         canvas_user_id=canvas_user_id,
         page_mappings=[],
+        suggested_canvas_user_id=(
+          None if mock_roster else suggested_canvas_user_id
+        ),
         total_score=None,
         graded_at=None,
         file_hash=file_metadata[pdf_path]["hash"],

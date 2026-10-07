@@ -76,37 +76,6 @@ function getVisibleMatchingStudents(submission) {
     return students;
 }
 
-// Simple fuzzy matching helper (Levenshtein distance)
-function fuzzyMatch(str1, str2) {
-    const s1 = str1.toLowerCase();
-    const s2 = str2.toLowerCase();
-    const len1 = s1.length;
-    const len2 = s2.length;
-
-    const matrix = [];
-    for (let i = 0; i <= len1; i++) {
-        matrix[i] = [i];
-    }
-    for (let j = 0; j <= len2; j++) {
-        matrix[0][j] = j;
-    }
-
-    for (let i = 1; i <= len1; i++) {
-        for (let j = 1; j <= len2; j++) {
-            const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
-            matrix[i][j] = Math.min(
-                matrix[i - 1][j] + 1,
-                matrix[i][j - 1] + 1,
-                matrix[i - 1][j - 1] + cost
-            );
-        }
-    }
-
-    const maxLen = Math.max(len1, len2);
-    const distance = matrix[len1][len2];
-    return Math.round((1 - distance / maxLen) * 100);
-}
-
 // Load name matching interface
 async function loadNameMatching() {
     if (!currentSession) return;
@@ -133,37 +102,6 @@ async function loadNameMatching() {
         }
         const studentsData = await studentsResp.json();
         allStudents = studentsData.students;
-
-        // Pre-fill suggestions only once per available student.  Suggestions
-        // are selections just like manual choices, so proposing one student
-        // for two exams is never useful and previously led to a race during
-        // the batch save.
-        const reservedStudentIds = new Set(
-            allSubmissions
-                .filter(submission => submission.canvas_user_id)
-                .map(submission => submission.canvas_user_id)
-        );
-        allSubmissions.forEach(submission => {
-            if (!submission.canvas_user_id && submission.approximate_name) {
-                let bestScore = 0;
-                let bestStudent = null;
-
-                allStudents.forEach(student => {
-                    if (reservedStudentIds.has(student.user_id)) return;
-                    const score = fuzzyMatch(submission.approximate_name, student.name);
-                    if (score > bestScore && score >= 98) {  // 98% threshold (same as backend)
-                        bestScore = score;
-                        bestStudent = student;
-                    }
-                });
-
-                if (bestStudent) {
-                    submission.suggested_canvas_user_id = bestStudent.user_id;
-                    reservedStudentIds.add(bestStudent.user_id);
-                    console.log(`Suggested match for "${submission.approximate_name}": ${bestStudent.name} (${bestScore}%)`);
-                }
-            }
-        });
 
         // Render UI
         renderMatchingList();
@@ -286,6 +224,7 @@ function renderMatchingList() {
 
     container.innerHTML = html;
     setMatchingActionStatus(matchingActionStatus.message, matchingActionStatus.type);
+    handleStudentSelection();
     bindMatchingImagePreview();
 
     document.querySelectorAll('.matching-action-btn[data-action="remove-submission"]').forEach((button) => {
@@ -508,64 +447,47 @@ async function toggleCanvasNameReveal() {
     await loadNameMatching();
 }
 
-// Handle student selection - show warning if student is already matched
+// Highlight duplicate current choices.  Saved matches are deliberately not
+// considered here: an instructor may be moving a student from one row to
+// another in this same review pass.
 function handleStudentSelection(submissionId) {
-    const select = document.getElementById(`select-${submissionId}`);
-    const selectedUserId = parseInt(select.value);
+    const selectedIds = new Map();
+    document.querySelectorAll('.student-select').forEach((select) => {
+        const userId = parseInt(select.value, 10);
+        if (!userId) return;
+        const selects = selectedIds.get(userId) || [];
+        selects.push(select);
+        selectedIds.set(userId, selects);
+    });
 
-    if (!selectedUserId) return;
-
-    // Find the selected student
-    const student = allStudents.find(s => s.user_id === selectedUserId);
-
-    // Check if this student is already matched
-    if (student && student.is_matched) {
-        const currentMatchId = select.dataset.currentMatch;
-
-        // Only show warning if reassigning to a different student
-        if (!currentMatchId || parseInt(currentMatchId) !== selectedUserId) {
-            select.style.borderColor = '#ef4444';
-            select.style.backgroundColor = '#fee2e2';
-        }
-    } else {
-        select.style.borderColor = '';
-        select.style.backgroundColor = '';
-    }
+    document.querySelectorAll('.student-select').forEach((select) => {
+        const userId = parseInt(select.value, 10);
+        const duplicate = userId && (selectedIds.get(userId) || []).length > 1;
+        select.style.borderColor = duplicate ? '#ef4444' : '';
+        select.style.backgroundColor = duplicate ? '#fee2e2' : '';
+    });
 }
 
 // Confirm all matches at once (batch operation)
 async function confirmAllMatches() {
     // Collect all pending matches
     const pendingMatches = [];
-    const warnings = [];
     const selectedStudentIds = new Map();
 
     for (const submission of allSubmissions) {
         const select = document.getElementById(`select-${submission.id}`);
         const selectedUserId = parseInt(select.value);
 
-        // Skip if no selection or if already matched to the same student
-        if (!selectedUserId) continue;
-        if (submission.is_matched && submission.canvas_user_id === selectedUserId) continue;
-
-        if (selectedStudentIds.has(selectedUserId)) {
+        if (selectedUserId && selectedStudentIds.has(selectedUserId)) {
             const otherExam = selectedStudentIds.get(selectedUserId);
             alert(`The same student is selected for Exam #${otherExam} and Exam #${submission.document_id + 1}. Assign each student to only one exam.`);
             return;
         }
-        selectedStudentIds.set(selectedUserId, submission.document_id + 1);
+        if (selectedUserId) selectedStudentIds.set(selectedUserId, submission.document_id + 1);
 
-        // A matched student cannot be reassigned from this screen.  The API
-        // applies the same rule, but stopping here avoids a partially saved
-        // batch when a second browser has changed a match meanwhile.
-        const student = allStudents.find(s => s.user_id === selectedUserId);
-        if (student && student.is_matched) {
-            const currentMatchId = select.dataset.currentMatch;
-            if (!currentMatchId || parseInt(currentMatchId) !== selectedUserId) {
-                alert(`"${student.name}" is already matched to another exam. Clear that exam's match before using this student here.`);
-                return;
-            }
-        }
+        // A blank selection means the existing confirmed match should be
+        // cleared; a selected value is the row's intended final assignment.
+        if (submission.is_matched && submission.canvas_user_id === selectedUserId) continue;
 
         pendingMatches.push({
             submission_id: submission.id,
@@ -590,11 +512,8 @@ async function confirmAllMatches() {
         return;
     }
 
-    // Show confirmation dialog with warnings if any
+    // Show confirmation dialog.
     let confirmMessage = `Confirm ${pendingMatches.length} match(es)?`;
-    if (warnings.length > 0) {
-        confirmMessage += '\n\nWarnings:\n' + warnings.join('\n');
-    }
 
     if (!confirm(confirmMessage)) {
         return;
@@ -608,9 +527,23 @@ async function confirmAllMatches() {
     setMatchingActionStatus(`Saving ${pendingMatches.length} confirmed match(es)...`, 'info');
 
     try {
-        // Save in order.  The server also enforces one exam per student; doing
-        // this serially keeps a stale client view from turning into a race.
+        // First release every changed confirmed match.  This makes moves and
+        // swaps work in one confirmation pass instead of requiring users to
+        // unmatch a row, save, and come back for a second pass.
         const revealQuery = revealCanvasNames ? '?reveal_names=true' : '';
+        const changedExistingMatches = pendingMatches.filter((match) => {
+            const submission = allSubmissions.find((item) => item.id === match.submission_id);
+            return submission && submission.is_matched;
+        });
+        for (const match of changedExistingMatches) {
+            const response = await fetch(`${API_BASE}/matching/${currentSession.id}/unmatch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ submission_id: match.submission_id })
+            });
+            if (!response.ok) throw new Error(await getMatchingApiError(response, 'Failed to clear existing match'));
+        }
+
         const queue = [...pendingMatches];
         const total = queue.length;
         let completed = 0;
@@ -621,6 +554,11 @@ async function confirmAllMatches() {
             while (queue.length > 0) {
                 const match = queue.shift();
                 if (!match) return;
+
+                if (!match.canvas_user_id) {
+                    completed++;
+                    continue;
+                }
 
                 try {
                     const response = await fetch(`${API_BASE}/matching/${currentSession.id}/match${revealQuery}`, {

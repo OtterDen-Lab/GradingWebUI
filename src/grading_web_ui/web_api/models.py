@@ -96,6 +96,7 @@ class SubmissionResponse(BaseModel):
   student_name: Optional[str]
   display_name: Optional[str]
   canvas_user_id: Optional[int]
+  suggested_canvas_user_id: Optional[int] = None
   total_score: Optional[float]
   graded_at: Optional[datetime]
 
@@ -106,6 +107,11 @@ class NameMatchRequest(BaseModel):
   """Request model for manual name matching"""
   submission_id: int
   canvas_user_id: int
+
+
+class NameUnmatchRequest(BaseModel):
+  """Request model for clearing a confirmed manual name match."""
+  submission_id: int
 
 
 class ProblemResponse(BaseModel):

@@ -25,6 +25,7 @@ class Submission:
     student_name: Confirmed student name (after matching)
     display_name: Display name for UI
     canvas_user_id: Canvas user ID (null if unmatched)
+    suggested_canvas_user_id: AI-proposed Canvas user ID (not a confirmed match)
     page_mappings: JSON mapping of pages
     total_score: Sum of all problem scores
     graded_at: When grading completed
@@ -42,6 +43,7 @@ class Submission:
   display_name: Optional[str]
   canvas_user_id: Optional[int]
   page_mappings: dict
+  suggested_canvas_user_id: Optional[int] = None
   total_score: Optional[float] = None
   graded_at: Optional[datetime] = None
   file_hash: Optional[str] = None

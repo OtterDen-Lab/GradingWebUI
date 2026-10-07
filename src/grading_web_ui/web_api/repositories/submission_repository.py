@@ -45,6 +45,7 @@ class SubmissionRepository(BaseRepository[Submission]):
       display_name=row["display_name"],
       canvas_user_id=row["canvas_user_id"],
       page_mappings=page_mappings,
+      suggested_canvas_user_id=row["suggested_canvas_user_id"],
       total_score=row["total_score"],
       graded_at=graded_at,
       file_hash=row["file_hash"],
@@ -103,7 +104,7 @@ class SubmissionRepository(BaseRepository[Submission]):
       cursor = conn.cursor()
       cursor.execute("""
         SELECT id, session_id, document_id, approximate_name,
-               student_name, display_name, canvas_user_id,
+               student_name, display_name, canvas_user_id, suggested_canvas_user_id,
                page_mappings, total_score, graded_at,
                file_hash, original_filename
         FROM submissions
@@ -131,6 +132,7 @@ class SubmissionRepository(BaseRepository[Submission]):
           display_name=row["display_name"],
           canvas_user_id=row["canvas_user_id"],
           page_mappings=page_mappings,
+          suggested_canvas_user_id=row["suggested_canvas_user_id"],
           total_score=row["total_score"],
           graded_at=graded_at,
           file_hash=row["file_hash"],
@@ -157,15 +159,16 @@ class SubmissionRepository(BaseRepository[Submission]):
       cursor.execute("""
         INSERT INTO submissions
         (session_id, document_id, approximate_name, student_name,
-         canvas_user_id, page_mappings, file_hash, original_filename,
+         canvas_user_id, suggested_canvas_user_id, page_mappings, file_hash, original_filename,
          name_image_data, exam_pdf_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       """, (
         submission.session_id,
         submission.document_id,
         submission.approximate_name,
         submission.student_name,
         submission.canvas_user_id,
+        submission.suggested_canvas_user_id,
         json.dumps(submission.page_mappings),
         submission.file_hash,
         submission.original_filename,
@@ -205,15 +208,16 @@ class SubmissionRepository(BaseRepository[Submission]):
         cursor.execute("""
           INSERT INTO submissions
           (session_id, document_id, approximate_name, student_name,
-           canvas_user_id, page_mappings, file_hash, original_filename,
+           canvas_user_id, suggested_canvas_user_id, page_mappings, file_hash, original_filename,
            name_image_data, exam_pdf_data)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
           sub.session_id,
           sub.document_id,
           sub.approximate_name,
           sub.student_name,
           sub.canvas_user_id,
+          sub.suggested_canvas_user_id,
           json.dumps(sub.page_mappings),
           sub.file_hash,
           sub.original_filename,
