@@ -170,7 +170,19 @@ function renderMatchingList() {
         </div>
     `;
 
-    allSubmissions.forEach(submission => {
+    // Keep the review workflow ordered: unresolved rows first, then AI
+    // suggestions to verify, with confirmed matches out of the way last.
+    const submissionsByReviewState = [...allSubmissions].sort((left, right) => {
+        const state = (submission) => {
+            if (submission.is_matched) return 2;
+            if (submission.suggested_canvas_user_id) return 1;
+            return 0;
+        };
+        return state(left) - state(right)
+            || left.document_id - right.document_id;
+    });
+
+    submissionsByReviewState.forEach(submission => {
         const suggestedStudent = !submission.is_matched && submission.suggested_canvas_user_id
             ? allStudents.find((student) => student.user_id === submission.suggested_canvas_user_id)
             : null;
