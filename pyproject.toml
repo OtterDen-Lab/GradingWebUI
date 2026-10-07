@@ -42,6 +42,7 @@ dependencies = [
     "anthropic~=0.75.0",
     "QuizGenerator~=0.27.3",
     "bcrypt~=5.0.0",
+    "cryptography>=44,<47",
     "canvasapi~=3.2.0",
     "otterden-lms-interface~=0.7.3",
 ]
