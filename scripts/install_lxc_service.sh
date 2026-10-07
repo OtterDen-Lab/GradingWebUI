@@ -76,6 +76,7 @@ if [ ! -e "$state_dir/config/web.env" ]; then
     "$state_dir/config/web.env"
   echo "Created $state_dir/config/web.env; set real credentials before starting the service."
 fi
+"$app_dir/scripts/ensure_canvas_credential_key.sh" "$state_dir/config/web.env"
 if [ ! -e "$state_dir/config/backup.env.example" ]; then
   install -m 0600 -o root -g root "$app_dir/deploy/lxc/backup.env.example" \
     "$state_dir/config/backup.env.example"

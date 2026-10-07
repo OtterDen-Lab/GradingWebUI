@@ -21,6 +21,10 @@ done
   echo "Native environment is not installed; run install_lxc_service.sh first." >&2
   exit 1
 }
+[ -f "$state_dir/config/web.env" ] || {
+  echo "Environment file not found: $state_dir/config/web.env; run install_lxc_service.sh first." >&2
+  exit 1
+}
 
 if [ -n "$tag" ]; then
   [ -d "$app_dir/.git" ] || {
@@ -42,6 +46,7 @@ if [ -n "$tag" ]; then
 fi
 
 systemctl stop grading-web.service
+"$app_dir/scripts/ensure_canvas_credential_key.sh" "$state_dir/config/web.env"
 runuser -u "$service_user" -- sh -c "cd '$app_dir' && '$app_dir/.venv/bin/uv' sync --frozen --no-dev"
 # Re-render the unit so deployment changes to environment paths take effect.
 install -d -m 0750 -o "$service_user" -g "$service_user" /var/log/grading-ui

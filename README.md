@@ -46,6 +46,14 @@ GRADING_BOOTSTRAP_ADMIN_PASSWORD=choose_a_strong_password
 On first startup, an initial instructor user is created only when
 `GRADING_BOOTSTRAP_ADMIN_PASSWORD` is set.
 
+For native LXC installs, `make lxc-install` generates and persists
+`CANVAS_CREDENTIAL_ENCRYPTION_KEY` in the LXC's `web.env` when it is absent.
+`make lxc-deploy` performs the same idempotent check. The value is not printed;
+back up the persistent `web.env` file and do not replace this value after users
+have saved Canvas keys. To test only this setup step, run
+`make lxc-ensure-canvas-key` on the LXC host after `lxc-install` has created
+the state configuration.
+
 ### 2. Run the server
 
 ```bash

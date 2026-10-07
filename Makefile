@@ -77,9 +77,11 @@ help:
 	@echo "  make deploy-from-backup BACKUP_FILE=/path/to/grading-backup.db [vX.Y.Z]"
 	@echo "    Deploy a release, replace its fresh database with a verified backup, and start it."
 	@echo "  make lxc-install"
-	@echo "    Install the native systemd service; requires a mounted LXC state volume."
+	@echo "    Install the native systemd service; creates a persistent Canvas-key encryption secret."
 	@echo "  make lxc-deploy [vX.Y.Z]"
-	@echo "    Deploy the current native checkout, or switch to an exact release tag first."
+	@echo "    Update the native service; preserves or creates its Canvas-key encryption secret."
+	@echo "  make lxc-ensure-canvas-key"
+	@echo "    Create the persistent Canvas-key encryption secret if it is absent."
 	@echo "  make lxc-backup BACKUP_DIR=/path/on/off-host-storage"
 	@echo "    Create a verified backup from a native LXC installation."
 	@echo "  make lxc-restore BACKUP_FILE=/path/to/grading-backup.db"
@@ -159,6 +161,9 @@ lxc-install:
 
 lxc-deploy:
 	$(SUDO) scripts/deploy_lxc_service.sh --app-dir "$(LXC_APP_DIR)" --state-dir "$(LXC_STATE_DIR)" --service-user "$(LXC_SERVICE_USER)" $(if $(LXC_DEPLOY_TAG),--tag "$(LXC_DEPLOY_TAG)")
+
+lxc-ensure-canvas-key:
+	$(SUDO) scripts/ensure_canvas_credential_key.sh "$(LXC_STATE_DIR)/config/web.env"
 
 lxc-backup:
 	@if [ -z "$(BACKUP_DIR)" ]; then \
