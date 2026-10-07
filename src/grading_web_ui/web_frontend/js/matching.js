@@ -142,9 +142,14 @@ function renderMatchingList() {
             <strong>${matchedCount}</strong> confirmed, <strong>${suggestedCount}</strong> AI suggestion(s) awaiting review, and <strong>${unmatchedCount}</strong> submission(s) needing a selection.
         </p>
         <div style="margin-bottom: 20px; text-align: center;">
-            <button id="confirm-all-matches-btn" class="btn btn-primary" onclick="confirmAllMatches()" style="padding: 10px 30px; font-size: 16px;">
-                Confirm All Matches
+            <button class="btn btn-primary" onclick="loadNameMatching()" style="padding: 10px 30px; font-size: 16px;">
+                Refresh
             </button>
+            ${matchedCount === allSubmissions.length && allSubmissions.length > 0 ? `
+                <button class="btn btn-success" onclick="prepareAlignment()" style="padding: 10px 20px; margin-left: 10px; font-size: 14px;">
+                    Continue to Alignment
+                </button>
+            ` : ''}
             <button class="btn btn-secondary" onclick="toggleCanvasNameReveal()" style="padding: 10px 20px; margin-left: 10px; font-size: 14px;">
                 ${revealCanvasNames ? 'Hide Real Names' : 'Show Real Names'}
             </button>
@@ -165,7 +170,7 @@ function renderMatchingList() {
                 </div>
             ` : ''}
             <p style="margin-top: 10px; color: var(--gray-600); font-size: 14px;">
-                Select students from the dropdowns below, review the yellow AI suggestions, then click this button to confirm all changes at once.
+                Confirm each row as you review it. Refresh when you are ready to move confirmed rows to the bottom.
             </p>
         </div>
     `;
@@ -230,6 +235,12 @@ function renderMatchingList() {
                         `;
                         }).join('')}
                     </select>
+                    <button type="button"
+                            class="btn btn-primary btn-small"
+                            style="margin-left: 8px;"
+                            onclick="confirmSubmissionMatch(${submission.id})">
+                        ${submission.is_matched ? 'Update Match' : 'Confirm'}
+                    </button>
                     ${canDeleteSubmissions ? `
                         <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
                             <button type="button"
@@ -656,31 +667,45 @@ async function confirmAllMatches() {
     }
 }
 
-// Match a submission to a student (legacy single-match function, kept for compatibility)
-async function matchSubmission(submissionId) {
+// Confirm one reviewed row without reordering the list.  Refresh controls when
+// confirmed rows are moved to the bottom of the review queue.
+async function confirmSubmissionMatch(submissionId) {
     const select = document.getElementById(`select-${submissionId}`);
-    const canvasUserId = parseInt(select.value);
+    const canvasUserId = parseInt(select.value, 10);
+    const submission = allSubmissions.find((item) => item.id === submissionId);
 
-    if (!canvasUserId) {
+    if (!submission || !canvasUserId) {
         alert('Please select a student');
         return;
     }
 
-    // Find the selected student
-    const student = allStudents.find(s => s.user_id === canvasUserId);
-
-    // Confirm if reassigning
-    if (student && student.is_matched) {
-        const currentMatchId = select.dataset.currentMatch;
-        if (!currentMatchId || parseInt(currentMatchId) !== canvasUserId) {
-            if (!confirm(`"${student.name}" is already matched to another exam. This will unassign them from that exam and assign them to this one. Continue?`)) {
-                return;
-            }
-        }
+    const duplicateSelect = Array.from(document.querySelectorAll('.student-select')).find(
+        (otherSelect) => otherSelect !== select
+            && parseInt(otherSelect.value, 10) === canvasUserId
+    );
+    if (duplicateSelect) {
+        alert('This student is selected for another exam. Choose a different student before confirming.');
+        return;
     }
 
     try {
         const revealQuery = revealCanvasNames ? '?reveal_names=true' : '';
+        select.disabled = true;
+
+        // Allow correcting an already-confirmed row in one action.  Moves to
+        // another still-confirmed row are intentionally caught by the
+        // duplicate selection warning above.
+        if (submission.is_matched && submission.canvas_user_id !== canvasUserId) {
+            const clearResponse = await fetch(`${API_BASE}/matching/${currentSession.id}/unmatch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ submission_id: submissionId })
+            });
+            if (!clearResponse.ok) {
+                throw new Error(await getMatchingApiError(clearResponse, 'Failed to clear existing match'));
+            }
+        }
+
         const response = await fetch(`${API_BASE}/matching/${currentSession.id}/match${revealQuery}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -689,23 +714,39 @@ async function matchSubmission(submissionId) {
                 canvas_user_id: canvasUserId
             })
         });
+        if (!response.ok) {
+            throw new Error(await getMatchingApiError(response, 'Failed to confirm match'));
+        }
 
         const result = await response.json();
+        const student = allStudents.find((item) => item.user_id === canvasUserId);
+        submission.is_matched = true;
+        submission.canvas_user_id = canvasUserId;
+        submission.student_name = result.student_name || (student && student.name) || '';
+        select.dataset.currentMatch = String(canvasUserId);
+        select.disabled = false;
 
-        // Reload data to reflect changes
-        await loadNameMatching();
-
-        // If all matched, move to alignment
-        if (result.remaining_unmatched === 0) {
-            setTimeout(async () => {
-                await prepareAlignment();
-            }, 1500);
+        const row = document.querySelector(`.matching-item[data-submission-id="${submissionId}"]`);
+        if (row) {
+            row.classList.remove('unmatched', 'soft-matched');
+            row.classList.add('matched');
+            const status = row.querySelector('.match-status');
+            if (status) status.textContent = `✓ Confirmed match: ${submission.student_name}`;
+            const button = row.querySelector('button.btn-primary');
+            if (button) button.textContent = 'Update Match';
         }
+        setMatchingActionStatus(`Confirmed Exam #${submission.document_id + 1}.`, 'success');
 
     } catch (error) {
         console.error('Failed to match submission:', error);
-        alert('Failed to match submission');
+        select.disabled = false;
+        alert(error.message || 'Failed to confirm match');
     }
+}
+
+// Kept for compatibility with older templates or external integrations.
+async function matchSubmission(submissionId) {
+    await confirmSubmissionMatch(submissionId);
 }
 
 // Auto-load data when navigating to sections
