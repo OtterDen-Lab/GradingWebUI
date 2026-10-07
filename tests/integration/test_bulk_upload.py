@@ -58,6 +58,7 @@ def test_db():
       student_name TEXT,
       display_name TEXT,
       canvas_user_id INTEGER,
+      suggested_canvas_user_id INTEGER,
       page_mappings TEXT,
       total_score REAL,
       graded_at TIMESTAMP,
