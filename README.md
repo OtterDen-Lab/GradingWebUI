@@ -35,9 +35,9 @@ Copy `.env.example` to `.env` and set values:
 ```bash
 cp .env.example .env
 
-# Required Canvas settings
-CANVAS_API_KEY=your_canvas_api_key_here
+# Required Canvas settings. Users add their own API keys after signing in.
 CANVAS_API_URL=https://your-institution.instructure.com
+CANVAS_CREDENTIAL_ENCRYPTION_KEY=choose_a_long_random_server_secret
 
 # Required for first login bootstrap
 GRADING_BOOTSTRAP_ADMIN_PASSWORD=choose_a_strong_password

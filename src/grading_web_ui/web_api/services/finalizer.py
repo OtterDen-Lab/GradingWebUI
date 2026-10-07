@@ -21,6 +21,7 @@ from ..services.problem_service import ProblemService
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from ..services.feedback_text import merge_general_feedback
 from lms_interface.canvas_interface import CanvasInterface
+from .canvas_credentials import create_canvas_interface
 from .. import sse
 
 log = logging.getLogger(__name__)
@@ -43,7 +44,8 @@ class FinalizationService:
                event_loop, *, keep_previous_best: bool = True,
                clobber_feedback: bool = False,
                suppress_feedback: bool = False,
-               selected_submission_ids: List[int] | None = None):
+               selected_submission_ids: List[int] | None = None,
+               canvas_user_id: int | None = None):
     self.session_id = session_id
     self.temp_dir = temp_dir
     self.stream_id = stream_id
@@ -54,6 +56,7 @@ class FinalizationService:
     self.selected_submission_ids = (set(selected_submission_ids)
                                     if selected_submission_ids is not None
                                     else None)
+    self.canvas_user_id = canvas_user_id
     self.canvas_interface = None
     self.course = None
     self.assignment = None
@@ -172,8 +175,11 @@ class FinalizationService:
     log.info(
       f"Initializing Canvas interface: session_info['use_prod_canvas'] = {session_info.get('use_prod_canvas')} → use_prod = {use_prod}"
     )
-    log.info(f"Calling CanvasInterface(prod={use_prod})")
-    self.canvas_interface = CanvasInterface(prod=use_prod)
+    if self.canvas_user_id is None:
+      raise ValueError("A Canvas credential user is required for finalization.")
+    log.info("Initializing Canvas using the finalizing user's credentials")
+    self.canvas_interface = create_canvas_interface(
+      self.canvas_user_id, use_prod=use_prod)
     log.info(
       f"Canvas interface initialized with URL: {self.canvas_interface.canvas_url}"
     )

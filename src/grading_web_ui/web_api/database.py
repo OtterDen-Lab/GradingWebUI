@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Default database path (can be overridden via environment variable)
 DEFAULT_DB_PATH = Path.home() / ".autograder" / "grading.db"
-CURRENT_SCHEMA_VERSION = 34
+CURRENT_SCHEMA_VERSION = 35
 BOOTSTRAP_ADMIN_USERNAME_ENV = "GRADING_BOOTSTRAP_ADMIN_USERNAME"
 BOOTSTRAP_ADMIN_PASSWORD_ENV = "GRADING_BOOTSTRAP_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_EMAIL_ENV = "GRADING_BOOTSTRAP_ADMIN_EMAIL"
@@ -510,6 +510,7 @@ def create_schema(cursor):
   migrate_to_v32(cursor)
   migrate_to_v33(cursor)
   migrate_to_v34(cursor)
+  migrate_to_v35(cursor)
 
   maybe_create_bootstrap_admin(cursor)
 
@@ -657,6 +658,10 @@ def run_migrations(cursor, from_version: int):
   if from_version < 34:
     migrate_to_v34(cursor)
     cursor.execute("INSERT INTO _schema_version (version) VALUES (34)")
+
+  if from_version < 35:
+    migrate_to_v35(cursor)
+    cursor.execute("INSERT INTO _schema_version (version) VALUES (35)")
 
 
 def migrate_to_v2(cursor):
@@ -1401,6 +1406,21 @@ def migrate_to_v34(cursor):
   cursor.execute("""
     CREATE INDEX IF NOT EXISTS idx_handwriting_analysis_results_run
     ON handwriting_analysis_results(run_id, problem_id, model_id)
+  """)
+
+
+def migrate_to_v35(cursor):
+  """Store encrypted, per-user Canvas API credentials."""
+  log.info("Migrating to schema version 35: adding user Canvas credentials")
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_canvas_credentials (
+      user_id INTEGER NOT NULL,
+      environment TEXT NOT NULL CHECK(environment IN ('development', 'production')),
+      encrypted_api_key TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, environment),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
   """)
 
 

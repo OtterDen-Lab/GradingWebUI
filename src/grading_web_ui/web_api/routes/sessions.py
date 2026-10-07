@@ -46,11 +46,13 @@ from ..domain.common import SessionStatus as DomainSessionStatus
 from ..domain.session import GradingSession
 from ..database import update_problem_stats
 from lms_interface.canvas_interface import CanvasInterface
+from ..services.canvas_credentials import create_canvas_interface
 from ..auth import get_current_user, require_instructor, require_session_access
 import os
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+_DEFAULT_CANVAS_INTERFACE = CanvasInterface
 MOCK_ROSTER_ENV = "ALLOW_MOCK_ROSTER"
 QUIZ_YAML_TEXT_KEY = "quiz_yaml_text"
 QUIZ_YAML_FILENAME_KEY = "quiz_yaml_filename"
@@ -71,6 +73,18 @@ DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
 TAG_SIGNATURE_DELIMITER = "|"
+
+
+def _canvas_for_user(user_id: int, *, use_prod: bool,
+                     privacy_mode: str | None = None):
+  """Use the per-user client; retain the module seam used by route tests."""
+  if CanvasInterface is not _DEFAULT_CANVAS_INTERFACE:
+    kwargs = {"prod": use_prod}
+    if privacy_mode is not None:
+      kwargs["privacy_mode"] = privacy_mode
+    return CanvasInterface(**kwargs)
+  return create_canvas_interface(user_id, use_prod=use_prod,
+                                 privacy_mode=privacy_mode)
 
 
 def _display_feedback(problem) -> Optional[str]:
@@ -160,11 +174,12 @@ def _collect_student_sections(course) -> dict[int, str]:
 
 
 def _load_canvas_students_with_sections(session_id: int,
-                                        session) -> list[dict]:
+                                        session, user_id: int) -> list[dict]:
   """Fetch Canvas students and section labels, caching the result on success."""
   session_repo = SessionRepository()
-  canvas_interface = CanvasInterface(
-    prod=session.use_prod_canvas,
+  canvas_interface = _canvas_for_user(
+    user_id,
+    use_prod=session.use_prod_canvas,
     privacy_mode="none",
   )
   course = canvas_interface.get_course(session.course_id)
@@ -185,7 +200,8 @@ def _load_canvas_students_with_sections(session_id: int,
   return normalized
 
 
-def _cached_canvas_section_lookup(session_id: int) -> tuple[dict[int, str], list[str]]:
+def _cached_canvas_section_lookup(session_id: int,
+                                  user_id: int) -> tuple[dict[int, str], list[str]]:
   """
   Load cached Canvas student section data for a session.
 
@@ -219,7 +235,7 @@ def _cached_canvas_section_lookup(session_id: int) -> tuple[dict[int, str], list
     return {}, []
 
   try:
-    live_students = _load_canvas_students_with_sections(session_id, session)
+    live_students = _load_canvas_students_with_sections(session_id, session, user_id)
   except Exception as exc:
     metadata = session_repo.get_metadata(session_id) or {}
     metadata["canvas_roster_error"] = str(exc)
@@ -706,7 +722,7 @@ async def get_session_stats(
 
   problem_repo = ProblemRepository()
   metadata_repo = ProblemMetadataRepository()
-  section_lookup, _ = _cached_canvas_section_lookup(session_id)
+  section_lookup, _ = _cached_canvas_section_lookup(session_id, current_user["user_id"])
   section_user_ids = _canvas_user_ids_for_section(section_lookup, section)
   log = logging.getLogger(__name__)
 
@@ -843,7 +859,7 @@ async def get_student_scores(
 ):
   """Get aggregated scores for all students in a session (requires session access)"""
   submission_repo = SubmissionRepository()
-  section_lookup, section_values = _cached_canvas_section_lookup(session_id)
+  section_lookup, section_values = _cached_canvas_section_lookup(session_id, current_user["user_id"])
   section_user_ids = _canvas_user_ids_for_section(section_lookup, section)
   students = submission_repo.get_student_scores(
     session_id,
@@ -1029,7 +1045,7 @@ async def get_canvas_info(
     }
 
   use_prod = session.use_prod_canvas
-  canvas = CanvasInterface(prod=use_prod)
+  canvas = _canvas_for_user(current_user["user_id"], use_prod=use_prod)
 
   # Get course and assignment to construct URL
   course = canvas.get_course(session.course_id)
@@ -1075,7 +1091,7 @@ async def update_canvas_config(
     )
 
   # Get course and assignment details from Canvas
-  canvas_interface = CanvasInterface(prod=use_prod)
+  canvas_interface = _canvas_for_user(current_user["user_id"], use_prod=use_prod)
   try:
     course = canvas_interface.get_course(course_id)
     assignment = course.get_assignment(assignment_id)

@@ -103,6 +103,7 @@ function updateUserDisplay() {
                 Logged in as <strong>${currentUser.username}</strong> (${roleLabel})
             </span>
             <button id="change-password-btn" class="btn btn-secondary" style="margin-right: 5px;">Change Password</button>
+            <button id="canvas-settings-btn" class="btn btn-secondary" style="margin-right: 5px;">Canvas</button>
             <button id="ai-settings-btn" class="btn btn-secondary" style="margin-right: 5px;">Settings</button>
             <button id="logout-btn" class="btn btn-secondary">Logout</button>
         `;
@@ -112,6 +113,10 @@ function updateUserDisplay() {
 
         // Add change password handler
         document.getElementById('change-password-btn').onclick = openChangePasswordModal;
+        document.getElementById('canvas-settings-btn').onclick = () => {
+            navigateToSection('canvas-settings-section');
+            loadCanvasCredentialSettings();
+        };
         document.getElementById('ai-settings-btn').onclick = () => {
             navigateToSection('ai-settings-section');
             loadAIModelSettings();

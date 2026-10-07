@@ -27,17 +27,20 @@ def validate_startup_configuration() -> List[str]:
   prod_key = (os.getenv("CANVAS_API_KEY_PROD", "").strip() or
               os.getenv("CANVAS_API_KEY_prod", "").strip())
 
-  if bool(dev_url) != bool(dev_key):
+  # URLs identify the institution's Canvas environments; API keys are now
+  # normally stored encrypted per user. A legacy environment key remains
+  # harmless, but must still have a matching URL when supplied.
+  if dev_key and not dev_url:
     errors.append(
-      "Both CANVAS_API_URL and CANVAS_API_KEY must be set together for dev Canvas access."
+      "CANVAS_API_KEY requires CANVAS_API_URL for dev Canvas access."
     )
-  if bool(prod_url) != bool(prod_key):
+  if prod_key and not prod_url:
     errors.append(
-      "Both CANVAS_API_URL_PROD and CANVAS_API_KEY_PROD must be set together for prod Canvas access."
+      "CANVAS_API_KEY_PROD requires CANVAS_API_URL_PROD for prod Canvas access."
     )
-  if not ((dev_url and dev_key) or (prod_url and prod_key)):
+  if not (dev_url or prod_url):
     errors.append(
-      "Canvas credentials are missing. Set CANVAS_API_URL and CANVAS_API_KEY (or prod equivalents)."
+      "Canvas credentials are missing. Set CANVAS_API_URL (or CANVAS_API_URL_PROD)."
     )
 
   if not _is_truthy(os.getenv("AUTH_COOKIE_SECURE", "true")):

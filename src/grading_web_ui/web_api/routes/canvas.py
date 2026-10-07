@@ -1,19 +1,21 @@
 """
 Canvas API integration endpoints.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 import os
 
-from lms_interface.canvas_interface import CanvasInterface
+from ..auth import get_current_user
+from ..services.canvas_credentials import CanvasCredentialsError, create_canvas_interface
 
 router = APIRouter()
 
 
 @router.get("/courses")
-async def list_courses(use_prod: bool = False):
+async def list_courses(use_prod: bool = False,
+                       current_user: dict = Depends(get_current_user)):
   """List all active courses for the current user"""
   try:
-    canvas_interface = get_canvas_interface(use_prod=use_prod)
+    canvas_interface = get_canvas_interface(current_user["user_id"], use_prod=use_prod)
 
     # Get all active courses, include additional fields for sorting
     courses = canvas_interface.canvas.get_courses(
@@ -59,19 +61,22 @@ async def list_courses(use_prod: bool = False):
 
     return {"courses": course_list, "environment": env_label}
 
+  except CanvasCredentialsError as e:
+    raise HTTPException(status_code=422, detail=str(e)) from e
   except Exception as e:
     raise HTTPException(status_code=500,
                         detail=f"Failed to fetch courses: {str(e)}")
 
 
 @router.get("/courses/{course_id}/assignments")
-async def list_assignments(course_id: int, use_prod: bool = False):
+async def list_assignments(course_id: int, use_prod: bool = False,
+                           current_user: dict = Depends(get_current_user)):
   """List all assignments for a course"""
   import logging
   log = logging.getLogger(__name__)
 
   try:
-    canvas_interface = get_canvas_interface(use_prod=use_prod)
+    canvas_interface = get_canvas_interface(current_user["user_id"], use_prod=use_prod)
 
     # Get the raw Canvas course object directly from the canvasapi library
     canvas_course = canvas_interface.canvas.get_course(course_id)
@@ -99,13 +104,15 @@ async def list_assignments(course_id: int, use_prod: bool = False):
       f"Found {len(assignment_list)} assignments for course {course_id}")
     return {"assignments": assignment_list}
 
+  except CanvasCredentialsError as e:
+    raise HTTPException(status_code=422, detail=str(e)) from e
   except Exception as e:
     log.error(f"Failed to fetch assignments: {e}", exc_info=True)
     raise HTTPException(status_code=500,
                         detail=f"Failed to fetch assignments: {str(e)}")
 
 
-def get_canvas_interface(use_prod: bool = False):
+def get_canvas_interface(user_id: int, use_prod: bool = False):
   """
     Get CanvasInterface instance.
     Defaults to non-prod (dev) for safety.
@@ -114,17 +121,15 @@ def get_canvas_interface(use_prod: bool = False):
         use_prod: If True, use production Canvas; otherwise use dev/beta
     """
 
-  # Use existing CanvasInterface which handles ~/.env loading
-  canvas_interface = CanvasInterface(prod=use_prod)
-
-  return canvas_interface
+  return create_canvas_interface(user_id, use_prod=use_prod)
 
 
 @router.get("/courses/{course_id}")
-async def get_course_info(course_id: int):
+async def get_course_info(course_id: int,
+                          current_user: dict = Depends(get_current_user)):
   """Fetch course information from Canvas"""
   try:
-    canvas_interface = get_canvas_interface()
+    canvas_interface = get_canvas_interface(current_user["user_id"])
 
     # Use the existing get_course method
     course = canvas_interface.get_course(course_id)
@@ -141,6 +146,8 @@ async def get_course_info(course_id: int):
       "environment": env_label,  # Explicitly send environment
     }
 
+  except CanvasCredentialsError as e:
+    raise HTTPException(status_code=422, detail=str(e)) from e
   except ImportError as e:
     raise HTTPException(status_code=500,
                         detail=f"Canvas interface not available: {str(e)}")
@@ -149,13 +156,14 @@ async def get_course_info(course_id: int):
 
 
 @router.get("/courses/{course_id}/assignments/{assignment_id}")
-async def get_assignment_info(course_id: int, assignment_id: int):
+async def get_assignment_info(course_id: int, assignment_id: int,
+                              current_user: dict = Depends(get_current_user)):
   """Fetch assignment information from Canvas"""
   import logging
   log = logging.getLogger(__name__)
 
   try:
-    canvas_interface = get_canvas_interface()
+    canvas_interface = get_canvas_interface(current_user["user_id"])
 
     # Use the existing get_course method
     course = canvas_interface.get_course(course_id)
@@ -184,6 +192,8 @@ async def get_assignment_info(course_id: int, assignment_id: int):
       "environment": env_label,  # Explicitly send environment
     }
 
+  except CanvasCredentialsError as e:
+    raise HTTPException(status_code=422, detail=str(e)) from e
   except ImportError as e:
     raise HTTPException(status_code=500,
                         detail=f"Canvas interface not available: {str(e)}")

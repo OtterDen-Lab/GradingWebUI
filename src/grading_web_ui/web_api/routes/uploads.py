@@ -37,11 +37,21 @@ import threading
 from ..services.exam_processor import ExamProcessor, PRESCAN_DPI_STEPS, NAME_SIMILARITY_THRESHOLD
 from ..services.qr_scanner import QRScanner
 from lms_interface.canvas_interface import CanvasInterface
+from ..services.canvas_credentials import create_canvas_interface
 from ..repositories import SessionRepository, SubmissionRepository, ProblemMetadataRepository, ProblemRepository
 from ..domain.common import SessionStatus
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+_DEFAULT_CANVAS_INTERFACE = CanvasInterface
+
+
+def _canvas_for_user(user_id: int, *, use_prod: bool, privacy_mode: str):
+  """Use per-user credentials while preserving the established test seam."""
+  if CanvasInterface is not _DEFAULT_CANVAS_INTERFACE:
+    return CanvasInterface(prod=use_prod, privacy_mode=privacy_mode)
+  return create_canvas_interface(user_id, use_prod=use_prod,
+                                 privacy_mode=privacy_mode)
 QUIZ_YAML_TEXT_KEY = "quiz_yaml_text"
 QUIZ_YAML_FILENAME_KEY = "quiz_yaml_filename"
 QUIZ_YAML_IDS_KEY = "quiz_yaml_ids"
@@ -622,6 +632,9 @@ async def upload_exams(
 
   session_data[QR_SCAN_ENABLED_KEY] = resolved_qr_scan_enabled
   session_data[QR_SCAN_MAX_DPI_KEY] = resolved_qr_scan_max_dpi
+  # Background name extraction has no request context. Retain only the user ID,
+  # never the key itself, so it can resolve that user's encrypted credential.
+  session_data["canvas_credential_user_id"] = current_user["user_id"]
 
   # Update session with file metadata and status
   session_repo.update_metadata(session_id, session_data)
@@ -1288,8 +1301,12 @@ async def process_exam_names(
           cached_students.append({"name": name, "user_id": user_id})
 
       try:
-        canvas_interface = CanvasInterface(
-          prod=session.use_prod_canvas,
+        credential_user_id = session_data.get("canvas_credential_user_id")
+        if not isinstance(credential_user_id, int):
+          raise ValueError("No Canvas credential user is associated with this upload.")
+        canvas_interface = _canvas_for_user(
+          credential_user_id,
+          use_prod=session.use_prod_canvas,
           privacy_mode="none"
         )
         course = canvas_interface.get_course(session.course_id)

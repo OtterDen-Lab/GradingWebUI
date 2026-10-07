@@ -470,6 +470,16 @@
                 </div>
             </section>
 
+            <section id="canvas-settings-section" class="section">
+                <h2>Canvas API Keys</h2>
+                <p style="color: var(--gray-700);">Your API keys are encrypted before they are stored. They are never shown again after saving.</p>
+                <div id="canvas-settings-error" style="display:none; color: var(--danger-color); margin-bottom: 12px;"></div>
+                <div id="canvas-settings-form"></div>
+                <div style="display:flex; gap:10px; margin-top:18px;">
+                    <button id="canvas-settings-back" class="btn">Back</button>
+                </div>
+            </section>
+
             <!-- User Management Section -->
             <section id="user-management-section" class="section instructor-only">
                 <h2>User Management</h2>
@@ -1275,6 +1285,7 @@
     <script src="/js/app.js"></script>
     <script src="/js/user_management.js"></script>
     <script src="/js/ai_settings.js"></script>
+    <script src="/js/canvas_settings.js"></script>
     <script src="/js/session_assignments.js"></script>
     <script src="/js/matching.js"></script>
     <script src="/js/grading.js"></script>

@@ -8,15 +8,25 @@ from pathlib import Path
 import base64
 import fitz  # PyMuPDF
 import logging
+from lms_interface.canvas_interface import CanvasInterface
 
 from ..models import NameMatchRequest
 from ..database import get_db_connection
 from ..repositories import SessionRepository, SubmissionRepository
-from lms_interface.canvas_interface import CanvasInterface
 from ..auth import require_session_access
+from ..services.canvas_credentials import create_canvas_interface
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+_DEFAULT_CANVAS_INTERFACE = CanvasInterface
+
+
+def _canvas_for_user(user_id: int, *, use_prod: bool, privacy_mode: str):
+  """Use the per-user client; retain the module seam used by route tests."""
+  if CanvasInterface is not _DEFAULT_CANVAS_INTERFACE:
+    return CanvasInterface(prod=use_prod, privacy_mode=privacy_mode)
+  return create_canvas_interface(user_id, use_prod=use_prod,
+                                 privacy_mode=privacy_mode)
 
 
 def _normalize_section_label(raw_section) -> str | None:
@@ -119,15 +129,14 @@ def _normalize_cached_students(raw_students) -> list[dict]:
 
 def _load_canvas_students_with_fallback(session_id: int,
                                         session,
-                                        reveal_names: bool) -> list[dict]:
+                                        reveal_names: bool,
+                                        user_id: int) -> list[dict]:
   session_repo = SessionRepository()
   privacy_mode = "none" if reveal_names else "id_only"
 
   try:
-    canvas_interface = CanvasInterface(
-      prod=session.use_prod_canvas,
-      privacy_mode=privacy_mode
-    )
+    canvas_interface = _canvas_for_user(
+      user_id, use_prod=session.use_prod_canvas, privacy_mode=privacy_mode)
     course = canvas_interface.get_course(session.course_id)
     assignment = course.get_assignment(session.assignment_id)
     students = assignment.get_students(include_names=True)
@@ -296,7 +305,8 @@ async def get_all_students(
   all_students = _load_canvas_students_with_fallback(
     session_id=session_id,
     session=session,
-    reveal_names=reveal_names
+    reveal_names=reveal_names,
+    user_id=current_user["user_id"],
   )
 
   # Get already matched user IDs
@@ -345,7 +355,8 @@ async def match_submission(
   students = _load_canvas_students_with_fallback(
     session_id=session_id,
     session=session,
-    reveal_names=reveal_names
+    reveal_names=reveal_names,
+    user_id=current_user["user_id"],
   )
 
   student = next((s for s in students if s["user_id"] == match.canvas_user_id), None)

@@ -133,7 +133,7 @@ async def finalize_session(
   # Start background finalization
   try:
     background_tasks.add_task(run_finalization, session_id, stream_id,
-                              finalization_options)
+                              finalization_options, current_user["user_id"])
   except Exception:
     workflow_locks.release("finalize", session_id)
     raise
@@ -196,7 +196,8 @@ async def get_finalize_feedback_preview(
 
 
 async def run_finalization(session_id: int, stream_id: str,
-                           options: Optional[FinalizeOptions] = None):
+                           options: Optional[FinalizeOptions] = None,
+                           canvas_user_id: int | None = None):
   """Background task to finalize grading and upload to Canvas"""
   try:
     log.info(f"Starting finalization for session {session_id}")
@@ -223,6 +224,7 @@ async def run_finalization(session_id: int, stream_id: str,
         clobber_feedback=finalization_options.clobber_feedback,
         suppress_feedback=finalization_options.suppress_feedback,
         selected_submission_ids=finalization_options.submission_ids,
+        canvas_user_id=canvas_user_id,
       )
 
       # Run finalization in thread executor so event loop can send SSE events
