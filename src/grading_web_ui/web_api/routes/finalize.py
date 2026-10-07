@@ -11,7 +11,7 @@ import tempfile
 import shutil
 import logging
 import asyncio
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 
 from ..database import get_db_connection
 from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository
@@ -30,6 +30,9 @@ class FinalizeOptions(BaseModel):
   clobber_feedback: bool = False
   suppress_feedback: bool = False
   submission_ids: list[int] | None = None
+  # Request-scoped internal context. Keeping this off the task call preserves
+  # the worker's public signature and prevents a client from supplying it.
+  _canvas_user_id: int | None = PrivateAttr(default=None)
 
 
 @router.get("/{session_id}/finalize-stream")
@@ -95,6 +98,7 @@ async def finalize_session(
                         detail="Finalization is already running for this session")
 
   finalization_options = options or FinalizeOptions()
+  finalization_options._canvas_user_id = current_user["user_id"]
   if finalization_options.submission_ids is not None:
     if len(finalization_options.submission_ids) == 0:
       workflow_locks.release("finalize", session_id)
@@ -133,7 +137,7 @@ async def finalize_session(
   # Start background finalization
   try:
     background_tasks.add_task(run_finalization, session_id, stream_id,
-                              finalization_options, current_user["user_id"])
+                              finalization_options)
   except Exception:
     workflow_locks.release("finalize", session_id)
     raise
@@ -196,8 +200,7 @@ async def get_finalize_feedback_preview(
 
 
 async def run_finalization(session_id: int, stream_id: str,
-                           options: Optional[FinalizeOptions] = None,
-                           canvas_user_id: int | None = None):
+                           options: Optional[FinalizeOptions] = None):
   """Background task to finalize grading and upload to Canvas"""
   try:
     log.info(f"Starting finalization for session {session_id}")
@@ -224,7 +227,7 @@ async def run_finalization(session_id: int, stream_id: str,
         clobber_feedback=finalization_options.clobber_feedback,
         suppress_feedback=finalization_options.suppress_feedback,
         selected_submission_ids=finalization_options.submission_ids,
-        canvas_user_id=canvas_user_id,
+        canvas_user_id=finalization_options._canvas_user_id,
       )
 
       # Run finalization in thread executor so event loop can send SSE events

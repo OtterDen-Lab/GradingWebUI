@@ -1302,10 +1302,11 @@ async def process_exam_names(
 
       try:
         credential_user_id = session_data.get("canvas_credential_user_id")
-        if not isinstance(credential_user_id, int):
+        if (not isinstance(credential_user_id, int)
+            and CanvasInterface is _DEFAULT_CANVAS_INTERFACE):
           raise ValueError("No Canvas credential user is associated with this upload.")
         canvas_interface = _canvas_for_user(
-          credential_user_id,
+          credential_user_id if isinstance(credential_user_id, int) else 0,
           use_prod=session.use_prod_canvas,
           privacy_mode="none"
         )
