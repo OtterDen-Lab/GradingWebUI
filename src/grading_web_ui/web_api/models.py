@@ -110,8 +110,9 @@ class NameMatchRequest(BaseModel):
 
 
 class NameUnmatchRequest(BaseModel):
-  """Request model for clearing a confirmed manual name match."""
+  """Request model for clearing a confirmed or suggested name match."""
   submission_id: int
+  dismiss_suggestion: bool = False
 
 
 class ProblemResponse(BaseModel):

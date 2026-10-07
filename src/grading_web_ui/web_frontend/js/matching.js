@@ -221,7 +221,7 @@ function renderMatchingList() {
                     <select class="student-select" id="select-${submission.id}"
                             ${submission.is_matched ? `data-current-match="${submission.canvas_user_id}"` : ''}
                             onchange="handleStudentSelection(${submission.id})">
-                        <option value="">-- Select Canvas Student --</option>
+                        <option value="">----</option>
                         ${getVisibleMatchingStudents(submission).map(s => {
                             // Pre-select if this is the actual match OR the suggested match
                             const isSelected = (submission.canvas_user_id === s.user_id) ||
@@ -674,8 +674,49 @@ async function confirmSubmissionMatch(submissionId) {
     const canvasUserId = parseInt(select.value, 10);
     const submission = allSubmissions.find((item) => item.id === submissionId);
 
-    if (!submission || !canvasUserId) {
-        alert('Please select a student');
+    if (!submission) {
+        return;
+    }
+
+    // "----" means this exam deliberately has no confirmed match yet.  Save
+    // that choice by clearing both a previous match and an AI suggestion so
+    // Refresh leaves the row in the unresolved group.
+    if (!canvasUserId) {
+        try {
+            select.disabled = true;
+            const response = await fetch(`${API_BASE}/matching/${currentSession.id}/unmatch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    submission_id: submissionId,
+                    dismiss_suggestion: true
+                })
+            });
+            if (!response.ok) {
+                throw new Error(await getMatchingApiError(response, 'Failed to clear match'));
+            }
+
+            submission.is_matched = false;
+            submission.canvas_user_id = null;
+            submission.student_name = null;
+            submission.suggested_canvas_user_id = null;
+            select.disabled = false;
+
+            const row = document.querySelector(`.matching-item[data-submission-id="${submissionId}"]`);
+            if (row) {
+                row.classList.remove('matched', 'soft-matched');
+                row.classList.add('unmatched');
+                const status = row.querySelector('.match-status');
+                if (status) status.textContent = 'No AI suggestion — select a student';
+                const button = row.querySelector('button.btn-primary');
+                if (button) button.textContent = 'Confirm';
+            }
+            setMatchingActionStatus(`Cleared the match for Exam #${submission.document_id + 1}.`, 'info');
+        } catch (error) {
+            console.error('Failed to clear match:', error);
+            select.disabled = false;
+            alert(error.message || 'Failed to clear match');
+        }
         return;
     }
 

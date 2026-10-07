@@ -400,11 +400,13 @@ async def unmatch_submission(
   match: NameUnmatchRequest,
   current_user: dict = Depends(require_session_access())
 ):
-  """Clear a confirmed match so a review pass can move or swap students."""
+  """Clear a confirmed match; optionally dismiss its AI suggestion too."""
   submission_repo = SubmissionRepository()
   submission = submission_repo.get_by_id(match.submission_id)
   if not submission or submission.session_id != session_id:
     raise HTTPException(status_code=404, detail="Submission not found")
 
   submission_repo.clear_match(match.submission_id)
+  if match.dismiss_suggestion:
+    submission_repo.clear_suggestion(match.submission_id)
   return {"status": "unmatched"}

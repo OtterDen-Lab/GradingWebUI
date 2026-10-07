@@ -375,6 +375,16 @@ class SubmissionRepository(BaseRepository[Submission]):
         WHERE id = ?
       """, (submission_id,))
 
+  def clear_suggestion(self, submission_id: int) -> None:
+    """Remove the AI name suggestion from a submission."""
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        UPDATE submissions
+        SET suggested_canvas_user_id = NULL
+        WHERE id = ?
+      """, (submission_id,))
+
   def get_by_canvas_user(self, session_id: int, canvas_user_id: int) -> Optional[Submission]:
     """
     Find submission matched to specific Canvas user.
