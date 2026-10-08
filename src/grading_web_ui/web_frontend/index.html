@@ -35,6 +35,19 @@
             <p id="notification-message"></p>
             <button id="notification-ok" class="btn btn-primary">OK</button>
         </div>
+
+        <div style="margin: 20px 0;">
+          <strong>4. Response analysis</strong>
+          <div style="display: flex; align-items: center; gap: 16px; margin-top: 10px; flex-wrap: wrap;">
+            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
+              <input type="checkbox" id="session-llm-blank-detection-enabled">
+              Analyze handwriting for AI blank detection during processing
+            </label>
+          </div>
+          <small style="display: block; margin-top: 8px; color: var(--gray-600);">
+            Uses the configured default handwriting model and also records relevance.
+          </small>
+        </div>
     </div>
 
     <!-- Change Password Modal -->

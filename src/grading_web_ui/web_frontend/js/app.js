@@ -291,12 +291,14 @@ function openNewSessionModal() {
   document.querySelector('input[name="name-handling"][value="ai"]').checked = true;
   const sessionQrScanEnabled = document.getElementById('session-qr-scan-enabled');
   const sessionQrScanMaxDpi = document.getElementById('session-qr-scan-max-dpi');
+  const sessionLlmBlankDetection = document.getElementById('session-llm-blank-detection-enabled');
   if (sessionQrScanEnabled) {
     sessionQrScanEnabled.checked = false;
   }
   if (sessionQrScanMaxDpi) {
     sessionQrScanMaxDpi.value = '300';
   }
+  if (sessionLlmBlankDetection) sessionLlmBlankDetection.checked = false;
   refreshSessionQrScanControls();
   applySessionSourceMode(defaultSource);
   if (defaultSource === 'manual') {
@@ -1244,6 +1246,7 @@ async function createNewSession(e) {
   const useProdCanvas = document.getElementById('canvas-env-new').value === 'true';
   const useAiNameExtraction = getNameHandling() === 'ai';
   const qrScanSettings = getSessionQrScanSettings();
+  const llmBlankDetectionEnabled = document.getElementById('session-llm-blank-detection-enabled')?.checked || false;
 
   try {
     const response = await fetch(`${API_BASE}/sessions`, {
@@ -1260,7 +1263,8 @@ async function createNewSession(e) {
         use_mock_roster: useMockRoster,
         use_ai_name_extraction: useAiNameExtraction,
         qr_scan_enabled: qrScanSettings.enabled,
-        qr_scan_max_dpi: qrScanSettings.maxDpi
+        qr_scan_max_dpi: qrScanSettings.maxDpi,
+        llm_blank_detection_enabled: llmBlankDetectionEnabled
       })
     });
 

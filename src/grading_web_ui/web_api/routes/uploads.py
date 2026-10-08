@@ -60,6 +60,7 @@ QUIZ_YAML_UPLOADED_AT_KEY = "quiz_yaml_uploaded_at"
 NAME_RECT_KEY = "name_rect"
 QR_SCAN_ENABLED_KEY = "qr_scan_enabled"
 QR_SCAN_MAX_DPI_KEY = "qr_scan_max_dpi"
+LLM_BLANK_DETECTION_ENABLED_KEY = "llm_blank_detection_enabled"
 DEFAULT_QR_SCAN_MAX_DPI = 300
 DEFAULT_QR_SCAN_ENABLED = False
 
@@ -632,6 +633,8 @@ async def upload_exams(
 
   session_data[QR_SCAN_ENABLED_KEY] = resolved_qr_scan_enabled
   session_data[QR_SCAN_MAX_DPI_KEY] = resolved_qr_scan_max_dpi
+  session_data[LLM_BLANK_DETECTION_ENABLED_KEY] = _parse_bool_value(
+    existing_data.get(LLM_BLANK_DETECTION_ENABLED_KEY), default=False)
   # Background name extraction has no request context. Retain only the user ID,
   # never the key itself, so it can resolve that user's encrypted credential.
   session_data["canvas_credential_user_id"] = current_user["user_id"]
@@ -1770,8 +1773,29 @@ async def process_exam_splits(
       for problem_num, max_pts in max_points_to_upsert.items():
         repos.metadata.upsert_max_points(session_id, problem_num, max_pts)
 
-      repos.sessions.update_status(session_id, SessionStatus.READY)
+      # Do not mark the session ready until optional load-time AI analysis has
+      # populated the same cached fields used by the manual batch action.
 
+    if _parse_bool_value(
+        session_data.get(LLM_BLANK_DETECTION_ENABLED_KEY), default=False):
+      analysis_user_id = session_data.get("canvas_credential_user_id")
+      if analysis_user_id is None:
+        log.warning("Skipping automatic handwriting analysis for session %s: no settings user", session_id)
+      else:
+        from ..routes.problems import _batch_decipher_handwriting, _create_handwriting_job
+        analysis_problem_ids = ProblemRepository().get_ids_for_handwriting_analysis(
+          session_id)
+        if analysis_problem_ids:
+          analysis_job_id = _create_handwriting_job(
+            session_id, 0, analysis_problem_ids, "default")
+          session_repo.update_status(
+            session_id, SessionStatus.PREPROCESSING,
+            "Analyzing handwriting for AI blank detection...")
+          await asyncio.to_thread(
+            _batch_decipher_handwriting, analysis_job_id, analysis_problem_ids,
+            "default", int(analysis_user_id), False)
+
+    session_repo.update_status(session_id, SessionStatus.READY)
     await sse.send_event(
       stream_id, "complete", {
         "total": len(file_paths_to_process),

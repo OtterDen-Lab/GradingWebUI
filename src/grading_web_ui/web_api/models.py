@@ -33,6 +33,7 @@ class SessionCreate(BaseModel):
   use_ai_name_extraction: bool = True
   qr_scan_enabled: bool = False
   qr_scan_max_dpi: int = 300
+  llm_blank_detection_enabled: bool = False
 
 
 class SessionResponse(BaseModel):
@@ -55,6 +56,7 @@ class SessionResponse(BaseModel):
   ai_name_extraction: bool = True
   qr_scan_enabled: bool = False
   qr_scan_max_dpi: int = 300
+  llm_blank_detection_enabled: bool = False
 
   model_config = ConfigDict(from_attributes=True)
 

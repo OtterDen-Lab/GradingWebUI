@@ -177,6 +177,18 @@ class ProblemRepository(BaseRepository[Problem]):
         (session_id, problem_number)
       )
 
+  def get_ids_for_handwriting_analysis(self, session_id: int) -> List[int]:
+    """Return uncached problem IDs in a session for automatic analysis."""
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        SELECT id FROM problems
+        WHERE session_id = ?
+          AND (transcription IS NULL OR TRIM(transcription) = '')
+        ORDER BY id
+      """, (session_id,))
+      return [int(row["id"]) for row in cursor.fetchall()]
+
   def get_comparison_rows_for_session(self, session_id: int) -> List[Dict]:
     """
     Get per-problem comparison rows joined with submission file hash.

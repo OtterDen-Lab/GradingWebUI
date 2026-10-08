@@ -61,6 +61,7 @@ QUIZ_YAML_DOC_COUNT_KEY = "quiz_yaml_doc_count"
 QUIZ_YAML_UPLOADED_AT_KEY = "quiz_yaml_uploaded_at"
 QR_SCAN_ENABLED_KEY = "qr_scan_enabled"
 QR_SCAN_MAX_DPI_KEY = "qr_scan_max_dpi"
+LLM_BLANK_DETECTION_ENABLED_KEY = "llm_blank_detection_enabled"
 DEFAULT_QR_SCAN_ENABLED = False
 DEFAULT_QR_SCAN_MAX_DPI = 300
 
@@ -436,6 +437,7 @@ def session_to_response(session: GradingSession) -> SessionResponse:
     ai_enabled = bool(session.metadata.get("ai_name_extraction"))
   qr_scan_enabled = DEFAULT_QR_SCAN_ENABLED
   qr_scan_max_dpi = DEFAULT_QR_SCAN_MAX_DPI
+  llm_blank_detection_enabled = False
   if session.metadata:
     if QR_SCAN_ENABLED_KEY in session.metadata:
       qr_scan_enabled = _parse_bool_metadata_value(
@@ -445,6 +447,8 @@ def session_to_response(session: GradingSession) -> SessionResponse:
     raw_qr_scan_max_dpi = session.metadata.get(QR_SCAN_MAX_DPI_KEY)
     if isinstance(raw_qr_scan_max_dpi, int):
       qr_scan_max_dpi = raw_qr_scan_max_dpi
+    llm_blank_detection_enabled = _parse_bool_metadata_value(
+      session.metadata.get(LLM_BLANK_DETECTION_ENABLED_KEY), default=False)
   session_name = None
   if session.metadata and session.metadata.get("session_name"):
     session_name = session.metadata.get("session_name")
@@ -453,7 +457,8 @@ def session_to_response(session: GradingSession) -> SessionResponse:
     "ai_name_extraction": ai_enabled,
     "session_name": session_name,
     "qr_scan_enabled": qr_scan_enabled,
-    "qr_scan_max_dpi": qr_scan_max_dpi
+    "qr_scan_max_dpi": qr_scan_max_dpi,
+    "llm_blank_detection_enabled": llm_blank_detection_enabled
   })
 
 
@@ -488,6 +493,7 @@ async def create_session(
   metadata = {
     QR_SCAN_ENABLED_KEY: bool(session.qr_scan_enabled),
     QR_SCAN_MAX_DPI_KEY: int(session.qr_scan_max_dpi),
+    LLM_BLANK_DETECTION_ENABLED_KEY: bool(session.llm_blank_detection_enabled),
   }
   if session.use_mock_roster or not session.use_ai_name_extraction:
     metadata["mock_roster"] = bool(session.use_mock_roster)
