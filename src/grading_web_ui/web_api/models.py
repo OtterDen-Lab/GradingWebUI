@@ -33,7 +33,7 @@ class SessionCreate(BaseModel):
   use_ai_name_extraction: bool = True
   qr_scan_enabled: bool = False
   qr_scan_max_dpi: int = 300
-  llm_blank_detection_enabled: bool = False
+  llm_blank_detection_enabled: bool = True
 
 
 class SessionResponse(BaseModel):

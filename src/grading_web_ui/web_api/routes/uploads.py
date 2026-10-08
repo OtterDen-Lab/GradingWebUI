@@ -634,7 +634,7 @@ async def upload_exams(
   session_data[QR_SCAN_ENABLED_KEY] = resolved_qr_scan_enabled
   session_data[QR_SCAN_MAX_DPI_KEY] = resolved_qr_scan_max_dpi
   session_data[LLM_BLANK_DETECTION_ENABLED_KEY] = _parse_bool_value(
-    existing_data.get(LLM_BLANK_DETECTION_ENABLED_KEY), default=False)
+    existing_data.get(LLM_BLANK_DETECTION_ENABLED_KEY), default=True)
   # Background name extraction has no request context. Retain only the user ID,
   # never the key itself, so it can resolve that user's encrypted credential.
   session_data["canvas_credential_user_id"] = current_user["user_id"]
@@ -983,7 +983,7 @@ async def prepare_alignment(
   session_repo.update_status(
     session_id,
     SessionStatus.PREPROCESSING,
-    "Preparing alignment images and scanning QR codes..."
+    "Preparing alignment images and scanning for alignment..."
   )
   qr_scanner = QRScanner()
   qr_scan_enabled, qr_scan_max_dpi, qr_scan_dpi_steps = _resolve_qr_scan_settings(
@@ -1041,7 +1041,7 @@ async def prepare_alignment(
               pages_scanned["count"] += 1
               global_completed = pages_scanned["count"]
             send_progress(
-              f"Scanning QR codes ({index}/{total_files}) in {pdf_path.name} ({global_completed}/{total_qr_steps} pages)",
+              f"Scanning for alignment ({index}/{total_files}) in {pdf_path.name} ({global_completed}/{total_qr_steps} pages)",
               global_completed,
               total_steps
             )

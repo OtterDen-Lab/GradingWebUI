@@ -291,14 +291,14 @@ function openNewSessionModal() {
   document.querySelector('input[name="name-handling"][value="ai"]').checked = true;
   const sessionQrScanEnabled = document.getElementById('session-qr-scan-enabled');
   const sessionQrScanMaxDpi = document.getElementById('session-qr-scan-max-dpi');
-  const sessionLlmBlankDetection = document.getElementById('session-llm-blank-detection-enabled');
+  const sessionDisableLlmBlankDetection = document.getElementById('session-disable-llm-blank-detection');
   if (sessionQrScanEnabled) {
     sessionQrScanEnabled.checked = false;
   }
   if (sessionQrScanMaxDpi) {
     sessionQrScanMaxDpi.value = '300';
   }
-  if (sessionLlmBlankDetection) sessionLlmBlankDetection.checked = false;
+  if (sessionDisableLlmBlankDetection) sessionDisableLlmBlankDetection.checked = false;
   refreshSessionQrScanControls();
   applySessionSourceMode(defaultSource);
   if (defaultSource === 'manual') {
@@ -1246,7 +1246,7 @@ async function createNewSession(e) {
   const useProdCanvas = document.getElementById('canvas-env-new').value === 'true';
   const useAiNameExtraction = getNameHandling() === 'ai';
   const qrScanSettings = getSessionQrScanSettings();
-  const llmBlankDetectionEnabled = document.getElementById('session-llm-blank-detection-enabled')?.checked || false;
+  const llmBlankDetectionEnabled = !document.getElementById('session-disable-llm-blank-detection')?.checked;
 
   try {
     const response = await fetch(`${API_BASE}/sessions`, {
