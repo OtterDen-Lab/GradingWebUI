@@ -47,7 +47,12 @@ fi
 
 systemctl stop grading-web.service
 "$app_dir/scripts/ensure_canvas_credential_key.sh" "$state_dir/config/web.env"
-runuser -u "$service_user" -- sh -c "cd '$app_dir' && '$app_dir/.venv/bin/uv' sync --frozen --no-dev"
+# QuizGenerator and this application both use the LMS interface.  Reinstall it
+# during upgrades: uv otherwise trusts its dist-info metadata, which cannot
+# detect a partially populated namespace package from an interrupted install.
+runuser -u "$service_user" -- sh -c "cd '$app_dir' && '$app_dir/.venv/bin/uv' sync --frozen --no-dev --reinstall-package otterden-lms-interface"
+runuser -u "$service_user" -- "$app_dir/.venv/bin/python" -c \
+  "from lms_interface.canvas_interface import CanvasInterface; print('Verified CanvasInterface:', CanvasInterface.__name__)"
 # Re-render the unit so deployment changes to environment paths take effect.
 install -d -m 0750 -o "$service_user" -g "$service_user" /var/log/grading-ui
 sed \

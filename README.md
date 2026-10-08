@@ -215,7 +215,9 @@ Configure Caddy/nginx for HTTPS to the chosen address and keep
 `AUTH_COOKIE_SECURE=false` explicitly.
 
 For an upgrade, update the checkout using your normal Git/release process, then
-run `make lxc-deploy`. To deploy an exact immutable release tag in one step,
+run `make lxc-deploy`. The native upgrade path refreshes the LMS interface and
+verifies its Canvas import before restarting the service, so a damaged virtual
+environment is caught during deployment. To deploy an exact immutable release tag in one step,
 run `make lxc-deploy v0.12.1`; the command fetches that tag, refuses to replace
 a checkout with uncommitted changes, switches to the tag in detached-HEAD mode,
 and then synchronizes dependencies and restarts the service. An exact tag
