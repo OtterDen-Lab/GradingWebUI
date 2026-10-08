@@ -10,6 +10,8 @@ let historyIndex = -1; // Current position in history
 const regeneratedAnswerCache = new Map();
 const regeneratedAnswerRequests = new Map();
 const MAX_REGENERATED_ANSWER_CACHE = 200;
+let quizGeneratorVersionStatusRequest = null;
+let quizGeneratorUpdateWarningShown = false;
 const regenerationSessionPrefetchStarted = new Set();
 const subjectiveSettingsByProblem = new Map();
 let currentSubjectiveSettings = null;
@@ -175,6 +177,22 @@ function cacheRegeneratedAnswer(problemId, data) {
     }
 }
 
+async function warnIfQuizGeneratorIsOutdated() {
+    if (!quizGeneratorVersionStatusRequest) {
+        quizGeneratorVersionStatusRequest = fetch(`${API_BASE}/problems/quizgenerator-version`)
+            .then(async (response) => response.ok ? response.json() : null)
+            .catch(() => null);
+    }
+
+    const status = await quizGeneratorVersionStatusRequest;
+    if (!quizGeneratorUpdateWarningShown && status?.is_latest === false) {
+        quizGeneratorUpdateWarningShown = true;
+        showNotification(
+            `This server is using QuizGenerator ${status.installed_version}, but ${status.latest_version} is available. Regenerated answers may differ from the current question generator until the server is updated.`
+        );
+    }
+}
+
 async function getRegeneratedAnswer(problemId) {
     if (!problemId) {
         throw new Error('No problem loaded');
@@ -189,6 +207,7 @@ async function getRegeneratedAnswer(problemId) {
     }
 
     const request = (async () => {
+        await warnIfQuizGeneratorIsOutdated();
         const response = await fetch(`${API_BASE}/problems/${problemId}/regenerate-answer`);
         let payload = null;
         try {

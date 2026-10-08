@@ -391,6 +391,16 @@ def test_upload_ai_name_mode_also_waits_for_name_box_selection(
   assert "name_rect" not in metadata
 
 
+def test_saved_name_box_is_reused_for_later_uploads():
+  """Additional exams should not require selecting the already-saved box."""
+  from grading_web_ui.web_api.routes.uploads import _session_requires_manual_name_box
+
+  assert _session_requires_manual_name_box({
+    "mock_roster": False,
+    "name_rect": {"x": 10, "y": 20, "width": 100, "height": 40}
+  }) is False
+
+
 def test_upload_preserves_existing_session_qr_scan_settings(client, monkeypatch):
   """Upload endpoint should preserve session-level QR scan settings."""
   from grading_web_ui.web_api.routes import uploads as uploads_routes

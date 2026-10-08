@@ -1805,6 +1805,12 @@ let compositeData = null;
 const ALIGNMENT_DEFAULT_DISPLAY_WIDTH = 900;
 
 function showAlignmentInterface(composites, pageDimensions, numExams, suggestedSplitPoints = null) {
+    // This view can be entered again after an SSE reconnect or session
+    // refresh.  Remove a prior render so composite pages are never appended
+    // twice beneath the same upload status area.
+    document.getElementById('alignment-pages-container')?.remove();
+    document.getElementById('alignment-bottom-controls')?.remove();
+
     compositeData = {
         composites: composites,
         page_dimensions: pageDimensions,
@@ -1896,6 +1902,7 @@ function showAlignmentInterface(composites, pageDimensions, numExams, suggestedS
 
     // Add bottom controls with second "last page blank" checkbox
     const bottomControls = document.createElement('div');
+    bottomControls.id = 'alignment-bottom-controls';
     bottomControls.style.cssText = 'margin: 20px; text-align: center;';
     bottomControls.innerHTML = `
         <div style="background: #eff6ff; padding: 10px; border-radius: 6px; margin: 10px auto; max-width: 600px;">

@@ -6,6 +6,7 @@ import os
 import asyncio
 import threading
 import hashlib
+from importlib.metadata import PackageNotFoundError, version as package_version
 from uuid import uuid4
 from time import perf_counter
 
@@ -27,6 +28,7 @@ from ..services.feedback_text import (
   extract_response_specific_feedback,
 )
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
+from ..services.quizgenerator_version import get_quizgenerator_version_status
 from ..services.qr_scanner import qr_matches_problem_number
 from ..auth import require_session_access, get_current_user
 from ..services.model_settings import (
@@ -82,6 +84,22 @@ def _display_feedback(problem) -> Optional[str]:
   return merge_general_feedback(default_feedback, problem.feedback)
 
 
+def _quizgenerator_version() -> str:
+  """Return the installed generator version for regeneration cache invalidation."""
+  try:
+    return package_version("QuizGenerator")
+  except PackageNotFoundError:
+    return "unavailable"
+
+
+@router.get("/quizgenerator-version")
+async def quizgenerator_version_status(
+  current_user: dict = Depends(get_current_user)
+):
+  """Report whether this server's QuizGenerator is current on PyPI."""
+  return await asyncio.to_thread(get_quizgenerator_version_status)
+
+
 def _cache_key_for_regeneration(problem, quiz_yaml_text: Optional[str]) -> tuple:
   yaml_fingerprint = ""
   if quiz_yaml_text:
@@ -91,7 +109,8 @@ def _cache_key_for_regeneration(problem, quiz_yaml_text: Optional[str]) -> tuple
   return (
     problem.qr_encrypted_data,
     float(problem.max_points or 0.0),
-    yaml_fingerprint
+    yaml_fingerprint,
+    _quizgenerator_version(),
   )
 
 

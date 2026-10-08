@@ -115,12 +115,12 @@ def _get_name_rect_from_session_data(
 
 
 def _session_requires_manual_name_box(session_data: Optional[dict]) -> bool:
-  """True when this upload session should pause for name-box selection."""
+  """True only when a non-mock session has no saved name-box layout."""
   if not session_data:
     return False
 
   mock_roster = bool(session_data.get("mock_roster", False))
-  return not mock_roster
+  return not mock_roster and _get_name_rect_from_session_data(session_data) is None
 
 
 def _normalize_qr_scan_max_dpi(raw_value: Any) -> int:
