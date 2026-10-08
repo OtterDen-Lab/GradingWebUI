@@ -1832,8 +1832,15 @@ function displayCurrentProblem() {
                 : ` (${currentProblem.subjective_untriaged_count} remaining)`;
         }
     } else if (currentProblem.ungraded_blank > 0 || currentProblem.ungraded_nonblank > 0) {
-        if (currentProblem.ungraded_blank > 0) {
-            progressText += ` (${currentProblem.ungraded_blank} blank)`;
+        const blankCounts = [];
+        if (currentProblem.ungraded_heuristic_blank > 0) {
+            blankCounts.push(`${currentProblem.ungraded_heuristic_blank} heuristic blank`);
+        }
+        if (currentProblem.ungraded_ai_blank > 0) {
+            blankCounts.push(`${currentProblem.ungraded_ai_blank} AI blank`);
+        }
+        if (blankCounts.length) {
+            progressText += ` (${blankCounts.join('; ')})`;
         }
     }
 

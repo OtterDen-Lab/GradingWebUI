@@ -643,6 +643,8 @@ async def get_next_problem(
   graded_count = counts["graded"]
   ungraded_blank = counts["ungraded_blank"]
   ungraded_nonblank = counts["ungraded_nonblank"]
+  ungraded_heuristic_blank = counts["ungraded_heuristic_blank"]
+  ungraded_ai_blank = counts["ungraded_ai_blank"]
   triaged_count = triage_repo.count_ungraded_for_problem_number(
     session_id, problem_number
   )
@@ -668,6 +670,8 @@ async def get_next_problem(
     total_count=total_count,
     ungraded_blank=ungraded_blank,
     ungraded_nonblank=ungraded_nonblank,
+    ungraded_heuristic_blank=ungraded_heuristic_blank,
+    ungraded_ai_blank=ungraded_ai_blank,
     is_blank=problem.is_blank,
     blank_confidence=problem.blank_confidence,
     blank_method=problem.blank_method,
@@ -726,6 +730,8 @@ async def get_previous_problem(
   graded_count = counts["graded"]
   ungraded_blank = counts["ungraded_blank"]
   ungraded_nonblank = counts["ungraded_nonblank"]
+  ungraded_heuristic_blank = counts["ungraded_heuristic_blank"]
+  ungraded_ai_blank = counts["ungraded_ai_blank"]
   triaged_count = triage_repo.count_ungraded_for_problem_number(
     session_id, problem_number
   )
@@ -751,6 +757,8 @@ async def get_previous_problem(
     total_count=total_count,
     ungraded_blank=ungraded_blank,
     ungraded_nonblank=ungraded_nonblank,
+    ungraded_heuristic_blank=ungraded_heuristic_blank,
+    ungraded_ai_blank=ungraded_ai_blank,
     is_blank=problem.is_blank,
     blank_confidence=problem.blank_confidence,
     blank_method=problem.blank_method,
@@ -819,6 +827,8 @@ async def get_next_problem_in_bucket(
   graded_count = counts["graded"]
   ungraded_blank = counts["ungraded_blank"]
   ungraded_nonblank = counts["ungraded_nonblank"]
+  ungraded_heuristic_blank = counts["ungraded_heuristic_blank"]
+  ungraded_ai_blank = counts["ungraded_ai_blank"]
   triaged_count = triage_repo.count_ungraded_for_problem_number(
     session_id, problem_number
   )
@@ -842,6 +852,8 @@ async def get_next_problem_in_bucket(
     total_count=total_count,
     ungraded_blank=ungraded_blank,
     ungraded_nonblank=ungraded_nonblank,
+    ungraded_heuristic_blank=ungraded_heuristic_blank,
+    ungraded_ai_blank=ungraded_ai_blank,
     is_blank=problem.is_blank,
     blank_confidence=problem.blank_confidence,
     blank_method=problem.blank_method,
@@ -910,6 +922,8 @@ async def get_previous_problem_in_bucket(
   graded_count = counts["graded"]
   ungraded_blank = counts["ungraded_blank"]
   ungraded_nonblank = counts["ungraded_nonblank"]
+  ungraded_heuristic_blank = counts["ungraded_heuristic_blank"]
+  ungraded_ai_blank = counts["ungraded_ai_blank"]
   triaged_count = triage_repo.count_ungraded_for_problem_number(
     session_id, problem_number
   )
@@ -933,6 +947,8 @@ async def get_previous_problem_in_bucket(
     total_count=total_count,
     ungraded_blank=ungraded_blank,
     ungraded_nonblank=ungraded_nonblank,
+    ungraded_heuristic_blank=ungraded_heuristic_blank,
+    ungraded_ai_blank=ungraded_ai_blank,
     is_blank=problem.is_blank,
     blank_confidence=problem.blank_confidence,
     blank_method=problem.blank_method,
@@ -1000,6 +1016,8 @@ async def get_sample_problem_in_bucket(
   graded_count = counts["graded"]
   ungraded_blank = counts["ungraded_blank"]
   ungraded_nonblank = counts["ungraded_nonblank"]
+  ungraded_heuristic_blank = counts["ungraded_heuristic_blank"]
+  ungraded_ai_blank = counts["ungraded_ai_blank"]
   triaged_count = triage_repo.count_ungraded_for_problem_number(
     session_id, problem_number
   )
@@ -1023,6 +1041,8 @@ async def get_sample_problem_in_bucket(
     total_count=total_count,
     ungraded_blank=ungraded_blank,
     ungraded_nonblank=ungraded_nonblank,
+    ungraded_heuristic_blank=ungraded_heuristic_blank,
+    ungraded_ai_blank=ungraded_ai_blank,
     is_blank=problem.is_blank,
     blank_confidence=problem.blank_confidence,
     blank_method=problem.blank_method,

@@ -132,6 +132,8 @@ class ProblemResponse(BaseModel):
   total_count: int
   ungraded_blank: int = 0
   ungraded_nonblank: int = 0
+  ungraded_heuristic_blank: int = 0
+  ungraded_ai_blank: int = 0
 
   # Blank detection metadata
   is_blank: bool = False

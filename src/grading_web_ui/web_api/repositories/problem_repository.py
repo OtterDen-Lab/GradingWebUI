@@ -835,7 +835,7 @@ class ProblemRepository(BaseRepository[Problem]):
       problem_number: Problem number
 
     Returns:
-      Dict with: total, graded, ungraded_blank, ungraded_nonblank
+      Dict with separate heuristic and handwriting-AI blank counts.
     """
     with self._get_connection() as conn:
       cursor = conn.cursor()
@@ -845,6 +845,8 @@ class ProblemRepository(BaseRepository[Problem]):
           COUNT(*) as total,
           SUM(CASE WHEN graded = 1 THEN 1 ELSE 0 END) as graded,
           SUM(CASE WHEN graded = 0 AND is_blank = 1 THEN 1 ELSE 0 END) as ungraded_blank,
+          SUM(CASE WHEN graded = 0 AND is_blank = 1 THEN 1 ELSE 0 END) as ungraded_heuristic_blank,
+          SUM(CASE WHEN graded = 0 AND transcription_is_blank = 1 THEN 1 ELSE 0 END) as ungraded_ai_blank,
           SUM(CASE WHEN graded = 0 AND is_blank = 0 THEN 1 ELSE 0 END) as ungraded_nonblank
         FROM problems p
         JOIN submissions s ON s.id = p.submission_id
@@ -856,6 +858,8 @@ class ProblemRepository(BaseRepository[Problem]):
         "total": row["total"] or 0,
         "graded": row["graded"] or 0,
         "ungraded_blank": row["ungraded_blank"] or 0,
+        "ungraded_heuristic_blank": row["ungraded_heuristic_blank"] or 0,
+        "ungraded_ai_blank": row["ungraded_ai_blank"] or 0,
         "ungraded_nonblank": row["ungraded_nonblank"] or 0
       }
 
