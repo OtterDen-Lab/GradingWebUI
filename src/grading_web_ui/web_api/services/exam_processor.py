@@ -23,13 +23,16 @@ import fuzzywuzzy.fuzz
 import numpy as np
 import cv2
 import concurrent.futures
+import json
 
 from grading_web_ui import ai_helper
 
 # Import QR scanner service
 from .qr_scanner import QRScanner, qr_matches_problem_number
 from .problem_service import ProblemService
-from .model_settings import resolve_model
+from .model_settings import (resolve_model, get_handwriting_default,
+                             get_transcription_additional_instructions)
+from . import ollama_settings
 
 # Import DTOs
 from ..dtos import SubmissionDTO, ProblemDTO
@@ -50,7 +53,9 @@ class ExamProcessor:
       self,
       name_rect: Optional[dict] = None,
       ai_provider: str = "anthropic",
-      qr_prescan_dpi_steps: Optional[List[int]] = None
+      qr_prescan_dpi_steps: Optional[List[int]] = None,
+      handwriting_analysis_enabled: bool = False,
+      handwriting_user_id: Optional[int] = None
   ):
     """
         Initialize exam processor.
@@ -74,6 +79,8 @@ class ExamProcessor:
     ])
     self.qr_scanner = QRScanner()
     self.problem_service = ProblemService()
+    self.handwriting_analysis_enabled = handwriting_analysis_enabled
+    self.handwriting_user_id = handwriting_user_id
     if qr_prescan_dpi_steps is None:
       self.qr_prescan_dpi_steps = list(PRESCAN_DPI_STEPS)
     else:
@@ -90,20 +97,53 @@ class ExamProcessor:
         normalized_steps.append(dpi)
       self.qr_prescan_dpi_steps = normalized_steps
 
-    # Select AI provider
     self.ai_provider = ai_provider.lower()
     if self.ai_provider == "anthropic":
       self.ai_helper_class = ai_helper.AI_Helper__Anthropic
     elif self.ai_provider == "openai":
       self.ai_helper_class = ai_helper.AI_Helper__OpenAI
     else:
-      log.warning(
-          f"Unknown AI provider '{ai_provider}', defaulting to Anthropic")
+      log.warning("Unknown AI provider '%s', defaulting to Anthropic", ai_provider)
       self.ai_helper_class = ai_helper.AI_Helper__Anthropic
-    # Upload jobs do not currently retain a browser-local provider setting.
-    # Resolve the system small tier when processing begins instead.
     self.name_model = resolve_model(None, self.ai_provider, "small")
-  
+
+  def _analyze_handwriting_crop(self, image_base64: str) -> Optional[dict]:
+    """Run the load-time Ollama request on an already-redacted response crop."""
+    if not self.handwriting_analysis_enabled or self.handwriting_user_id is None:
+      return None
+    if get_handwriting_default(self.handwriting_user_id)["target"] != "ollama":
+      log.warning("Load-time handwriting analysis currently requires Ollama")
+      return None
+    server = ollama_settings.get_active_server()
+    if not server:
+      log.warning("Skipping load-time handwriting analysis: no active Ollama server")
+      return None
+    prompt = (
+      "Inspect only the student's handwritten response, ignoring printed exam text, "
+      "boxes, QR codes, and page furniture. Return only JSON with is_blank, "
+      "is_relevant, and text. is_blank is true only when there is no student "
+      "answer attempt. is_relevant is false only when nonblank marks are not an "
+      "attempt to answer the visible question. Use [blank] as text when blank.")
+    extra = get_transcription_additional_instructions(self.handwriting_user_id)["text"]
+    if extra:
+      prompt += f"\n\nAdditional transcription instructions:\n{extra}"
+    try:
+      response, _ = ai_helper.AI_Helper__Ollama(
+        server["base_url"], server["active_model"]).query_ai(
+          prompt, attachments=[("png", image_base64)],
+          max_response_tokens=4096, json_output=True)
+      payload = json.loads(response)
+      if not isinstance(payload, dict) or not isinstance(payload.get("is_blank"), bool):
+        raise ValueError("invalid handwriting-analysis JSON")
+      text = payload.get("text", "[blank]" if payload["is_blank"] else "")
+      if not isinstance(text, str) or (not text.strip() and not payload["is_blank"]):
+        raise ValueError("invalid handwriting transcription")
+      relevant = payload.get("is_relevant")
+      return {"transcription": text.strip() or "[blank]", "model": f"Ollama ({server['active_model']} on {server['name']})", "is_blank": payload["is_blank"], "is_relevant": relevant if isinstance(relevant, bool) else None}
+    except Exception as error:
+      log.warning("Load-time handwriting analysis failed: %s", error)
+      return None
+
   def process_exams(
       self,
       input_files: List[Path],
@@ -849,6 +889,7 @@ class ExamProcessor:
     # This is crucial because the redaction box may cover QR codes on the first page
     # We need to do this BEFORE redaction but AFTER calculating linear splits
     qr_data_by_problem = {}  # Will map problem_number -> qr_data
+    handwriting_by_problem = {}
 
     # We'll scan QR codes after creating the linear splits (below)
 
@@ -1043,10 +1084,26 @@ class ExamProcessor:
         return problem_num, qr_data
 
       max_workers = min(6, os.cpu_count() or 1)
-      with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(scan_region, region) for region in regions]
+      with concurrent.futures.ThreadPoolExecutor(max_workers=2) as handwriting_executor:
+       def scan_with_handwriting(region):
+        problem_num, start_page, start_y, start_pct, end_page, end_y, end_pct = region
+        local_doc = fitz.open(str(pdf_path))
+        try:
+          image, _ = self.problem_service.extract_image_from_document(
+            local_doc, start_page, start_y, end_page, end_y,
+            start_y_pct=start_pct,
+            end_y_pct=end_pct if start_page == end_page else None,
+            end_page_y_pct=end_pct if start_page != end_page else None,
+            page_transforms=page_transforms, dpi=150)
+        finally:
+          local_doc.close()
+        return problem_num, scan_region(region)[1], handwriting_executor.submit(
+          self._analyze_handwriting_crop, image)
+       with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(scan_with_handwriting, region) for region in regions]
         for future in concurrent.futures.as_completed(futures):
-          problem_num, qr_data = future.result()
+          problem_num, qr_data, handwriting_future = future.result()
+          handwriting_by_problem[problem_num] = handwriting_future
           if qr_data:
             log.info(
               f"Pre-scan: Problem {problem_num}: Found QR code with max_points={qr_data['max_points']}"
@@ -1143,6 +1200,15 @@ class ExamProcessor:
         max_points=max_points,
         qr_encrypted_data=qr_encrypted_data
       )
+
+      handwriting_future = handwriting_by_problem.get(problem_number)
+      if handwriting_future:
+        handwriting = handwriting_future.result()
+        if handwriting:
+          problem.transcription = handwriting["transcription"]
+          problem.transcription_model = handwriting["model"]
+          problem.transcription_is_blank = handwriting["is_blank"]
+          problem.transcription_is_relevant = handwriting["is_relevant"]
 
       problems.append(problem)
       problem_number += 1

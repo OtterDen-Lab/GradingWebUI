@@ -34,6 +34,10 @@ class ProblemDTO(BaseModel):
 
   # QR code data (for answer regeneration)
   qr_encrypted_data: Optional[str] = Field(default=None, description="Encrypted QR code data for answer regeneration")
+  transcription: Optional[str] = None
+  transcription_model: Optional[str] = None
+  transcription_is_blank: Optional[bool] = None
+  transcription_is_relevant: Optional[bool] = None
 
   # Validation
   @field_validator('blank_confidence')

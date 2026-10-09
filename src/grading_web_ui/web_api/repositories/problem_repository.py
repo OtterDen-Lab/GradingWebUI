@@ -235,8 +235,9 @@ class ProblemRepository(BaseRepository[Problem]):
          is_blank, blank_confidence, blank_method, blank_reasoning,
          max_points, region_coords, qr_encrypted_data,
          score, feedback, graded_at, ai_reasoning,
-         transcription, transcription_model, transcription_cached_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         transcription, transcription_model, transcription_cached_at,
+         transcription_is_blank, transcription_is_relevant)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       """, (
         problem.session_id,
         problem.submission_id,
@@ -255,7 +256,9 @@ class ProblemRepository(BaseRepository[Problem]):
         problem.ai_reasoning,
         problem.transcription,
         problem.transcription_model,
-        problem.transcription_cached_at.isoformat() if problem.transcription_cached_at else None
+        problem.transcription_cached_at.isoformat() if problem.transcription_cached_at else None,
+        None if problem.transcription_is_blank is None else int(problem.transcription_is_blank),
+        None if problem.transcription_is_relevant is None else int(problem.transcription_is_relevant)
       ))
 
       problem_id = cursor.lastrowid
@@ -291,8 +294,9 @@ class ProblemRepository(BaseRepository[Problem]):
            is_blank, blank_confidence, blank_method, blank_reasoning,
            max_points, region_coords, qr_encrypted_data,
            score, feedback, graded_at, ai_reasoning,
-           transcription, transcription_model, transcription_cached_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           transcription, transcription_model, transcription_cached_at,
+           transcription_is_blank, transcription_is_relevant)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
           prob.session_id,
           prob.submission_id,
@@ -311,7 +315,9 @@ class ProblemRepository(BaseRepository[Problem]):
           prob.ai_reasoning,
           prob.transcription,
           prob.transcription_model,
-          prob.transcription_cached_at.isoformat() if prob.transcription_cached_at else None
+          prob.transcription_cached_at.isoformat() if prob.transcription_cached_at else None,
+          None if prob.transcription_is_blank is None else int(prob.transcription_is_blank),
+          None if prob.transcription_is_relevant is None else int(prob.transcription_is_relevant)
         ))
 
         problem_id = cursor.lastrowid

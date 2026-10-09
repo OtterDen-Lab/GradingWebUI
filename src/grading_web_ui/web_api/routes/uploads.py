@@ -1682,7 +1682,10 @@ async def process_exam_splits(
     processor = ExamProcessor(
       name_rect=name_rect,
       ai_provider=ai_provider,
-      qr_prescan_dpi_steps=qr_prescan_dpi_steps
+      qr_prescan_dpi_steps=qr_prescan_dpi_steps,
+      handwriting_analysis_enabled=_parse_bool_value(
+        session_data.get(LLM_BLANK_DETECTION_ENABLED_KEY), default=False),
+      handwriting_user_id=session_data.get("canvas_credential_user_id")
     )
     loop = asyncio.get_event_loop()
     matched, unmatched = await loop.run_in_executor(
@@ -1764,7 +1767,11 @@ async def process_exam_splits(
             blank_reasoning=prob_dto.blank_reasoning,
             max_points=max_points,
             region_coords=region_coords,
-            qr_encrypted_data=prob_dto.qr_encrypted_data
+            qr_encrypted_data=prob_dto.qr_encrypted_data,
+            transcription=prob_dto.transcription,
+            transcription_model=prob_dto.transcription_model,
+            transcription_is_blank=prob_dto.transcription_is_blank,
+            transcription_is_relevant=prob_dto.transcription_is_relevant
           )
           all_problems.append(problem)
 
