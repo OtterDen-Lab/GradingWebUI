@@ -467,7 +467,9 @@ async function loadSessions() {
                     </div>
                 </div>
             `;
-            item.onclick = () => selectSession(session.id);
+            // The session list is a stable entry point: open the overview
+            // rather than jumping straight into the next ungraded response.
+            item.onclick = () => selectSession(session.id, { destination: 'stats' });
             sessionList.appendChild(item);
         });
     } catch (error) {

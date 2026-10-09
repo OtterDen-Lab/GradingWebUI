@@ -1317,7 +1317,11 @@ async function loadProblemNumbers(preferredProblemNumber = null) {
             await progressPromise;
         };
 
-        loadNextProblem();
+        // On entry, keep the requested question open.  Prefer an ungraded
+        // response, but when the question is complete show its most recently
+        // graded response instead of advancing through other questions or
+        // redirecting to Statistics.
+        await loadProblemOrMostRecent();
     } catch (error) {
         console.error('Failed to load problem numbers:', error);
     }
