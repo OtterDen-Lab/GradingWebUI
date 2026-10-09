@@ -6,8 +6,6 @@ import os
 import asyncio
 import threading
 import hashlib
-import numbers
-import re
 from importlib.metadata import PackageNotFoundError, version as package_version
 from uuid import uuid4
 from time import perf_counter
@@ -74,8 +72,6 @@ _DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
 TAG_SIGNATURE_DELIMITER = "|"
-_NUMERIC_ANSWER_RE = re.compile(
-  r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
 
 def _display_feedback(problem) -> Optional[str]:
@@ -331,17 +327,6 @@ def _build_regeneration_response(problem_id: int, problem,
   elif answer_objects is not None:
     iterable_answers = [("answer", answer_objects)]
 
-  def format_answer_value(value) -> str:
-    """Round numeric generated answers for readable grading display."""
-    numeric_value = None
-    if isinstance(value, numbers.Real) and not isinstance(value, bool):
-      numeric_value = value
-    elif isinstance(value, str) and _NUMERIC_ANSWER_RE.fullmatch(value.strip()):
-      numeric_value = float(value)
-    if numeric_value is not None:
-      return f"{numeric_value:.4f}".rstrip("0").rstrip(".")
-    return str(value)
-
   for key, answer_obj in iterable_answers:
     if isinstance(answer_obj, dict):
       value = answer_obj.get('value')
@@ -356,7 +341,7 @@ def _build_regeneration_response(problem_id: int, problem,
       tolerance = getattr(answer_obj, 'tolerance', None)
       html = getattr(answer_obj, 'html', None)
 
-    answer_dict = {"key": str(key), "value": format_answer_value(value)}
+    answer_dict = {"key": str(key), "value": str(value)}
     if tolerance is not None:
       answer_dict['tolerance'] = tolerance
     if html is not None:
@@ -383,11 +368,11 @@ def _build_regeneration_response(problem_id: int, problem,
           value = raw_answer.get('value')
         if value is None:
           value = raw_answer
-        answer_dict = {"key": str(key), "value": format_answer_value(value)}
+        answer_dict = {"key": str(key), "value": str(value)}
         if raw_answer.get('tolerance') is not None:
           answer_dict['tolerance'] = raw_answer.get('tolerance')
       else:
-        answer_dict = {"key": f"answer_{idx + 1}", "value": format_answer_value(raw_answer)}
+        answer_dict = {"key": f"answer_{idx + 1}", "value": str(raw_answer)}
       answers.append(answer_dict)
 
   response = {
