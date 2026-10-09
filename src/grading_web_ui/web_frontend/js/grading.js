@@ -4470,6 +4470,38 @@ document.getElementById('export-session-btn').onclick = async () => {
     }
 };
 
+// Export the student-facing feedback layout with full-credit scores, default
+// feedback, and explanations, without any student's grading data.
+document.getElementById('export-blank-feedback-btn').onclick = async () => {
+    if (!currentSession) return;
+
+    try {
+        const response = await fetch(
+            `${API_BASE}/finalize/${currentSession.id}/blank-feedback-example`
+        );
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.detail || 'Export failed');
+        }
+
+        const contentDisposition = response.headers.get('Content-Disposition');
+        const filenameMatch = contentDisposition?.match(/filename="?([^\"]+)"?/);
+        const filename = filenameMatch?.[1] ||
+            `feedback-example-session-${currentSession.id}.html`;
+        const url = window.URL.createObjectURL(await response.blob());
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+    } catch (error) {
+        console.error('Feedback example export failed:', error);
+        alert(`Failed to export feedback example: ${error.message}`);
+    }
+};
+
 document.getElementById('close-finalize-upload-btn').onclick = closeFinalizeUploadDialog;
 document.getElementById('finalize-upload-cancel-btn').onclick = closeFinalizeUploadDialog;
 document.getElementById('finalize-select-all-btn').onclick = () => {

@@ -335,7 +335,10 @@ class FinalizationService:
       render_mode=0  # Fill text (fully opaque)
     )
 
-  def _generate_comments(self, submission: Dict) -> str:
+  def _generate_comments(self,
+                         submission: Dict,
+                         *,
+                         include_problem_images: bool = True) -> str:
     """Generate feedback comments for Canvas as a self-contained HTML document"""
     quiz_name = (submission.get("session_name")
                  or submission.get("assignment_name")
@@ -349,7 +352,7 @@ class FinalizationService:
 
     problem_service = ProblemService()
     pdf_document = None
-    if submission.get("exam_pdf_data"):
+    if include_problem_images and submission.get("exam_pdf_data"):
       try:
         pdf_bytes = base64.b64decode(submission["exam_pdf_data"])
         pdf_document = fitz.open("pdf", pdf_bytes)

@@ -2652,6 +2652,60 @@ def test_finalize_feedback_preview_returns_html(client):
   assert "Nice work." in response.text
 
 
+def test_export_blank_feedback_example_uses_default_feedback(client):
+  """The feedback example contains ideal scores, not a student's feedback."""
+  session_id = create_test_session(client, "Feedback Example Test")
+  pdf = fitz.open()
+  page = pdf.new_page()
+  page.insert_text((72, 72), "Problem 1")
+  pdf_data = base64.b64encode(pdf.tobytes()).decode("ascii")
+  pdf.close()
+  seed_submission_with_problem(
+    session_id,
+    student_name="Student Whose Work Must Not Be Included",
+    exam_pdf_data=pdf_data,
+    graded=True,
+    score=1.0,
+    feedback="Student-specific feedback must not be exported.",
+    max_points=5.0,
+    region_coords={
+      "page_number": 0,
+      "region_y_start": 0,
+      "region_y_end": 120,
+    },
+  )
+  default_response = client.put(
+    f"/api/sessions/{session_id}/default-feedback",
+    json={
+      "problem_number": 1,
+      "default_feedback": "Review the worked solution.",
+      "default_feedback_threshold": 100.0,
+    },
+  )
+  assert default_response.status_code == 200
+
+  response = client.get(f"/api/finalize/{session_id}/blank-feedback-example")
+
+  assert response.status_code == 200
+  assert response.headers["content-type"].startswith("text/html")
+  assert "attachment; filename=\"feedback-example-session-" in response.headers[
+    "content-disposition"]
+  assert "Feedback Example Test" in response.text
+  assert "Total Score: 5.00 / 5.00" in response.text
+  assert "Review the worked solution." in response.text
+  assert "Student-specific feedback must not be exported." not in response.text
+  assert "Student Whose Work Must Not Be Included" not in response.text
+
+
+def test_export_blank_feedback_example_requires_processed_exam(client):
+  session_id = create_test_session(client)
+
+  response = client.get(f"/api/finalize/{session_id}/blank-feedback-example")
+
+  assert response.status_code == 400
+  assert "processed exam" in response.json()["detail"]
+
+
 def test_autograde_image_lifecycle_starts_job(client, monkeypatch):
   """Autograde image endpoint should start a background job when setup is valid."""
   from grading_web_ui.web_api.routes import ai_grader as ai_routes

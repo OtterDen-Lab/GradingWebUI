@@ -4,7 +4,7 @@ Finalization endpoints for completing grading and uploading to Canvas.
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.responses import StreamingResponse
 from pathlib import Path
 import tempfile
@@ -197,6 +197,72 @@ async def get_finalize_feedback_preview(
   preview_submission["session_name"] = session_info.get("session_name")
 
   return HTMLResponse(content=finalizer._generate_comments(preview_submission))
+
+
+@router.get("/{session_id}/blank-feedback-example")
+async def export_blank_feedback_example(
+  session_id: int,
+  current_user: dict = Depends(require_instructor)
+):
+  """Download the feedback document students should expect for this exam.
+
+  Its problem regions define the included questions, but it contains no exam
+  snapshots, student score, or response-specific feedback. Every problem is
+  shown at full credit with the session's default feedback and regenerated
+  explanation.
+  """
+  session_repo = SessionRepository()
+  if not session_repo.get_by_id(session_id):
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  finalizer = FinalizationService(session_id, Path("."), "example", None)
+  source_submissions = finalizer._get_submissions()
+  source_submissions = [
+    submission for submission in source_submissions
+    if submission.get("problems") and any(
+      problem.get("region_coords") for problem in submission["problems"])
+  ]
+  if not source_submissions:
+    raise HTTPException(
+      status_code=400,
+      detail=("A processed exam with problem regions is required before "
+              "exporting a feedback example.")
+    )
+
+  # Prefer the most complete processed exam when uploads differ in length.
+  source = max(source_submissions, key=lambda submission: len(submission["problems"]))
+  metadata_repo = ProblemMetadataRepository()
+  example_problems = []
+  for problem in source["problems"]:
+    default_feedback_row = metadata_repo.get_default_feedback(
+      session_id, problem["problem_number"])
+    default_feedback = default_feedback_row[0] if default_feedback_row else ""
+    example_problems.append({
+      **problem,
+      "score": problem.get("max_points") or 0.0,
+      "feedback": default_feedback or "",
+    })
+
+  session_info = finalizer._get_session_info()
+  example_submission = {
+    **source,
+    # _generate_comments does not display this field, but keeping a neutral
+    # value ensures no student identity is ever carried into the export.
+    "student_name": "Example student",
+    "problems": example_problems,
+    "assignment_name": session_info.get("assignment_name"),
+    "session_name": session_info.get("session_name"),
+  }
+  # Do not include a source submission image: it could contain a student's
+  # handwritten work. The resulting document is safe to share with a class.
+  feedback_html = finalizer._generate_comments(
+    example_submission, include_problem_images=False)
+  filename = f"feedback-example-session-{session_id}.html"
+  return Response(
+    content=feedback_html,
+    media_type="text/html",
+    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+  )
 
 
 async def run_finalization(session_id: int, stream_id: str,
