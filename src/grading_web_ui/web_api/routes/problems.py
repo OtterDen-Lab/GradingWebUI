@@ -6,6 +6,8 @@ import os
 import asyncio
 import threading
 import hashlib
+import numbers
+import re
 from importlib.metadata import PackageNotFoundError, version as package_version
 from uuid import uuid4
 from time import perf_counter
@@ -30,7 +32,7 @@ from ..services.feedback_text import (
 from ..services.quiz_regeneration import regenerate_from_encrypted_compat
 from ..services.quizgenerator_version import get_quizgenerator_version_status
 from ..services.qr_scanner import qr_matches_problem_number
-from ..auth import require_session_access, get_current_user
+from ..auth import require_session_access, require_instructor, get_current_user
 from ..services.model_settings import (
   BUILT_IN_TRANSCRIPTION_INSTRUCTIONS,
   get_handwriting_default,
@@ -72,6 +74,8 @@ _DEFAULT_SUBJECTIVE_BUCKETS = [
   {"id": "blank", "label": "Blank", "color": "#9ca3af"},
 ]
 TAG_SIGNATURE_DELIMITER = "|"
+_NUMERIC_ANSWER_RE = re.compile(
+  r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
 
 def _display_feedback(problem) -> Optional[str]:
@@ -327,6 +331,17 @@ def _build_regeneration_response(problem_id: int, problem,
   elif answer_objects is not None:
     iterable_answers = [("answer", answer_objects)]
 
+  def format_answer_value(value) -> str:
+    """Round numeric generated answers for readable grading display."""
+    numeric_value = None
+    if isinstance(value, numbers.Real) and not isinstance(value, bool):
+      numeric_value = value
+    elif isinstance(value, str) and _NUMERIC_ANSWER_RE.fullmatch(value.strip()):
+      numeric_value = float(value)
+    if numeric_value is not None:
+      return f"{numeric_value:.4f}".rstrip("0").rstrip(".")
+    return str(value)
+
   for key, answer_obj in iterable_answers:
     if isinstance(answer_obj, dict):
       value = answer_obj.get('value')
@@ -341,7 +356,7 @@ def _build_regeneration_response(problem_id: int, problem,
       tolerance = getattr(answer_obj, 'tolerance', None)
       html = getattr(answer_obj, 'html', None)
 
-    answer_dict = {"key": str(key), "value": str(value)}
+    answer_dict = {"key": str(key), "value": format_answer_value(value)}
     if tolerance is not None:
       answer_dict['tolerance'] = tolerance
     if html is not None:
@@ -368,11 +383,11 @@ def _build_regeneration_response(problem_id: int, problem,
           value = raw_answer.get('value')
         if value is None:
           value = raw_answer
-        answer_dict = {"key": str(key), "value": str(value)}
+        answer_dict = {"key": str(key), "value": format_answer_value(value)}
         if raw_answer.get('tolerance') is not None:
           answer_dict['tolerance'] = raw_answer.get('tolerance')
       else:
-        answer_dict = {"key": f"answer_{idx + 1}", "value": str(raw_answer)}
+        answer_dict = {"key": f"answer_{idx + 1}", "value": format_answer_value(raw_answer)}
       answers.append(answer_dict)
 
   response = {
@@ -1842,6 +1857,21 @@ async def prefetch_session_regeneration(
     "session_id": session_id,
     "total_qr_problems": total_qr_problems
   }
+
+
+@router.post("/session/{session_id}/regenerate-cache")
+async def regenerate_session_answer_cache(
+  session_id: int,
+  current_user: dict = Depends(require_instructor)
+):
+  """Discard and rewarm every regenerated-answer cache entry in a session."""
+  problem_repo = ProblemRepository()
+  problem_ids = {problem.id for problem in problem_repo.get_by_session_batch(session_id)}
+  problem_repo.clear_regeneration_cache_for_session(session_id)
+  with _regeneration_cache_lock:
+    for problem_id in problem_ids:
+      _regeneration_cache.pop(problem_id, None)
+  return await prefetch_session_regeneration(session_id, current_user)
 
 
 @router.get("/{problem_id}/regenerate-answer")

@@ -704,8 +704,12 @@
                             <button id="manual-qr-btn" class="btn btn-warning">Manual QR Code</button>
                         </div>
                         <div style="margin: 14px 0 5px; padding-top: 12px; border-top: 1px solid var(--gray-200);">
-                            <button id="clear-problem-grades-btn" class="btn btn-danger instructor-only" type="button">Remove All Grades for This Problem</button>
-                            <small style="display:block; margin-top:6px; color:var(--gray-700);">Clears scores, feedback, and AI grading results for every submission of this problem.</small>
+                            <button id="toggle-danger-actions-btn" class="btn btn-danger instructor-only" type="button">Danger Actions</button>
+                            <div id="danger-actions-panel" style="display:none; margin-top:8px; padding:10px; border:1px solid var(--danger-color); border-radius:6px;">
+                                <button id="regenerate-session-cache-btn" class="btn btn-warning instructor-only" type="button">Regenerate Answer Cache for Session</button>
+                                <button id="clear-problem-grades-btn" class="btn btn-danger instructor-only" type="button">Remove All Grades for This Problem</button>
+                                <small style="display:block; margin-top:6px; color:var(--gray-700);">Cache regeneration affects the entire session. Grade removal affects every submission of this problem.</small>
+                            </div>
                         </div>
                         <div style="text-align: center; padding: 5px 0;">
                             <small style="color: var(--gray-600);">Shortcuts: <strong>0-9</strong> to enter score | <strong>Enter</strong> to submit</small>

@@ -840,6 +840,19 @@ class ProblemRepository(BaseRepository[Problem]):
         WHERE id = ?
       """, (problem_id,))
 
+  def clear_regeneration_cache_for_session(self, session_id: int) -> int:
+    """Clear persisted regenerated-answer cache entries for one session."""
+    with self._get_connection() as conn:
+      cursor = conn.cursor()
+      cursor.execute("""
+        UPDATE problems
+        SET regeneration_cache_key = NULL,
+            regeneration_response_json = NULL,
+            regeneration_cached_at = NULL
+        WHERE session_id = ?
+      """, (session_id,))
+      return int(cursor.rowcount or 0)
+
   def get_counts_for_problem_number(self, session_id: int,
                                    problem_number: int,
                                    canvas_user_ids: Optional[List[int]] = None) -> Dict[str, int]:

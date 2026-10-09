@@ -1471,6 +1471,11 @@ function setupGradingControls() {
     document.getElementById('subjective-finalize-btn').onclick = openSubjectiveFinalizeDialog;
     document.getElementById('subjective-reopen-btn').onclick = () => submitSubjectiveReopen({ openFinalizeDialog: true });
     document.getElementById('clear-problem-grades-btn').onclick = clearGradesForCurrentProblem;
+    document.getElementById('toggle-danger-actions-btn').onclick = () => {
+        const panel = document.getElementById('danger-actions-panel');
+        panel.style.display = panel.style.display === 'none' ? '' : 'none';
+    };
+    document.getElementById('regenerate-session-cache-btn').onclick = regenerateSessionAnswerCache;
     document.getElementById('next-problem-btn').onclick = loadNextProblem;
     document.getElementById('back-problem-btn').onclick = loadPreviousProblem;
     document.getElementById('view-stats-btn').onclick = () => {
@@ -2367,6 +2372,34 @@ async function clearGradesForCurrentProblem() {
     } catch (error) {
         console.error('Failed to remove grades for problem:', error);
         alert(`Failed to remove grades: ${error.message}`);
+    } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+    }
+}
+
+async function regenerateSessionAnswerCache() {
+    if (!currentSession) return;
+    if (!confirm('Regenerate answer cache for every QR-backed problem in this session?\n\nThis discards cached answers and explanations, then rebuilds them in the background.')) {
+        return;
+    }
+    const button = document.getElementById('regenerate-session-cache-btn');
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Regenerating…';
+    try {
+        const response = await fetch(
+            `${API_BASE}/problems/session/${currentSession.id}/regenerate-cache`,
+            { method: 'POST' });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || 'Unable to regenerate answer cache');
+        regeneratedAnswerCache.clear();
+        explanationCache = {};
+        showNotification(payload.status === 'no_qr_data'
+            ? 'This session has no QR-backed answers to regenerate.'
+            : 'Answer cache cleared; regeneration is running in the background.');
+    } catch (error) {
+        alert(`Failed to regenerate answer cache: ${error.message}`);
     } finally {
         button.disabled = false;
         button.textContent = originalText;
