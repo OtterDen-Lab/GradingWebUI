@@ -5268,6 +5268,33 @@ document.addEventListener('mouseup', () => {
     isAnswerDragging = false;
 });
 
+// The explanation dialog has its own header; querySelector above intentionally
+// targets the answer dialog's first header only.
+const explanationDialog = document.getElementById('explanation-dialog');
+const explanationHeader = explanationDialog?.querySelector('.answer-header');
+let isExplanationDragging = false;
+let explanationDragOffsetX = 0;
+let explanationDragOffsetY = 0;
+
+explanationHeader?.addEventListener('mousedown', (e) => {
+    if (e.target.classList.contains('answer-close')) return;
+    isExplanationDragging = true;
+    const rect = explanationDialog.getBoundingClientRect();
+    explanationDragOffsetX = e.clientX - rect.left;
+    explanationDragOffsetY = e.clientY - rect.top;
+    explanationDialog.style.transform = 'none';
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (!isExplanationDragging) return;
+    explanationDialog.style.left = `${e.clientX - explanationDragOffsetX}px`;
+    explanationDialog.style.top = `${e.clientY - explanationDragOffsetY}px`;
+});
+
+document.addEventListener('mouseup', () => {
+    isExplanationDragging = false;
+});
+
 function setAnswerDialogLoadingState() {
     const answerContent = document.getElementById('answer-content');
     const answerList = document.getElementById('answer-list');
