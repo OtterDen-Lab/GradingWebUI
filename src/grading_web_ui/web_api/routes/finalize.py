@@ -14,7 +14,8 @@ import asyncio
 from pydantic import BaseModel, PrivateAttr
 
 from ..database import get_db_connection
-from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository
+from ..repositories import (SessionRepository, SubmissionRepository,
+                            ProblemRepository, ProblemMetadataRepository)
 from ..domain.common import SessionStatus
 from ..services.finalizer import FinalizationService
 from .. import sse
