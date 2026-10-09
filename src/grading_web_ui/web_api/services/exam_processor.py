@@ -1097,13 +1097,18 @@ class ExamProcessor:
             page_transforms=page_transforms, dpi=150)
         finally:
           local_doc.close()
-        return problem_num, scan_region(region)[1], handwriting_executor.submit(
+        handwriting_future = handwriting_executor.submit(
           self._analyze_handwriting_crop, image)
+        qr_data = scan_region(region)[1]
+        # Keep the two operations paired: a region is not complete until both
+        # its QR decode and its handwriting analysis have completed.
+        handwriting = handwriting_future.result()
+        return problem_num, qr_data, handwriting
        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(scan_with_handwriting, region) for region in regions]
         for future in concurrent.futures.as_completed(futures):
-          problem_num, qr_data, handwriting_future = future.result()
-          handwriting_by_problem[problem_num] = handwriting_future
+          problem_num, qr_data, handwriting = future.result()
+          handwriting_by_problem[problem_num] = handwriting
           if qr_data:
             log.info(
               f"Pre-scan: Problem {problem_num}: Found QR code with max_points={qr_data['max_points']}"
@@ -1201,9 +1206,12 @@ class ExamProcessor:
         qr_encrypted_data=qr_encrypted_data
       )
 
-      handwriting_future = handwriting_by_problem.get(problem_number)
-      if handwriting_future:
-        handwriting = handwriting_future.result()
+      handwriting = handwriting_by_problem.get(problem_number)
+      if self.handwriting_analysis_enabled:
+        if message_callback:
+          safe_message(
+            f"Handwriting analysis complete for problem {problem_number}/{total_prescan}",
+            step_increment=1)
         if handwriting:
           problem.transcription = handwriting["transcription"]
           problem.transcription_model = handwriting["model"]

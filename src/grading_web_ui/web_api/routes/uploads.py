@@ -1634,8 +1634,11 @@ async def process_exam_splits(
       qr_prescan_dpi_steps
     )
     qr_prescan_steps_per_region = len(qr_prescan_dpi_steps)
+    handwriting_steps_per_region = int(_parse_bool_value(
+      session_data.get(LLM_BLANK_DETECTION_ENABLED_KEY), default=False))
     total_steps = len(file_paths_to_process) * (
-      1 + regions_per_exam * qr_prescan_steps_per_region
+      1 + regions_per_exam * (
+        qr_prescan_steps_per_region + handwriting_steps_per_region)
     )
     total_steps = max(1, total_steps)
     current_step = {"count": 0}
