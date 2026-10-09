@@ -992,6 +992,17 @@ class ExamProcessor:
     # Determine starting index for problem extraction
     # If skip_first_region is True, skip the first split pair (header region)
     start_index = 1 if skip_first_region else 0
+    total_regions = max(0, len(linear_splits) - 1 - start_index)
+
+    # Progress messages can also be emitted after the optional QR pre-scan
+    # (for example, while recording handwriting-analysis progress). Keep the
+    # helper available regardless of whether QR scanning is enabled.
+    callback_lock = threading.Lock()
+
+    def safe_message(message: str, step_increment: int = 1) -> None:
+      if message_callback:
+        with callback_lock:
+          message_callback(message, step_increment=step_increment)
 
     if skip_first_region and len(linear_splits) > 1:
       log.info(
@@ -1005,7 +1016,7 @@ class ExamProcessor:
         f"Pre-scanning {len(linear_splits) - 1 - start_index} problem regions for QR codes from unredacted PDF..."
       )
       problem_number_prescan = 1
-      total_prescan = len(linear_splits) - 1 - start_index
+      total_prescan = total_regions
 
       regions = []
       for i in range(start_index, len(linear_splits) - 1):
@@ -1021,13 +1032,6 @@ class ExamProcessor:
           (problem_number_prescan, start_page, start_y, start_pct, end_page, end_y, end_pct)
         )
         problem_number_prescan += 1
-
-      callback_lock = threading.Lock()
-
-      def safe_message(message: str, step_increment: int = 1) -> None:
-        if message_callback:
-          with callback_lock:
-            message_callback(message, step_increment=step_increment)
 
       def scan_region(region: Tuple[int, int, float, float, int, float, float]) -> Tuple[int, Optional[dict]]:
         problem_num, start_page, start_y, start_pct, end_page, end_y, end_pct = region
@@ -1210,7 +1214,7 @@ class ExamProcessor:
       if self.handwriting_analysis_enabled:
         if message_callback:
           safe_message(
-            f"Handwriting analysis complete for problem {problem_number}/{total_prescan}",
+            f"Handwriting analysis complete for problem {problem_number}/{total_regions}",
             step_increment=1)
         if handwriting:
           problem.transcription = handwriting["transcription"]
