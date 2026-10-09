@@ -283,6 +283,20 @@ app.include_router(session_comparison.router, prefix="/api/session-comparison", 
 if has_debug_routes:
   app.include_router(debug.router,        prefix="/api",                tags=["debug"])
 
+
+# Client-side grading routes.  These must be registered before the static
+# mount below so a browser refresh of /<session> or /<session>/<problem>
+# reloads the application shell rather than looking for a static file.
+@app.get("/{session_id:int}", include_in_schema=False)
+async def grading_session_page(session_id: int):
+  return FileResponse(Path(__file__).parent.parent / "web_frontend" / "index.html")
+
+
+@app.get("/{session_id:int}/{problem_number:int}", include_in_schema=False)
+async def grading_problem_page(session_id: int, problem_number: int):
+  return FileResponse(Path(__file__).parent.parent / "web_frontend" / "index.html")
+
+
 # Mount static files (frontend) - MUST BE LAST as it catches all routes
 frontend_path = Path(__file__).parent.parent / "web_frontend"
 if frontend_path.exists():

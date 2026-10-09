@@ -9,6 +9,64 @@ let currentUser = null;
 let mockRosterEnabled = false;
 let sessionNameDirty = false;
 
+// The address bar is the durable part of the UI state.  Session data itself
+// remains in the API/database; these helpers only describe which view to
+// restore after a refresh or a browser Back/Forward action.
+function getRouteFromLocation() {
+    const match = window.location.pathname.match(/^\/(\d+)(?:\/(\d+))?\/?$/);
+    if (!match) return null;
+
+    const sessionId = Number(match[1]);
+    const problemNumber = match[2] === undefined ? null : Number(match[2]);
+    if (!Number.isSafeInteger(sessionId) || sessionId <= 0 ||
+        (problemNumber !== null && (!Number.isSafeInteger(problemNumber) || problemNumber <= 0))) {
+        return null;
+    }
+    return { sessionId, problemNumber };
+}
+
+function setApplicationPath(path, { replace = false } = {}) {
+    if (window.location.pathname === path) return;
+    const method = replace ? 'replaceState' : 'pushState';
+    window.history[method]({}, '', path);
+}
+
+function updateRouteForSession() {
+    if (currentSession?.id) {
+        setApplicationPath(`/${currentSession.id}`);
+    }
+}
+
+function updateRouteForProblem() {
+    if (!currentSession?.id || !currentProblemNumber) return;
+    setApplicationPath(`/${currentSession.id}/${currentProblemNumber}`);
+}
+
+async function restoreRouteFromLocation() {
+    const route = getRouteFromLocation();
+    if (!route) {
+        currentSession = null;
+        navigateToSection('session-section');
+        await loadSessions();
+        return;
+    }
+
+    try {
+        await selectSession(route.sessionId, {
+            updateRoute: false,
+            destination: route.problemNumber === null ? 'stats' : 'problem',
+            problemNumber: route.problemNumber
+        });
+    } catch (error) {
+        console.error('Failed to restore route:', error);
+        alert('This grading session is unavailable or you do not have access to it.');
+        setApplicationPath('/', { replace: true });
+        currentSession = null;
+        navigateToSection('session-section');
+        await loadSessions();
+    }
+}
+
 // Helper function to recursively get all files from dropped items (including directories)
 async function getAllFilesFromDataTransfer(dataTransferItems) {
     const files = [];
@@ -224,8 +282,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   await checkAuth();
   await loadVersionTag();
   await loadMockRosterConfig();
-  loadSessions();
   setupEventListeners();
+  await restoreRouteFromLocation();
 });
 
 async function loadVersionTag() {
@@ -655,12 +713,37 @@ document.getElementById('compare-sessions-form').onsubmit = async (event) => {
 };
 
 // Select a session
-async function selectSession(sessionId) {
+async function selectSession(sessionId, options = {}) {
+    const {
+        updateRoute = true,
+        destination = null,
+        problemNumber = null
+    } = options;
     try {
         const response = await fetch(`${API_BASE}/sessions/${sessionId}`);
+        if (!response.ok) {
+            throw new Error(`Unable to load session (${response.status})`);
+        }
         currentSession = await response.json();
 
         updateSessionInfo();
+        if (updateRoute) {
+            updateRouteForSession();
+        }
+
+        // A direct /<session> link deliberately opens statistics.  This is a
+        // stable landing page even while a session is in another workflow
+        // state.  A /<session>/<problem> link requests that problem instead.
+        if (destination === 'stats') {
+            navigateToSection('stats-section');
+            return;
+        }
+        if (destination === 'problem') {
+            window.__requestedProblemNumber = problemNumber;
+            navigateToSection('grading-section');
+            return;
+        }
+
         if (currentSession.status === 'awaiting_alignment') {
             await prepareAlignment();
             return;
@@ -675,6 +758,7 @@ async function selectSession(sessionId) {
         navigateToSection(getNextSectionForStatus(currentSession.status));
     } catch (error) {
         console.error('Failed to select session:', error);
+        throw error;
     }
 }
 
@@ -720,6 +804,9 @@ function navigateToSection(sectionId) {
         section.classList.remove('active');
     });
     document.getElementById(sectionId).classList.add('active');
+    if (sectionId === 'stats-section' && currentSession) {
+        updateRouteForSession();
+    }
 }
 
 // Setup event listeners
@@ -730,8 +817,13 @@ function setupEventListeners() {
     document.getElementById('session-info').innerHTML = '';
     document.getElementById('home-btn').style.display = 'none';
     navigateToSection('session-section');
+    setApplicationPath('/');
     loadSessions();
   };
+
+  window.addEventListener('popstate', () => {
+    restoreRouteFromLocation();
+  });
 
   // New session button - open modal
   document.getElementById('new-session-btn').onclick = () => {

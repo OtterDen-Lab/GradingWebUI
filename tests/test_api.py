@@ -64,6 +64,15 @@ def test_version_info_reports_deployment_metadata(client):
     assert payload["display"] == f"testing · {payload['commit']}"
 
 
+@pytest.mark.parametrize("path", ["/123", "/123/4"])
+def test_numeric_grading_routes_serve_application_shell(client, path):
+  """Deep links must survive a full browser refresh."""
+  response = client.get(path)
+
+  assert response.status_code == 200
+  assert "Web Grading Interface" in response.text
+
+
 def create_test_session(client, assignment_name: str = "Test Session") -> int:
   """Create a session through API and return session_id."""
   response = client.post("/api/sessions",

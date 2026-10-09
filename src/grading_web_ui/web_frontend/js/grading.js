@@ -296,10 +296,16 @@ function startSessionRegenerationPrefetch() {
 function initializeGrading() {
     if (!currentSession) return;
 
+    const requestedProblemNumber = Number(window.__requestedProblemNumber);
+    window.__requestedProblemNumber = null;
+    const preferredProblemNumber = Number.isSafeInteger(requestedProblemNumber) && requestedProblemNumber > 0
+        ? requestedProblemNumber
+        : null;
+
     lastSessionStats = null;
     startSessionRegenerationPrefetch();
     loadProblemMaxPoints();
-    loadProblemNumbers();
+    loadProblemNumbers(preferredProblemNumber);
     setupGradingControls();
     updateOverallProgress();
     setupProblemImageResize();
@@ -1255,7 +1261,7 @@ function updateSubjectiveFinalizeButton() {
 }
 
 // Load available problem numbers
-async function loadProblemNumbers() {
+async function loadProblemNumbers(preferredProblemNumber = null) {
     try {
         const [numbersResponse, statsResponse] = await Promise.all([
             fetch(`${API_BASE}/sessions/${currentSession.id}/problem-numbers`),
@@ -1289,7 +1295,10 @@ async function loadProblemNumbers() {
         });
         updateProblemSelectUngradedCounts(stats.problem_stats);
 
-        currentProblemNumber = availableProblemNumbers[0] || 1;
+        const requestedProblem = Number(preferredProblemNumber);
+        currentProblemNumber = availableProblemNumbers.includes(requestedProblem)
+            ? requestedProblem
+            : availableProblemNumbers[0] || 1;
         activeSubjectiveBucketFilter = '';
         invalidateNextProblemPrefetch();
         select.value = currentProblemNumber;
@@ -1773,6 +1782,13 @@ function autoSizeProblemContainerToImage(problemImage) {
 // Display the current problem (common display logic)
 function displayCurrentProblem() {
     if (!currentProblem) return;
+
+    // Only problem number (rather than the individual submission) belongs in
+    // the URL.  Moving through submissions for one question therefore does
+    // not flood browser history, while changing questions remains bookmarkable.
+    if (document.getElementById('grading-section').classList.contains('active')) {
+        updateRouteForProblem();
+    }
 
     clearStaleHandwritingBatchStatus();
 
