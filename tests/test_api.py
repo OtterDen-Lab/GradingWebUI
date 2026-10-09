@@ -2683,6 +2683,8 @@ def test_export_blank_feedback_example_uses_default_feedback(client):
     },
   )
   assert default_response.status_code == 200
+  ProblemMetadataRepository().upsert_question_text(
+    session_id, 1, "What is the value of x?")
 
   response = client.get(f"/api/finalize/{session_id}/blank-feedback-example")
 
@@ -2692,6 +2694,7 @@ def test_export_blank_feedback_example_uses_default_feedback(client):
     "content-disposition"]
   assert "Feedback Example Test" in response.text
   assert "Total Score: 5.00 / 5.00" in response.text
+  assert "What is the value of x?" in response.text
   assert "Review the worked solution." in response.text
   assert "Student-specific feedback must not be exported." not in response.text
   assert "Student Whose Work Must Not Be Included" not in response.text

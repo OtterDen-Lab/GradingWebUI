@@ -90,3 +90,63 @@ def regenerate_from_encrypted_compat(encrypted_data: str,
     kwargs["image_mode"] = image_mode
 
   return regenerate_from_encrypted(**kwargs)
+
+
+def regenerate_question_html_from_encrypted(
+    encrypted_data: str,
+    points: float = 1.0,
+    yaml_text: Optional[str] = None,
+    image_mode: str = "inline"
+) -> str:
+  """Regenerate only the student-visible question body, without answers.
+
+  QuizGenerator's public regeneration API intentionally returns an answer key.
+  The feedback-example export needs the same seeded question, but must not
+  reveal the answer through that question snippet.  This mirrors that API's
+  regeneration path and renders the question body with ``show_answers=False``.
+  """
+  _configure_matplotlib_for_worker_context()
+  from QuizGenerator.regenerate import (
+    QuestionQRCode,
+    QuestionRegistry,
+    _find_questions_by_id,
+    _load_quizzes_for_question_id,
+    _load_yaml_docs,
+    _render_html,
+    _resolve_upload_func,
+  )
+  _restore_app_logging_after_quizgenerator_import()
+
+  regenerated = QuestionQRCode.decrypt_question_data(encrypted_data)
+  seed = regenerated.get("seed")
+  question_id = regenerated.get("question_id")
+  upload_func = _resolve_upload_func(image_mode, None)
+
+  if question_id:
+    if not yaml_text:
+      raise ValueError("Frozen quiz YAML is required to regenerate this question")
+    docs = _load_yaml_docs(yaml_text=yaml_text)
+    quizzes = _load_quizzes_for_question_id(docs, question_id)
+    matches = _find_questions_by_id(quizzes, question_id)
+    if not matches:
+      raise ValueError(f"Question ID '{question_id}' was not found in the frozen YAML")
+    question = matches[0]
+    instance = question.instantiate(rng_seed=seed)
+  else:
+    question = QuestionRegistry.create(
+      regenerated["question_type"],
+      name=f"FeedbackExample_{seed}",
+      points_value=points,
+      **regenerated.get("config", {}),
+    )
+    instance = question.instantiate(
+      rng_seed=seed,
+      **regenerated.get("context", {}),
+    )
+
+  question_ast = question._build_question_ast(instance)
+  return _render_html(
+    question_ast.body,
+    show_answers=False,
+    upload_func=upload_func,
+  )

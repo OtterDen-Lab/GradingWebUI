@@ -18,7 +18,10 @@ from PIL import Image
 from ..repositories import SessionRepository, SubmissionRepository, ProblemRepository
 from ..repositories import ProblemMetadataRepository
 from ..services.problem_service import ProblemService
-from ..services.quiz_regeneration import regenerate_from_encrypted_compat
+from ..services.quiz_regeneration import (
+  regenerate_from_encrypted_compat,
+  regenerate_question_html_from_encrypted,
+)
 from ..services.feedback_text import merge_general_feedback
 from lms_interface.canvas_interface import CanvasInterface
 from .canvas_credentials import create_canvas_interface
@@ -338,7 +341,8 @@ class FinalizationService:
   def _generate_comments(self,
                          submission: Dict,
                          *,
-                         include_problem_images: bool = True) -> str:
+                         include_problem_images: bool = True,
+                         include_regenerated_questions: bool = False) -> str:
     """Generate feedback comments for Canvas as a self-contained HTML document"""
     quiz_name = (submission.get("session_name")
                  or submission.get("assignment_name")
@@ -396,6 +400,18 @@ class FinalizationService:
       explanation_source = self._get_explanation_html(problem)
       explanation_html = self._render_text_or_html(explanation_source)
 
+      question_section = ""
+      if include_regenerated_questions:
+        question_source = self._get_question_html(problem)
+        question_html = self._render_text_or_html(question_source)
+        if question_html:
+          question_section = (
+            "<div class=\"problem-question\">"
+            "<h4>Question</h4>"
+            f"{question_html}"
+            "</div>"
+          )
+
       feedback_source = problem.get("feedback") or ""
       if explanation_source:
         feedback_source = self._strip_auto_generated_explanation(feedback_source)
@@ -417,6 +433,7 @@ class FinalizationService:
         f"<summary>Problem {problem['problem_number']} - Score {score_display}</summary>"
         "<div class=\"problem-body\">"
         f"{image_html}"
+        f"{question_section}"
         "<div class=\"problem-meta\">"
         f"<div class=\"problem-score\">Score: {score_display}</div>"
         "</div>"
@@ -516,7 +533,7 @@ class FinalizationService:
       font-size: 14px;
       color: var(--muted);
     }}
-    .problem-feedback, .problem-explanation {{
+    .problem-question, .problem-feedback, .problem-explanation {{
       margin-top: 12px;
       padding: 12px;
       background: #ffffff;
@@ -539,7 +556,7 @@ class FinalizationService:
       background: #fde68a;
       border-radius: 999px;
     }}
-    .problem-feedback h4, .problem-explanation h4 {{
+    .problem-question h4, .problem-feedback h4, .problem-explanation h4 {{
       margin: 0 0 8px;
       font-size: 14px;
       text-transform: uppercase;
@@ -657,6 +674,23 @@ class FinalizationService:
           f"Failed to regenerate explanation for problem {problem.get('problem_number')}: {e}"
         )
     return ""
+
+  def _get_question_html(self, problem: Dict) -> str:
+    """Return the regenerated student-facing question, never its answer key."""
+    qr_data = problem.get("qr_encrypted_data")
+    if qr_data:
+      try:
+        return regenerate_question_html_from_encrypted(
+          encrypted_data=qr_data,
+          points=problem.get("max_points") or 0.0,
+          yaml_text=self.quiz_yaml_text,
+          image_mode="inline",
+        )
+      except Exception as e:
+        log.warning(
+          "Failed to regenerate question for problem %s: %s",
+          problem.get("problem_number"), e)
+    return problem.get("question_text") or ""
 
   def _inline_local_images(self, html_text: str) -> str:
     def inline_src(src: str) -> str:

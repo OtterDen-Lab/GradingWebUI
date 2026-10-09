@@ -207,10 +207,10 @@ async def export_blank_feedback_example(
 ):
   """Download the feedback document students should expect for this exam.
 
-  It uses the processed exam PDF and its existing problem regions to include
-  the same per-question snippets a student would receive. Every problem is
+  Its problem regions define the included questions, but it contains no exam
+  snapshots, student score, or response-specific feedback. Every problem is
   shown at full credit with the session's default feedback and regenerated
-  explanation; response-specific feedback is excluded.
+  explanation.
   """
   session_repo = SessionRepository()
   if not session_repo.get_by_id(session_id):
@@ -242,6 +242,8 @@ async def export_blank_feedback_example(
       **problem,
       "score": problem.get("max_points") or 0.0,
       "feedback": default_feedback or "",
+      "question_text": metadata_repo.get_question_text(
+        session_id, problem["problem_number"]),
     })
 
   session_info = finalizer._get_session_info()
@@ -254,9 +256,12 @@ async def export_blank_feedback_example(
     "assignment_name": session_info.get("assignment_name"),
     "session_name": session_info.get("session_name"),
   }
-  # Use the same PDF crops and split regions as an ordinary student feedback
-  # document, so this is a faithful example of the delivered artifact.
-  feedback_html = finalizer._generate_comments(example_submission)
+  # Never use a student submission PDF in a shareable class example. A blank
+  # source PDF is required before question snippets can safely be included.
+  feedback_html = finalizer._generate_comments(
+    example_submission,
+    include_problem_images=False,
+    include_regenerated_questions=True)
   filename = f"feedback-example-session-{session_id}.html"
   return Response(
     content=feedback_html,
