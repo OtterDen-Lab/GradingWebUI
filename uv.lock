@@ -698,7 +698,7 @@ wheels = [
 
 [[package]]
 name = "gradingwebui"
-version = "0.18.0"
+version = "0.18.1"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -2025,7 +2025,7 @@ wheels = [
 
 [[package]]
 name = "quizgenerator"
-version = "0.31.0"
+version = "0.31.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "canvasapi" },
@@ -2043,9 +2043,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7f/7a/7477a909cd921e62b511fe7a2e29b3d9de2b69fb650cb1f2a03af88ef993/quizgenerator-0.31.0.tar.gz", hash = "sha256:fdf72d951068115a2eaaa3ca82a17d7a794e91f13c72e391876cc6cfe1300fd4", size = 221513, upload-time = "2026-09-28T16:10:18.136Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/df/286a4bd68322757ac451fb0832b04778867dde86864c83574fb6b66c37b8/quizgenerator-0.31.2.tar.gz", hash = "sha256:cce8fee82c052f5c74aece5145e5bdb8923214b0814057d0a58dde6f6d0ab195", size = 222104, upload-time = "2026-10-09T04:47:17.129Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/cf/081964f677461cd1528f7daf79be452b11109db0baebc20bbdc4a16b0a92/quizgenerator-0.31.0-py3-none-any.whl", hash = "sha256:d7fe3ecadef41b4147fc7ba8c69354291951cca08179ca6f49362c582bbe10bf", size = 253449, upload-time = "2026-09-28T16:10:16.888Z" },
+    { url = "https://files.pythonhosted.org/packages/84/cd/a0dd49bde6d2eef801825e632fba015e253ef6e318c3788968d1ee032a41/quizgenerator-0.31.2-py3-none-any.whl", hash = "sha256:a97881503e98d318dacb682639193c77e47c5cfaeda98c67f57ecbac9dfc311e", size = 254030, upload-time = "2026-10-09T04:47:15.665Z" },
 ]
 
 [[package]]
