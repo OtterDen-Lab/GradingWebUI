@@ -103,7 +103,9 @@ def regenerate_question_html_from_encrypted(
   QuizGenerator's public regeneration API intentionally returns an answer key.
   The feedback-example export needs the same seeded question, but must not
   reveal the answer through that question snippet.  This mirrors that API's
-  regeneration path and renders the question body with ``show_answers=False``.
+  regeneration path and renders the question body in QuizGenerator's
+  ``review_mode``. That mode renders visible answer fields instead of exposing
+  the internal UUID used to associate each blank with its answer.
   """
   _configure_matplotlib_for_worker_context()
   from QuizGenerator.regenerate import (
@@ -148,5 +150,6 @@ def regenerate_question_html_from_encrypted(
   return _render_html(
     question_ast.body,
     show_answers=False,
+    review_mode=True,
     upload_func=upload_func,
   )
