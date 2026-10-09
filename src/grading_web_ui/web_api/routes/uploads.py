@@ -1771,10 +1771,10 @@ async def process_exam_splits(
             max_points=max_points,
             region_coords=region_coords,
             qr_encrypted_data=prob_dto.qr_encrypted_data,
-            transcription=prob_dto.transcription,
-            transcription_model=prob_dto.transcription_model,
-            transcription_is_blank=prob_dto.transcription_is_blank,
-            transcription_is_relevant=prob_dto.transcription_is_relevant
+            transcription=getattr(prob_dto, "transcription", None),
+            transcription_model=getattr(prob_dto, "transcription_model", None),
+            transcription_is_blank=getattr(prob_dto, "transcription_is_blank", None),
+            transcription_is_relevant=getattr(prob_dto, "transcription_is_relevant", None)
           )
           all_problems.append(problem)
 
