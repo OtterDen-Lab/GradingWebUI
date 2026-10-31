@@ -292,6 +292,8 @@ class AI_Helper__Bifrost(AI_Helper):
   def __init__(self) -> None:
     super().__init__()
     self.base_url = os.getenv("BIFROST_BASE_URL", "").strip().rstrip("/")
+    if self.base_url and not self.base_url.endswith("/v1"):
+      self.base_url = f"{self.base_url}/v1"
     self.api_key = os.getenv("BIFROST_API_KEY", "").strip()
 
   def _url(self, path: str) -> str:

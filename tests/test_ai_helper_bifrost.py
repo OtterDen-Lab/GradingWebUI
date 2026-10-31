@@ -33,6 +33,20 @@ def test_bifrost_lists_proxy_catalog(monkeypatch):
   assert calls[0][1]["headers"] == {"Authorization": "Bearer token"}
 
 
+def test_bifrost_adds_v1_to_a_bare_proxy_url(monkeypatch):
+  monkeypatch.setenv("BIFROST_BASE_URL", "https://bifrost.example.test")
+  monkeypatch.setenv("BIFROST_API_KEY", "token")
+  calls = []
+
+  def get(url, **kwargs):
+    calls.append((url, kwargs))
+    return _Response({"data": []})
+
+  monkeypatch.setattr("grading_web_ui.ai_helper.requests.get", get)
+  AI_Helper__Bifrost().list_models()
+  assert calls[0][0] == "https://bifrost.example.test/v1/models"
+
+
 def test_bifrost_chat_uses_openai_wire_format(monkeypatch):
   monkeypatch.setenv("BIFROST_BASE_URL", "http://bifrost.test/v1")
   monkeypatch.setenv("BIFROST_API_KEY", "token")
