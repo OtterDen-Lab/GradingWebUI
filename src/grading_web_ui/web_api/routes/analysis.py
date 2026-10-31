@@ -170,9 +170,18 @@ async def list_analysis_models(current_user: dict = Depends(get_current_user)):
     except RuntimeError as error:
       log.warning("Could not list Ollama analysis models: %s", error)
 
-  # These are the provider models deliberately configured for this deployment
-  # (including the current user's overrides), rather than an unbounded remote
-  # catalog which may contain text-only models unsuitable for image analysis.
+  # Bifrost is the operator-curated catalog, so expose all of its available
+  # routes rather than maintaining another application-owned model list.
+  try:
+    for model in model_settings.list_provider_models("bifrost"):
+      choices.append({
+        "id": f"bifrost:{model['id']}", "provider": "bifrost",
+        "label": model["display_name"],
+      })
+  except Exception as error:
+    log.warning("Could not list Bifrost analysis models: %s", error)
+
+  # Keep legacy provider configurations visible during the staged migration.
   for provider in ("anthropic", "openai"):
     seen = set()
     for tier, selection in model_settings.get_effective_settings(
@@ -195,7 +204,7 @@ async def create_run(request: AnalysisRunCreate, background_tasks: BackgroundTas
   if not models:
     raise HTTPException(status_code=400, detail="Select at least one model")
   unsupported = [model for model in models if not model.startswith(
-    ("ollama:", "anthropic:", "openai:"))]
+    ("ollama:", "bifrost:", "anthropic:", "openai:"))]
   if unsupported:
     raise HTTPException(status_code=400,
                         detail="Model targets must include a provider prefix")

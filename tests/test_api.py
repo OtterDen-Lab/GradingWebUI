@@ -1183,8 +1183,8 @@ def test_next_problem_supports_exclude_problem_ids(client, monkeypatch):
   assert "exclude_problem_ids" in invalid_response.json()["detail"]
 
 
-def test_decipher_default_uses_anthropic(client, monkeypatch):
-  """Default decipher should use Anthropic helper."""
+def test_decipher_default_uses_bifrost(client, monkeypatch):
+  """Default decipher should use the Bifrost helper."""
   from grading_web_ui.web_api.routes import problems as problems_routes
 
   session_id = create_test_session(client, "Decipher Default")
@@ -1198,14 +1198,14 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
     lambda problem, submission_repo=None: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
   )
 
-  class _FakeAnthropic:
+  class _FakeBifrost:
     @classmethod
     def query_ai(cls, *args, **kwargs):
       return ('{"is_blank": false, "is_effectively_blank": false, '
               '"is_relevant": true, "text": "transcribed text"}',
-              {"model": "claude-sonnet-4-5"})
+              {"model": "vision-route"})
 
-  monkeypatch.setattr(problems_routes.ai_helper, "AI_Helper__Anthropic", _FakeAnthropic)
+  monkeypatch.setattr(problems_routes.ai_helper, "AI_Helper__Bifrost", _FakeBifrost)
 
   response = client.post(f"/api/problems/{problem_id}/decipher?model=default")
   assert response.status_code == 200
@@ -1214,7 +1214,7 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
   assert payload["is_blank"] is False
   assert payload["is_effectively_blank"] is False
   assert payload["is_relevant"] is True
-  assert payload["model"] == "Anthropic (claude-sonnet-4-5)"
+  assert payload["model"] == "Bifrost (vision-route)"
 
   with get_db_connection() as conn:
     cached = conn.execute(
@@ -1224,7 +1224,7 @@ def test_decipher_default_uses_anthropic(client, monkeypatch):
       (problem_id,)
     ).fetchone()
   assert cached["transcription"] == "transcribed text"
-  assert cached["transcription_model"] == "Anthropic (claude-sonnet-4-5)"
+  assert cached["transcription_model"] == "Bifrost (vision-route)"
   assert cached["transcription_is_blank"] == 0
   assert cached["transcription_is_effectively_blank"] == 0
   assert cached["transcription_is_relevant"] == 1

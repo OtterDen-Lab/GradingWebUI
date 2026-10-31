@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 class ModelDefaultsUpdate(BaseModel):
-  provider: str = "anthropic"
+  provider: str = "bifrost"
   models: dict[str, Optional[str]] = Field(..., min_length=1)
 
 
@@ -39,7 +39,7 @@ async def get_settings(current_user: dict = Depends(get_current_user)):
   ollama_server = ollama_settings.get_active_server()
   return {
     "providers": list(model_settings.ai_helper.MODEL_CONFIG),
-    "settings": model_settings.get_effective_settings(current_user["user_id"]),
+    "settings": model_settings.get_effective_settings(current_user["user_id"], "bifrost"),
     "handwriting_default": model_settings.get_handwriting_default(current_user["user_id"]),
     "built_in_transcription_instructions":
       model_settings.BUILT_IN_TRANSCRIPTION_INSTRUCTIONS,
@@ -53,7 +53,7 @@ async def get_settings(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/models/{provider}")
-async def get_models(provider: str, current_user: dict = Depends(require_instructor)):
+async def get_models(provider: str, current_user: dict = Depends(get_current_user)):
   try:
     return {"provider": provider, "models": model_settings.list_provider_models(provider)}
   except ValueError as error:

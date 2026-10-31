@@ -70,7 +70,7 @@ class SplitPointsSubmission(BaseModel):
   split_points: Dict[str, List[int]]
   skip_first_region: bool = True  # Default to skipping first region (header/title)
   last_page_blank: bool = False  # Default to not skipping last page
-  ai_provider: str = "anthropic"  # AI provider for name extraction (anthropic, openai)
+  ai_provider: str = "bifrost"  # AI provider for name extraction
 
 
 class NameBoxSelectionSubmission(BaseModel):
@@ -79,7 +79,7 @@ class NameBoxSelectionSubmission(BaseModel):
   y: float
   width: float
   height: float
-  ai_provider: str = "anthropic"
+  ai_provider: str = "bifrost"
 
 
 def _sanitize_name_rect(raw_rect: Optional[dict]) -> Optional[Dict[str, float]]:
@@ -598,7 +598,7 @@ async def upload_exams(
       session_data["last_page_blank"] = existing_data.get(
         "last_page_blank", False)
       session_data["ai_provider"] = existing_data.get(
-        "ai_provider", "anthropic")
+        "ai_provider", "bifrost")
       session_data["composite_dimensions"] = existing_data.get(
         "composite_dimensions", {})
       log.info(
@@ -691,7 +691,7 @@ async def upload_exams(
     background_tasks = BackgroundTasks()
     background_tasks.add_task(process_exam_names, session_id, file_paths,
                               file_metadata_dict, stream_id,
-                              session_data.get("ai_provider", "anthropic"))
+                              session_data.get("ai_provider", "bifrost"))
 
     # Execute background tasks (they run after response is sent)
     import asyncio
@@ -724,7 +724,7 @@ async def upload_exams(
     file_paths,
     file_metadata_dict,
     stream_id,
-    session_data.get("ai_provider", "anthropic")
+    session_data.get("ai_provider", "bifrost")
   )
 
   return {
@@ -960,7 +960,7 @@ async def prepare_alignment(
       split_points,
       session_data.get("skip_first_region", True),
       session_data.get("last_page_blank", False),
-      session_data.get("ai_provider", "anthropic")
+      session_data.get("ai_provider", "bifrost")
     )
 
     session.status = SessionStatus.PREPROCESSING
@@ -1262,7 +1262,7 @@ async def process_exam_names(
   file_paths: List[Path],
   file_metadata: Dict[Path, Dict],
   stream_id: str,
-  ai_provider: str = "anthropic"
+  ai_provider: str = "bifrost"
 ):
   """
     Background task to extract name images and optional AI names (no splitting).
@@ -1532,7 +1532,7 @@ async def process_exam_splits(
   manual_split_points: Optional[Dict[int, List[int]]] = None,
   skip_first_region: bool = True,
   last_page_blank: bool = False,
-  ai_provider: str = "anthropic"
+  ai_provider: str = "bifrost"
 ):
   """
     Background task to split exams into problems after name matching.

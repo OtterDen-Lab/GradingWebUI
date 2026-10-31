@@ -52,7 +52,7 @@ class ExamProcessor:
   def __init__(
       self,
       name_rect: Optional[dict] = None,
-      ai_provider: str = "anthropic",
+      ai_provider: str = "bifrost",
       qr_prescan_dpi_steps: Optional[List[int]] = None,
       handwriting_analysis_enabled: bool = False,
       handwriting_user_id: Optional[int] = None
@@ -63,7 +63,7 @@ class ExamProcessor:
         Args:
             name_rect: Rectangle coordinates for name detection
                       {x, y, width, height} in pixels
-            ai_provider: AI provider to use ("anthropic" or "openai")
+            ai_provider: AI provider to use ("bifrost", "anthropic", or "openai")
         """
     self.name_rect = name_rect or {
       "x": 350,
@@ -98,13 +98,16 @@ class ExamProcessor:
       self.qr_prescan_dpi_steps = normalized_steps
 
     self.ai_provider = ai_provider.lower()
-    if self.ai_provider == "anthropic":
+    if self.ai_provider == "bifrost":
+      self.ai_helper_class = ai_helper.AI_Helper__Bifrost
+    elif self.ai_provider == "anthropic":
       self.ai_helper_class = ai_helper.AI_Helper__Anthropic
     elif self.ai_provider == "openai":
       self.ai_helper_class = ai_helper.AI_Helper__OpenAI
     else:
-      log.warning("Unknown AI provider '%s', defaulting to Anthropic", ai_provider)
-      self.ai_helper_class = ai_helper.AI_Helper__Anthropic
+      log.warning("Unknown AI provider '%s', defaulting to Bifrost", ai_provider)
+      self.ai_provider = "bifrost"
+      self.ai_helper_class = ai_helper.AI_Helper__Bifrost
     self.name_model = resolve_model(None, self.ai_provider, "small")
 
   def _analyze_handwriting_crop(self, image_base64: str) -> Optional[dict]:
@@ -659,17 +662,11 @@ class ExamProcessor:
         query += "\n\nPossible names (use as guide):\n - " + "\n - ".join(
           sorted(student_names))
 
-      if self.ai_helper_class is ai_helper.AI_Helper__Anthropic:
-        response, _ = self.ai_helper_class().query_ai(
-          query,
-          attachments=[("png", name_image_base64)],
-          candidate_models=[self.name_model.model_id]
-        )
-      else:
-        response, _ = self.ai_helper_class().query_ai(
-          query,
-          attachments=[("png", name_image_base64)]
-        )
+      response, _ = self.ai_helper_class().query_ai(
+        query,
+        attachments=[("png", name_image_base64)],
+        candidate_models=[self.name_model.model_id]
+      )
       return response.strip(), name_image_base64
     except Exception as e:
       log.warning(

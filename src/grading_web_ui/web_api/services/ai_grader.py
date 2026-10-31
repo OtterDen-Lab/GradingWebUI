@@ -7,7 +7,7 @@ import base64
 import io
 import time
 from typing import Dict, List, Optional, Tuple
-from grading_web_ui.ai_helper import AI_Helper__Anthropic
+from grading_web_ui.ai_helper import AI_Helper__Bifrost
 from PIL import Image
 
 from ..repositories import (
@@ -27,8 +27,8 @@ class AIGraderService:
   """Handles AI-assisted autograding of exam problems"""
 
   def __init__(self, user_id: Optional[int] = None):
-    self.ai_helper = AI_Helper__Anthropic()
-    self.model_selection = resolve_model(user_id, "anthropic", "large")
+    self.ai_helper = AI_Helper__Bifrost()
+    self.model_selection = resolve_model(user_id, "bifrost", "large")
     self.problem_service = ProblemService()
     self._session_yaml_cache: Dict[int, Optional[str]] = {}
 

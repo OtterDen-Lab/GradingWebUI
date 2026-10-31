@@ -40,7 +40,7 @@ class ModelSelection:
 
 
 def _normalise_provider(provider: str) -> str:
-  value = (provider or "anthropic").strip().lower()
+  value = (provider or "bifrost").strip().lower()
   if value not in ai_helper.MODEL_CONFIG:
     raise ValueError(f"Unsupported AI provider: {provider}")
   return value
@@ -53,7 +53,7 @@ def _normalise_tier(tier: str) -> str:
   return value
 
 
-def resolve_model(user_id: Optional[int], provider: str = "anthropic",
+def resolve_model(user_id: Optional[int], provider: str = "bifrost",
                   tier: str = "medium", explicit_model: Optional[str] = None) -> ModelSelection:
   """Resolve a model at request time; no grading-session state is consulted."""
   provider = _normalise_provider(provider)
@@ -82,7 +82,7 @@ def resolve_model(user_id: Optional[int], provider: str = "anthropic",
   return ModelSelection(provider, ai_helper.get_model_for_tier(provider, tier), tier, "built-in")
 
 
-def get_effective_settings(user_id: int, provider: str = "anthropic") -> dict:
+def get_effective_settings(user_id: int, provider: str = "bifrost") -> dict:
   provider = _normalise_provider(provider)
   return {
     tier: vars(resolve_model(user_id, provider, tier))
@@ -201,8 +201,10 @@ def _validate_models(models: dict) -> None:
 
 
 def list_provider_models(provider: str) -> list[dict]:
-  """Return model IDs from a provider. More providers can implement this registry hook."""
+  """Return the model catalog exposed by a configured provider."""
   provider = _normalise_provider(provider)
+  if provider == "bifrost":
+    return ai_helper.AI_Helper__Bifrost().list_models()
   if provider != "anthropic":
     return []
   client = ai_helper.AI_Helper__Anthropic()._client

@@ -23,19 +23,24 @@ async function loadAIModelSettings({ refreshOllama = true } = {}) {
     let modelOptions = [];
     // Model discovery is intentionally live rather than checked into the UI;
     // a provider deprecation therefore needs no deploy to update this list.
-    const modelsResponse = await fetch(`${API_BASE}/ai-settings/models/anthropic`, {credentials: 'include'});
+    const modelsResponse = await fetch(`${API_BASE}/ai-settings/models/bifrost`, {credentials: 'include'});
     if (modelsResponse.ok) modelOptions = (await modelsResponse.json()).models;
     const form = document.getElementById('ai-settings-form');
     form.innerHTML = renderHandwritingDefaultSettings() +
-      `<datalist id="anthropic-model-options">${modelOptions.map(model =>
-      `<option value="${escapeAI(model.id)}">${escapeAI(model.display_name)}</option>`).join('')}</datalist>` +
       ['small', 'medium', 'large'].map(tier => {
       const setting = aiModelSettings.settings[tier];
       const personal = setting.source === 'user' ? setting.model_id : '';
+      const options = [...modelOptions];
+      if (personal && !options.some(model => model.id === personal)) {
+        options.unshift({id: personal, display_name: `${personal} (currently selected)`});
+      }
       return `<label style="display:block; margin:12px 0; max-width:620px;">
         <strong>${tier[0].toUpperCase() + tier.slice(1)}</strong>
         <small style="display:block;color:var(--gray-700)">Effective: ${escapeAI(setting.model_id)} (${setting.source})</small>
-        <input data-ai-tier="${tier}" list="anthropic-model-options" value="${escapeAI(personal)}" placeholder="Use system default" style="width:100%; padding:8px; box-sizing:border-box;">
+        <select data-ai-tier="${tier}" style="width:100%; padding:8px; box-sizing:border-box;">
+          <option value="">Use system default</option>
+          ${options.map(model => `<option value="${escapeAI(model.id)}"${model.id === personal ? ' selected' : ''}>${escapeAI(model.display_name)}</option>`).join('')}
+        </select>
       </label>`;
     }).join('') + renderTranscriptionInstructions();
     document.getElementById('handwriting-default-target').value = aiModelSettings.handwriting_default.target;
@@ -45,7 +50,7 @@ async function loadAIModelSettings({ refreshOllama = true } = {}) {
     document.getElementById('save-system-transcription-instructions').onclick = () => saveTranscriptionInstructions('system');
     if (currentUser?.role === 'instructor') {
       const refreshes = [loadHandwritingLatency()];
-      // Saving an Anthropic or transcription setting must not reset the
+      // Saving a Bifrost or transcription setting must not reset the
       // Ollama selector or make an unnecessary request to a server.
       if (refreshOllama) refreshes.push(loadOllamaSettings());
       await Promise.all(refreshes);
@@ -225,7 +230,7 @@ async function saveAIModelSettings(scope) {
   });
   const response = await fetch(`${API_BASE}/ai-settings/${scope}`, {
     method: 'PUT', credentials: 'include', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({provider: 'anthropic', models})
+    body: JSON.stringify({provider: 'bifrost', models})
   });
   if (!response.ok) {
     const error = await response.json();

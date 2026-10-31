@@ -373,10 +373,10 @@ function closeNewSessionModal() {
   sessionNameDirty = false;
 }
 
-// Name extraction currently uses the configured Anthropic provider. This keeps
+// Name extraction currently uses the configured Bifrost provider. This keeps
 // the legacy upload payload stable while model choice is server-side.
 function getAIProvider() {
-    return 'anthropic';
+    return 'bifrost';
 }
 
 function getSessionQrScanSettings() {

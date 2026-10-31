@@ -1425,7 +1425,7 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
     # dynamically from persistent settings instead of the grading session.
       tier = {"default": "medium", "sonnet": "medium", "opus": "large"}.get(
         selected_model, selected_model)
-      provider = "anthropic"
+      provider = "bifrost"
       explicit_model = None
       if ":" in selected_model:
         provider, explicit_model = selected_model.split(":", 1)
@@ -1435,13 +1435,14 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
                                   explicit_model)
       except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-      if selection.provider not in ("anthropic", "openai"):
+      if selection.provider not in ("bifrost", "anthropic", "openai"):
         raise HTTPException(status_code=400,
                             detail="Handwriting support is not yet available for this provider")
-      ai = (ai_helper.AI_Helper__Anthropic() if selection.provider == "anthropic"
-            else ai_helper.AI_Helper__OpenAI())
+      ai = ({"bifrost": ai_helper.AI_Helper__Bifrost,
+             "anthropic": ai_helper.AI_Helper__Anthropic,
+             "openai": ai_helper.AI_Helper__OpenAI}[selection.provider]())
       timing_start = perf_counter()
-      timing_provider = "anthropic"
+      timing_provider = selection.provider
       timing_model = selection.model_id
       query_options = {
         "attachments": [("png", image_base64)],
@@ -1450,6 +1451,8 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
       }
       if selection.provider == "openai":
         query_options["return_raw"] = True
+      if selection.provider == "bifrost":
+        query_options["json_output"] = True
       response, usage = ai.query_ai(query, **query_options)
       transcription = response
       timing_model = usage.get("model", timing_model)
@@ -1483,6 +1486,8 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
         }
         if selection.provider == "openai":
           followup_options["return_raw"] = True
+        if selection.provider == "bifrost" and json_output:
+          followup_options["json_output"] = True
         response_text, _ = ai.query_ai(prompt, **followup_options)
       return response_text.strip()
 
