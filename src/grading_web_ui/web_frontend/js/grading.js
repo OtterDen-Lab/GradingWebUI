@@ -4674,21 +4674,22 @@ let completedHandwritingBatch = null;
 async function getTranscriptionModelLabel(selection) {
     try {
         if (!transcriptionModelOptions) {
-            const response = await fetch(`${API_BASE}/ai-settings`, {credentials: 'include'});
-            if (response.ok) transcriptionModelOptions = await response.json();
+            const [settingsResponse, modelsResponse] = await Promise.all([
+                fetch(`${API_BASE}/ai-settings`, {credentials: 'include'}),
+                fetch(`${API_BASE}/ai-settings/models/bifrost`, {credentials: 'include'}),
+            ]);
+            if (settingsResponse.ok) {
+                transcriptionModelOptions = await settingsResponse.json();
+                transcriptionModelOptions.models = modelsResponse.ok
+                    ? (await modelsResponse.json()).models : [];
+            }
         }
-        const settings = transcriptionModelOptions?.settings;
-        const defaultTarget = transcriptionModelOptions?.handwriting_default?.target || 'medium';
-        const isDefault = selection === 'default';
-        if (isDefault) selection = defaultTarget;
-        if (selection === 'ollama') {
-            const ollama = transcriptionModelOptions?.ollama_active;
-            const label = ollama ? `Ollama: ${ollama.model_id} on ${ollama.server_name}` : 'Ollama (no active model configured)';
-            return isDefault ? `default → ${label}` : label;
+        const configured = transcriptionModelOptions?.default_model;
+        if (selection === 'default') {
+            return configured?.model_id
+                ? `default → ${configured.model_id}` : 'configured default model';
         }
-        const setting = settings?.[selection];
-        const label = setting ? `Anthropic ${selection}: ${setting.model_id} (${setting.source} default)` : `configured ${selection} model`;
-        return isDefault ? `default → ${label}` : label;
+        return `Bifrost: ${selection.replace(/^bifrost:/, '')}`;
     } catch (_error) {
         return 'configured model';
     }
@@ -4776,32 +4777,22 @@ async function fetchTranscription(problemId, model = 'default') {
 function displayTranscription(transcription) {
     transcriptionText.textContent = transcription.text;
     transcriptionText.style.color = '';
-    modelUsed.textContent = `Model used: ${transcription.model}`;
+    renderTranscriptionModelPicker();
+    document.getElementById('model-used').textContent = `Model used: ${transcription.model}`;
+}
 
-    // Show model selection buttons
+async function renderTranscriptionModelPicker() {
     transcriptionActions.style.display = 'block';
-    transcriptionActions.innerHTML = `
-        <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px;">
-            <button id="retry-ollama-btn" class="btn-secondary" style="min-width: 0;">
-                ollama
-            </button>
-            <button id="retry-small-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                small
-            </button>
-            <button id="retry-medium-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                medium
-            </button>
-            <button id="retry-large-btn" class="btn-secondary" style="flex: 1; min-width: 120px;">
-                large
-            </button>
-        </div>
-    `;
-
-    // Add event listeners for the new buttons
-    document.getElementById('retry-small-btn').addEventListener('click', () => retryWithModel('small'));
-    document.getElementById('retry-medium-btn').addEventListener('click', () => retryWithModel('medium'));
-    document.getElementById('retry-large-btn').addEventListener('click', () => retryWithModel('large'));
-    document.getElementById('retry-ollama-btn').addEventListener('click', () => retryWithModel('ollama'));
+    transcriptionActions.innerHTML = '<small>Try another Bifrost model: </small><select id="retry-bifrost-model"><option value="default">Configured default</option></select> <button id="retry-bifrost-btn" class="btn btn-secondary">Transcribe</button><div id="model-used" style="margin-top:10px;font-size:13px;color:var(--gray-700);font-style:italic"></div>';
+    const select = document.getElementById('retry-bifrost-model');
+    await getTranscriptionModelLabel('default');
+    for (const model of transcriptionModelOptions?.models || []) {
+        const option = document.createElement('option');
+        option.value = `bifrost:${model.id}`;
+        option.textContent = model.display_name || model.id;
+        select.append(option);
+    }
+    document.getElementById('retry-bifrost-btn').onclick = () => retryWithModel(select.value);
 }
 
 // Function to retry transcription with a specific model
@@ -4982,30 +4973,7 @@ decipherBtn.addEventListener('click', async () => {
         console.error('Failed to decipher handwriting:', error);
         transcriptionText.innerHTML = `<div style="color: var(--danger-color);">Failed to transcribe handwriting. ${error.message}</div>`;
 
-        // Show model selection buttons
-        transcriptionActions.style.display = 'block';
-        transcriptionActions.innerHTML = `
-            <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px;">
-                <button id="retry-ollama-btn" class="btn btn-secondary" style="min-width: 0;">
-                    ollama
-                </button>
-                <button id="retry-small-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
-                    small
-                </button>
-                <button id="retry-medium-btn" class="btn btn-secondary" style="flex: 1; min-width: 120px;">
-                    medium
-                </button>
-                <button id="retry-large-btn" class="btn btn-primary" style="flex: 1; min-width: 120px;">
-                    large
-                </button>
-            </div>
-        `;
-
-        // Add event listeners for the buttons
-        document.getElementById('retry-small-btn').addEventListener('click', () => retryWithModel('small'));
-        document.getElementById('retry-medium-btn').addEventListener('click', () => retryWithModel('medium'));
-        document.getElementById('retry-large-btn').addEventListener('click', () => retryWithModel('large'));
-        document.getElementById('retry-ollama-btn').addEventListener('click', () => retryWithModel('ollama'));
+        renderTranscriptionModelPicker();
     }
 });
 
@@ -5131,11 +5099,14 @@ async function openHandwritingBatchDialog() {
     handwritingBatchCancel.textContent = 'Cancel';
     handwritingBatchRetryFailed.style.display = 'none';
     handwritingBatchStart.style.display = '';
-    handwritingBatchModel.innerHTML = '<option value="default">Loading configured default…</option>';
-    const choices = ['default', 'ollama', 'small', 'medium', 'large'];
-    const labels = await Promise.all(choices.map(getTranscriptionModelLabel));
-    handwritingBatchModel.innerHTML = choices.map((choice, index) =>
-        `<option value="${choice}">${escapeAI(labels[index])}</option>`).join('');
+    handwritingBatchModel.innerHTML = '<option value="default">Configured default</option>';
+    await getTranscriptionModelLabel('default');
+    for (const model of transcriptionModelOptions?.models || []) {
+        const option = document.createElement('option');
+        option.value = `bifrost:${model.id}`;
+        option.textContent = model.display_name || model.id;
+        handwritingBatchModel.append(option);
+    }
 }
 
 function closeHandwritingBatchDialog() {

@@ -7,6 +7,7 @@ This service handles:
 - Page shuffling and redaction
 """
 import pprint
+from types import SimpleNamespace
 from typing import List, Tuple, Optional, Dict
 from pathlib import Path
 import logging
@@ -30,9 +31,8 @@ from grading_web_ui import ai_helper
 # Import QR scanner service
 from .qr_scanner import QRScanner, qr_matches_problem_number
 from .problem_service import ProblemService
-from .model_settings import (resolve_model, get_handwriting_default,
+from .model_settings import (get_default_model,
                              get_transcription_additional_instructions)
-from . import ollama_settings
 
 # Import DTOs
 from ..dtos import SubmissionDTO, ProblemDTO
@@ -63,7 +63,8 @@ class ExamProcessor:
         Args:
             name_rect: Rectangle coordinates for name detection
                       {x, y, width, height} in pixels
-            ai_provider: AI provider to use ("bifrost", "anthropic", or "openai")
+            ai_provider: Retained for upload-payload compatibility; scanning
+              always uses the configured Bifrost default model.
         """
     self.name_rect = name_rect or {
       "x": 350,
@@ -97,29 +98,13 @@ class ExamProcessor:
         normalized_steps.append(dpi)
       self.qr_prescan_dpi_steps = normalized_steps
 
-    self.ai_provider = ai_provider.lower()
-    if self.ai_provider == "bifrost":
-      self.ai_helper_class = ai_helper.AI_Helper__Bifrost
-    elif self.ai_provider == "anthropic":
-      self.ai_helper_class = ai_helper.AI_Helper__Anthropic
-    elif self.ai_provider == "openai":
-      self.ai_helper_class = ai_helper.AI_Helper__OpenAI
-    else:
-      log.warning("Unknown AI provider '%s', defaulting to Bifrost", ai_provider)
-      self.ai_provider = "bifrost"
-      self.ai_helper_class = ai_helper.AI_Helper__Bifrost
-    self.name_model = resolve_model(None, self.ai_provider, "small")
+    self.ai_provider = "bifrost"
+    self.ai_helper_class = ai_helper.AI_Helper__Bifrost
+    self.name_model = SimpleNamespace(**get_default_model(None))
 
   def _analyze_handwriting_crop(self, image_base64: str) -> Optional[dict]:
-    """Run the load-time Ollama request on an already-redacted response crop."""
+    """Run the load-time default Bifrost request on an already-redacted crop."""
     if not self.handwriting_analysis_enabled or self.handwriting_user_id is None:
-      return None
-    if get_handwriting_default(self.handwriting_user_id)["target"] != "ollama":
-      log.warning("Load-time handwriting analysis currently requires Ollama")
-      return None
-    server = ollama_settings.get_active_server()
-    if not server:
-      log.warning("Skipping load-time handwriting analysis: no active Ollama server")
       return None
     prompt = (
       "Inspect only the student's handwritten response, ignoring printed exam text, "
@@ -131,10 +116,11 @@ class ExamProcessor:
     if extra:
       prompt += f"\n\nAdditional transcription instructions:\n{extra}"
     try:
-      response, _ = ai_helper.AI_Helper__Ollama(
-        server["base_url"], server["active_model"]).query_ai(
+      selection = get_default_model(self.handwriting_user_id)
+      response, usage = ai_helper.AI_Helper__Bifrost().query_ai(
           prompt, attachments=[("png", image_base64)],
-          max_response_tokens=4096, json_output=True)
+          candidate_models=[selection["model_id"]], max_response_tokens=4096,
+          json_output=True)
       payload = json.loads(response)
       if not isinstance(payload, dict) or not isinstance(payload.get("is_blank"), bool):
         raise ValueError("invalid handwriting-analysis JSON")
@@ -142,7 +128,7 @@ class ExamProcessor:
       if not isinstance(text, str) or (not text.strip() and not payload["is_blank"]):
         raise ValueError("invalid handwriting transcription")
       relevant = payload.get("is_relevant")
-      return {"transcription": text.strip() or "[blank]", "model": f"Ollama ({server['active_model']} on {server['name']})", "is_blank": payload["is_blank"], "is_relevant": relevant if isinstance(relevant, bool) else None}
+      return {"transcription": text.strip() or "[blank]", "model": f"Bifrost ({usage['model']})", "is_blank": payload["is_blank"], "is_relevant": relevant if isinstance(relevant, bool) else None}
     except Exception as error:
       log.warning("Load-time handwriting analysis failed: %s", error)
       return None

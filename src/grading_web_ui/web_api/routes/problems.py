@@ -33,11 +33,9 @@ from ..services.qr_scanner import qr_matches_problem_number
 from ..auth import require_session_access, require_instructor, get_current_user
 from ..services.model_settings import (
   BUILT_IN_TRANSCRIPTION_INSTRUCTIONS,
-  get_handwriting_default,
   get_transcription_additional_instructions,
-  resolve_model,
+  get_default_model,
 )
-from ..services import ollama_settings
 from ..services import model_latency
 
 from grading_web_ui import ai_helper
@@ -1390,73 +1388,25 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
   raw_transcription_response = None
   raw_relevance_response = None
   try:
-    selected_model = (model or "default").strip().lower()
-    requested_ollama_model = None
-    if selected_model.startswith("ollama:"):
-      requested_ollama_model = model.split(":", 1)[1].strip()
-      if not requested_ollama_model:
-        raise HTTPException(status_code=400, detail="Ollama model cannot be empty")
-      selected_model = "ollama"
-    if selected_model == "default":
-      selected_model = get_handwriting_default(user_id)["target"]
-
-    if selected_model == "ollama":
-      server = ollama_settings.get_active_server()
-      if not server:
-        raise HTTPException(
-          status_code=400,
-          detail="No active Ollama model is configured in Settings")
-      ollama_model = requested_ollama_model or server["active_model"]
-      ai = ai_helper.AI_Helper__Ollama(server["base_url"], ollama_model)
-      timing_start = perf_counter()
-      timing_provider = "ollama"
-      timing_model = ollama_model
-      timing_server = server["name"]
-      transcription, usage = ai.query_ai(
-        query, attachments=[("png", image_base64)],
-        max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS,
-        json_output=True)
-      log.debug("Ollama handwriting transcription response for problem %s: %r",
-                problem_id, transcription)
-      model_name = f"Ollama ({usage.get('model', ollama_model)} on {server['name']})"
+    requested_model = (model or "default").strip()
+    if requested_model == "default":
+      selection = get_default_model(user_id)
     else:
-
-    # Compatibility aliases preserve old links while all choices now resolve
-    # dynamically from persistent settings instead of the grading session.
-      tier = {"default": "medium", "sonnet": "medium", "opus": "large"}.get(
-        selected_model, selected_model)
-      provider = "bifrost"
-      explicit_model = None
-      if ":" in selected_model:
-        provider, explicit_model = selected_model.split(":", 1)
-        tier = "medium"
-      try:
-        selection = resolve_model(user_id, provider, tier,
-                                  explicit_model)
-      except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-      if selection.provider not in ("bifrost", "anthropic", "openai"):
-        raise HTTPException(status_code=400,
-                            detail="Handwriting support is not yet available for this provider")
-      ai = ({"bifrost": ai_helper.AI_Helper__Bifrost,
-             "anthropic": ai_helper.AI_Helper__Anthropic,
-             "openai": ai_helper.AI_Helper__OpenAI}[selection.provider]())
-      timing_start = perf_counter()
-      timing_provider = selection.provider
-      timing_model = selection.model_id
-      query_options = {
-        "attachments": [("png", image_base64)],
-        "candidate_models": [selection.model_id],
-        "max_response_tokens": _HANDWRITING_MAX_RESPONSE_TOKENS,
-      }
-      if selection.provider == "openai":
-        query_options["return_raw"] = True
-      if selection.provider == "bifrost":
-        query_options["json_output"] = True
-      response, usage = ai.query_ai(query, **query_options)
-      transcription = response
-      timing_model = usage.get("model", timing_model)
-      model_name = f"{selection.provider.title()} ({usage.get('model', selection.model_id)})"
+      if requested_model.startswith("bifrost:"):
+        requested_model = requested_model.split(":", 1)[1].strip()
+      if not requested_model:
+        raise HTTPException(status_code=400, detail="Bifrost model cannot be empty")
+      selection = {"model_id": requested_model, "source": "request"}
+    ai = ai_helper.AI_Helper__Bifrost()
+    timing_start = perf_counter()
+    timing_provider = "bifrost"
+    timing_model = selection["model_id"]
+    transcription, usage = ai.query_ai(
+      query, attachments=[("png", image_base64)],
+      candidate_models=[selection["model_id"]],
+      max_response_tokens=_HANDWRITING_MAX_RESPONSE_TOKENS, json_output=True)
+    timing_model = usage.get("model", timing_model)
+    model_name = f"Bifrost ({usage.get('model', selection['model_id'])})"
 
     raw_transcription_response = transcription
 
@@ -1472,23 +1422,9 @@ def _decipher_handwriting(problem_id: int, model: str, user_id: int,
     # includes printed question material, which can distort semantic judgment.
     def query_followup(prompt: str, attachments: list[tuple[str, str]],
                        max_tokens: int, json_output: bool = False) -> str:
-      if selected_model == "ollama":
-        response_text, _ = ai.query_ai(
-          prompt, attachments=attachments, max_response_tokens=max_tokens,
-          json_output=json_output)
-        log.debug("Ollama handwriting follow-up response for problem %s: %r",
-                  problem_id, response_text)
-      else:
-        followup_options = {
-          "attachments": attachments,
-          "max_response_tokens": max_tokens,
-          "candidate_models": [selection.model_id],
-        }
-        if selection.provider == "openai":
-          followup_options["return_raw"] = True
-        if selection.provider == "bifrost" and json_output:
-          followup_options["json_output"] = True
-        response_text, _ = ai.query_ai(prompt, **followup_options)
+      response_text, _ = ai.query_ai(
+        prompt, attachments=attachments, max_response_tokens=max_tokens,
+        candidate_models=[selection["model_id"]], json_output=json_output)
       return response_text.strip()
 
     is_relevant = None

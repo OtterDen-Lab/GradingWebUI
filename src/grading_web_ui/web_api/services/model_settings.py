@@ -7,6 +7,7 @@ from ... import ai_helper
 from ..database import get_db_connection
 
 MODEL_TIERS = ("small", "medium", "large")
+DEFAULT_MODEL_TIER = "medium"  # Reuses the existing migration-safe column.
 HANDWRITING_TARGETS = ("ollama", *MODEL_TIERS)
 MAX_TRANSCRIPTION_ADDITIONAL_INSTRUCTIONS = 2000
 BUILT_IN_TRANSCRIPTION_INSTRUCTIONS = (
@@ -88,6 +89,33 @@ def get_effective_settings(user_id: int, provider: str = "bifrost") -> dict:
     tier: vars(resolve_model(user_id, provider, tier))
     for tier in MODEL_TIERS
   }
+
+
+def get_default_model(user_id: Optional[int]) -> dict:
+  """Return the one Bifrost model used by normal application workflows."""
+  return vars(resolve_model(user_id, "bifrost", DEFAULT_MODEL_TIER))
+
+
+def set_default_model(user_id: int, model_id: Optional[str], system: bool = False) -> None:
+  """Save one model choice, retaining the existing tiered-table schema."""
+  value = (model_id or "").strip()
+  if system and not value:
+    raise ValueError("A system default model is required")
+  with get_db_connection() as conn:
+    if not value:
+      conn.execute("""DELETE FROM user_model_overrides
+        WHERE user_id = ? AND provider = 'bifrost' AND tier = ?""",
+                   (user_id, DEFAULT_MODEL_TIER))
+    elif system:
+      conn.execute("""INSERT INTO system_model_defaults (provider, tier, model_id, updated_by)
+        VALUES ('bifrost', ?, ?, ?) ON CONFLICT(provider, tier) DO UPDATE SET
+        model_id = excluded.model_id, updated_by = excluded.updated_by,
+        updated_at = CURRENT_TIMESTAMP""", (DEFAULT_MODEL_TIER, value, user_id))
+    else:
+      conn.execute("""INSERT INTO user_model_overrides (user_id, provider, tier, model_id)
+        VALUES (?, 'bifrost', ?, ?) ON CONFLICT(user_id, provider, tier) DO UPDATE SET
+        model_id = excluded.model_id, updated_at = CURRENT_TIMESTAMP""",
+                   (user_id, DEFAULT_MODEL_TIER, value))
 
 
 def get_handwriting_default(user_id: int) -> dict:

@@ -6,6 +6,7 @@ import json
 import base64
 import io
 import time
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 from grading_web_ui.ai_helper import AI_Helper__Bifrost
 from PIL import Image
@@ -18,7 +19,7 @@ from ..repositories import (
 )
 from .problem_service import ProblemService
 from .quiz_regeneration import regenerate_from_encrypted_compat
-from .model_settings import resolve_model
+from .model_settings import get_default_model
 
 log = logging.getLogger(__name__)
 
@@ -28,12 +29,12 @@ class AIGraderService:
 
   def __init__(self, user_id: Optional[int] = None):
     self.ai_helper = AI_Helper__Bifrost()
-    self.model_selection = resolve_model(user_id, "bifrost", "large")
+    self.model_selection = SimpleNamespace(**get_default_model(user_id))
     self.problem_service = ProblemService()
     self._session_yaml_cache: Dict[int, Optional[str]] = {}
 
   def _query(self, message, attachments, max_response_tokens=1000, **kwargs):
-    """Use the caller's current large-model selection for every AI operation."""
+    """Use the caller's current default-model selection for every AI operation."""
     return self.ai_helper.query_ai(
       message, attachments, max_response_tokens=max_response_tokens,
       candidate_models=[self.model_selection.model_id], **kwargs)

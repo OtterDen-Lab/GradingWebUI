@@ -10,9 +10,7 @@ from pydantic import BaseModel, Field
 from ..auth import get_current_user
 from ..database import get_db_connection
 from ..repositories import ProblemRepository, SubmissionRepository
-from ..services import ollama_settings
 from ..services import model_settings
-from grading_web_ui import ai_helper
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -43,27 +41,6 @@ def _get_run(run_id: str) -> dict:
   return dict(row)
 
 
-def _warm_ollama_model(model_id: str, problem_id: int) -> None:
-  """Load a vision model before timing the first real response analysis."""
-  from .problems import get_problem_image_data
-
-  server = ollama_settings.get_active_server()
-  if not server:
-    raise RuntimeError("No active Ollama model is configured in Settings")
-  problem = ProblemRepository().get_by_id(problem_id)
-  if not problem:
-    raise RuntimeError(f"Warm-up problem {problem_id} was not found")
-  image_data = get_problem_image_data(problem, SubmissionRepository())
-  ai = ai_helper.AI_Helper__Ollama(server["base_url"], model_id)
-  # Include a representative crop: text-only warming can leave the vision
-  # encoder/processor cold, which is precisely what this benchmark avoids.
-  ai.query_ai(
-    "Warm-up request. Reply with ready.",
-    attachments=[("png", image_data)],
-    max_response_tokens=1,
-  )
-
-
 def _run_analysis(run_id: str, user_id: int) -> None:
   """Use the production analysis path, but never modify cached grading data."""
   run = _get_run(run_id)
@@ -77,19 +54,8 @@ def _run_analysis(run_id: str, user_id: int) -> None:
   # crop, prompts, parser, and relevance classifier exactly.
   from .problems import _decipher_handwriting
 
-  # Keep one model resident for its complete response set. Alternating models
-  # for each submission defeats Ollama's model cache and makes large-model
-  # comparisons disproportionately slow.
   for model_id in models:
-    target = model_id if ":" in model_id else f"ollama:{model_id}"
-    if target.startswith("ollama:"):
-      try:
-        _warm_ollama_model(target.split(":", 1)[1], problem_ids[0])
-        log.info("Analysis run %s warmed Ollama model %s", run_id, target)
-      except Exception as error:
-        # Preserve the actual comparison when a provider does not support this
-        # small warm-up request; its first measured response may simply be cold.
-        log.warning("Analysis run %s could not warm %s: %s", run_id, target, error)
+    target = model_id if ":" in model_id else f"bifrost:{model_id}"
     for problem_id in problem_ids:
       # A provider request already in flight cannot be cancelled safely, but a
       # cancellation takes effect before the next response/model pair.
@@ -159,17 +125,6 @@ async def list_questions(session_id: int,
 async def list_analysis_models(current_user: dict = Depends(get_current_user)):
   """List runnable local models and configured external-provider defaults."""
   choices = []
-  server = ollama_settings.get_active_server()
-  if server:
-    try:
-      for model in ollama_settings.list_models(server["id"]):
-        choices.append({
-          "id": f"ollama:{model['id']}", "provider": "ollama",
-          "label": model["display_name"],
-        })
-    except RuntimeError as error:
-      log.warning("Could not list Ollama analysis models: %s", error)
-
   # Bifrost is the operator-curated catalog, so expose all of its available
   # routes rather than maintaining another application-owned model list.
   try:
@@ -181,18 +136,6 @@ async def list_analysis_models(current_user: dict = Depends(get_current_user)):
   except Exception as error:
     log.warning("Could not list Bifrost analysis models: %s", error)
 
-  # Keep legacy provider configurations visible during the staged migration.
-  for provider in ("anthropic", "openai"):
-    seen = set()
-    for tier, selection in model_settings.get_effective_settings(
-        current_user["user_id"], provider).items():
-      if selection["model_id"] in seen:
-        continue
-      seen.add(selection["model_id"])
-      choices.append({
-        "id": f"{provider}:{selection['model_id']}", "provider": provider,
-        "label": f"{selection['model_id']} ({tier})",
-      })
   return {"models": choices}
 
 
@@ -203,8 +146,7 @@ async def create_run(request: AnalysisRunCreate, background_tasks: BackgroundTas
   models = list(dict.fromkeys(model.strip() for model in request.models if model.strip()))
   if not models:
     raise HTTPException(status_code=400, detail="Select at least one model")
-  unsupported = [model for model in models if not model.startswith(
-    ("ollama:", "bifrost:", "anthropic:", "openai:"))]
+  unsupported = [model for model in models if not model.startswith("bifrost:")]
   if unsupported:
     raise HTTPException(status_code=400,
                         detail="Model targets must include a provider prefix")
