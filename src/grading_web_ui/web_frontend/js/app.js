@@ -373,12 +373,6 @@ function closeNewSessionModal() {
   sessionNameDirty = false;
 }
 
-// Name extraction currently uses the configured Bifrost provider. This keeps
-// the legacy upload payload stable while model choice is server-side.
-function getAIProvider() {
-    return 'bifrost';
-}
-
 function getSessionQrScanSettings() {
     const enabledInput = document.getElementById('session-qr-scan-enabled');
     const maxDpiInput = document.getElementById('session-qr-scan-max-dpi');
@@ -1723,8 +1717,7 @@ async function submitNameBoxSelection() {
             x: selectedRect.x / canvas.width,
             y: selectedRect.y / canvas.height,
             width: selectedRect.width / canvas.width,
-            height: selectedRect.height / canvas.height,
-            ai_provider: getAIProvider()
+            height: selectedRect.height / canvas.height
         };
 
         const response = await fetch(`${API_BASE}/uploads/${currentSession.id}/submit-name-box`, {
@@ -2416,9 +2409,6 @@ async function submitAlignment() {
             splitPointsInt[pageNum] = points.map(y => Math.round(y));
         }
 
-        // Get AI provider from localStorage
-        const aiProvider = getAIProvider();
-
         // Submit split points to backend
         const response = await fetch(`${API_BASE}/uploads/${currentSession.id}/submit-alignment`, {
             method: 'POST',
@@ -2426,8 +2416,7 @@ async function submitAlignment() {
             body: JSON.stringify({
                 split_points: splitPointsInt,
                 skip_first_region: skipFirstRegion,
-                last_page_blank: lastPageBlank,
-                ai_provider: aiProvider
+                last_page_blank: lastPageBlank
             })
         });
 

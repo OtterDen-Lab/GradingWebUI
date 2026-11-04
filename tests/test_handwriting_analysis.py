@@ -71,8 +71,8 @@ def test_batch_retries_a_failed_transcription_once(monkeypatch):
   monkeypatch.setattr(
     "grading_web_ui.web_api.routes.problems._decipher_handwriting", retry_once
   )
-  job_id = _create_handwriting_job(1, 2, [99], "ollama")
-  _batch_decipher_handwriting(job_id, [99], "ollama", 1, False)
+  job_id = _create_handwriting_job(1, 2, [99], "bifrost:vision")
+  _batch_decipher_handwriting(job_id, [99], "bifrost:vision", 1, False)
 
   with _handwriting_jobs_lock:
     job = _handwriting_jobs.pop(job_id)

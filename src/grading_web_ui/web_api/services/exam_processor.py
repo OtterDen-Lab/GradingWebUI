@@ -52,7 +52,6 @@ class ExamProcessor:
   def __init__(
       self,
       name_rect: Optional[dict] = None,
-      ai_provider: str = "bifrost",
       qr_prescan_dpi_steps: Optional[List[int]] = None,
       handwriting_analysis_enabled: bool = False,
       handwriting_user_id: Optional[int] = None
@@ -63,8 +62,6 @@ class ExamProcessor:
         Args:
             name_rect: Rectangle coordinates for name detection
                       {x, y, width, height} in pixels
-            ai_provider: Retained for upload-payload compatibility; scanning
-              always uses the configured Bifrost default model.
         """
     self.name_rect = name_rect or {
       "x": 350,
@@ -98,7 +95,6 @@ class ExamProcessor:
         normalized_steps.append(dpi)
       self.qr_prescan_dpi_steps = normalized_steps
 
-    self.ai_provider = "bifrost"
     self.ai_helper_class = ai_helper.AI_Helper__Bifrost
     self.name_model = SimpleNamespace(**get_default_model(None))
 

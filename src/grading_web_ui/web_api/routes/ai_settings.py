@@ -21,12 +21,10 @@ async def get_settings(current_user: dict = Depends(get_current_user)):
   }
 
 
-@router.get("/models/{provider}")
-async def get_models(provider: str, current_user: dict = Depends(get_current_user)):
+@router.get("/models")
+async def get_models(current_user: dict = Depends(get_current_user)):
   try:
-    return {"provider": provider, "models": model_settings.list_provider_models(provider)}
-  except ValueError as error:
-    raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"models": model_settings.list_models()}
   except Exception as error:
     raise HTTPException(status_code=502, detail=f"Could not retrieve provider models: {error}") from error
 

@@ -80,7 +80,6 @@ def test_bifrost_requires_a_selected_model(monkeypatch):
   monkeypatch.setenv("BIFROST_BASE_URL", "http://bifrost.test/v1")
   monkeypatch.setenv("BIFROST_API_KEY", "token")
   monkeypatch.delenv("BIFROST_DEFAULT_MODEL", raising=False)
-  monkeypatch.delenv("BIFROST_MODEL_MEDIUM", raising=False)
 
   try:
     AI_Helper__Bifrost().query_ai("hello", [])

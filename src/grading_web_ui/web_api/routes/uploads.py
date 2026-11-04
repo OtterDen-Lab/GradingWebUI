@@ -70,7 +70,6 @@ class SplitPointsSubmission(BaseModel):
   split_points: Dict[str, List[int]]
   skip_first_region: bool = True  # Default to skipping first region (header/title)
   last_page_blank: bool = False  # Default to not skipping last page
-  ai_provider: str = "bifrost"  # AI provider for name extraction
 
 
 class NameBoxSelectionSubmission(BaseModel):
@@ -79,7 +78,6 @@ class NameBoxSelectionSubmission(BaseModel):
   y: float
   width: float
   height: float
-  ai_provider: str = "bifrost"
 
 
 def _sanitize_name_rect(raw_rect: Optional[dict]) -> Optional[Dict[str, float]]:
@@ -597,8 +595,6 @@ async def upload_exams(
         "skip_first_region", True)
       session_data["last_page_blank"] = existing_data.get(
         "last_page_blank", False)
-      session_data["ai_provider"] = existing_data.get(
-        "ai_provider", "bifrost")
       session_data["composite_dimensions"] = existing_data.get(
         "composite_dimensions", {})
       log.info(
@@ -690,8 +686,7 @@ async def upload_exams(
     from fastapi import BackgroundTasks
     background_tasks = BackgroundTasks()
     background_tasks.add_task(process_exam_names, session_id, file_paths,
-                              file_metadata_dict, stream_id,
-                              session_data.get("ai_provider", "bifrost"))
+                              file_metadata_dict, stream_id)
 
     # Execute background tasks (they run after response is sent)
     import asyncio
@@ -723,8 +718,7 @@ async def upload_exams(
     session_id,
     file_paths,
     file_metadata_dict,
-    stream_id,
-    session_data.get("ai_provider", "bifrost")
+    stream_id
   )
 
   return {
@@ -865,8 +859,7 @@ async def submit_name_box_selection(
     session_id,
     file_paths,
     file_metadata,
-    stream_id,
-    submission.ai_provider
+    stream_id
   )
 
   return {
@@ -959,8 +952,7 @@ async def prepare_alignment(
       stream_id,
       split_points,
       session_data.get("skip_first_region", True),
-      session_data.get("last_page_blank", False),
-      session_data.get("ai_provider", "bifrost")
+      session_data.get("last_page_blank", False)
     )
 
     session.status = SessionStatus.PREPROCESSING
@@ -1219,7 +1211,6 @@ async def submit_alignment(
   session_data["split_points"] = manual_split_points
   session_data["skip_first_region"] = submission.skip_first_region
   session_data["last_page_blank"] = submission.last_page_blank
-  session_data["ai_provider"] = submission.ai_provider
 
   session_repo.update_metadata(session_id, session_data)
 
@@ -1239,8 +1230,7 @@ async def submit_alignment(
     stream_id,
     manual_split_points,  # Pass manual splits
     submission.skip_first_region,  # Pass skip_first_region flag
-    submission.last_page_blank,  # Pass last_page_blank flag
-    submission.ai_provider  # Pass AI provider selection
+    submission.last_page_blank  # Pass last_page_blank flag
   )
 
   # Update session status
@@ -1261,8 +1251,7 @@ async def process_exam_names(
   session_id: int,
   file_paths: List[Path],
   file_metadata: Dict[Path, Dict],
-  stream_id: str,
-  ai_provider: str = "bifrost"
+  stream_id: str
 ):
   """
     Background task to extract name images and optional AI names (no splitting).
@@ -1409,7 +1398,7 @@ async def process_exam_names(
         log.error(f"Failed to send SSE event: {e}")
 
     name_rect = _get_name_rect_from_session_data(session_data)
-    processor = ExamProcessor(name_rect=name_rect, ai_provider=ai_provider)
+    processor = ExamProcessor(name_rect=name_rect)
     submissions_to_create = []
     matched_count = 0
     unmatched_students = canvas_students.copy()
@@ -1531,8 +1520,7 @@ async def process_exam_splits(
   stream_id: str,
   manual_split_points: Optional[Dict[int, List[int]]] = None,
   skip_first_region: bool = True,
-  last_page_blank: bool = False,
-  ai_provider: str = "bifrost"
+  last_page_blank: bool = False
 ):
   """
     Background task to split exams into problems after name matching.
@@ -1684,7 +1672,6 @@ async def process_exam_splits(
         page_transforms_by_file[file_path] = transforms
     processor = ExamProcessor(
       name_rect=name_rect,
-      ai_provider=ai_provider,
       qr_prescan_dpi_steps=qr_prescan_dpi_steps,
       handwriting_analysis_enabled=_parse_bool_value(
         session_data.get(LLM_BLANK_DETECTION_ENABLED_KEY), default=False),

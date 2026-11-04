@@ -128,7 +128,7 @@ async def list_analysis_models(current_user: dict = Depends(get_current_user)):
   # Bifrost is the operator-curated catalog, so expose all of its available
   # routes rather than maintaining another application-owned model list.
   try:
-    for model in model_settings.list_provider_models("bifrost"):
+    for model in model_settings.list_models():
       choices.append({
         "id": f"bifrost:{model['id']}", "provider": "bifrost",
         "label": model["display_name"],

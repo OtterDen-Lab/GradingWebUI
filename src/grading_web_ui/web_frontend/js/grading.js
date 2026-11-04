@@ -4676,7 +4676,7 @@ async function getTranscriptionModelLabel(selection) {
         if (!transcriptionModelOptions) {
             const [settingsResponse, modelsResponse] = await Promise.all([
                 fetch(`${API_BASE}/ai-settings`, {credentials: 'include'}),
-                fetch(`${API_BASE}/ai-settings/models/bifrost`, {credentials: 'include'}),
+                fetch(`${API_BASE}/ai-settings/models`, {credentials: 'include'}),
             ]);
             if (settingsResponse.ok) {
                 transcriptionModelOptions = await settingsResponse.json();

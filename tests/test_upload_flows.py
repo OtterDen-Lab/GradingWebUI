@@ -148,21 +148,18 @@ def test_prepare_alignment_with_saved_splits_starts_split_processing(
         "0": [0.4]
       },
       "skip_first_region": False,
-      "last_page_blank": True,
-      "ai_provider": "openai",
+          "last_page_blank": True,
     })
 
   captured = {}
 
   async def fake_process_exam_splits(session_id, file_paths, file_metadata,
                                      stream_id, manual_split_points,
-                                     skip_first_region, last_page_blank,
-                                     ai_provider):
+                                     skip_first_region, last_page_blank):
     captured["session_id"] = session_id
     captured["manual_split_points"] = manual_split_points
     captured["skip_first_region"] = skip_first_region
     captured["last_page_blank"] = last_page_blank
-    captured["ai_provider"] = ai_provider
 
   monkeypatch.setattr(uploads_routes, "process_exam_splits",
                       fake_process_exam_splits)
@@ -176,7 +173,6 @@ def test_prepare_alignment_with_saved_splits_starts_split_processing(
   assert captured["manual_split_points"] == {0: [0.4]}
   assert captured["skip_first_region"] is False
   assert captured["last_page_blank"] is True
-  assert captured["ai_provider"] == "openai"
 
   session = session_repo.get_by_id(session_id)
   assert session is not None
@@ -286,12 +282,10 @@ def test_submit_alignment_converts_pixel_splits_to_percentages(client, tmp_path,
 
   async def fake_process_exam_splits(session_id, file_paths, file_metadata,
                                      stream_id, manual_split_points,
-                                     skip_first_region, last_page_blank,
-                                     ai_provider):
+                                     skip_first_region, last_page_blank):
     captured["manual_split_points"] = manual_split_points
     captured["skip_first_region"] = skip_first_region
     captured["last_page_blank"] = last_page_blank
-    captured["ai_provider"] = ai_provider
 
   monkeypatch.setattr(uploads_routes, "process_exam_splits",
                       fake_process_exam_splits)
@@ -302,21 +296,18 @@ def test_submit_alignment_converts_pixel_splits_to_percentages(client, tmp_path,
                              "0": [100, 200]
                            },
                            "skip_first_region": False,
-                           "last_page_blank": True,
-                           "ai_provider": "openai"
+                           "last_page_blank": True
                          })
   assert response.status_code == 200
   assert response.json()["status"] == "processing"
   assert captured["manual_split_points"] == {0: [0.25, 0.5]}
   assert captured["skip_first_region"] is False
   assert captured["last_page_blank"] is True
-  assert captured["ai_provider"] == "openai"
 
   metadata = session_repo.get_metadata(session_id) or {}
   assert metadata["split_points"]["0"] == [0.25, 0.5]
   assert metadata["skip_first_region"] is False
   assert metadata["last_page_blank"] is True
-  assert metadata["ai_provider"] == "openai"
 
 
 def test_upload_manual_name_mode_waits_for_name_box_selection(
@@ -496,12 +487,11 @@ def test_name_box_preview_and_submit_starts_name_processing(client, tmp_path,
   captured = {}
 
   async def fake_process_exam_names(session_id, file_paths, file_metadata,
-                                    stream_id, ai_provider):
+                                    stream_id):
     captured["session_id"] = session_id
     captured["file_paths"] = file_paths
     captured["file_metadata"] = file_metadata
     captured["stream_id"] = stream_id
-    captured["ai_provider"] = ai_provider
 
   monkeypatch.setattr(uploads_routes, "process_exam_names", fake_process_exam_names)
 
@@ -511,8 +501,7 @@ def test_name_box_preview_and_submit_starts_name_processing(client, tmp_path,
       "x": 0.15,
       "y": 0.05,
       "width": 0.35,
-      "height": 0.2,
-      "ai_provider": "openai"
+      "height": 0.2
     })
   assert submit_response.status_code == 200
   submit_payload = submit_response.json()
@@ -526,7 +515,6 @@ def test_name_box_preview_and_submit_starts_name_processing(client, tmp_path,
   assert metadata["name_rect"]["height"] > 0
 
   assert captured["session_id"] == session_id
-  assert captured["ai_provider"] == "openai"
   assert len(captured["file_paths"]) == 1
   assert captured["file_paths"][0] == pdf_path
 
@@ -546,7 +534,7 @@ def test_process_exam_names_mock_roster_sets_awaiting_alignment(
 
   class FakeProcessor:
 
-    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
+    def __init__(self, name_rect=None, **kwargs):
       pass
 
     def extract_name_image(self, pdf_path):
@@ -591,7 +579,7 @@ def test_process_exam_names_keeps_high_confidence_names_as_suggestions(
 
   class FakeProcessor:
 
-    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
+    def __init__(self, name_rect=None, **kwargs):
       pass
 
     def extract_name(self, pdf_path, student_names=None):
@@ -667,7 +655,7 @@ def test_process_exam_names_continues_when_canvas_roster_lookup_fails(
 
   class FakeProcessor:
 
-    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
+    def __init__(self, name_rect=None, **kwargs):
       pass
 
     def extract_name(self, pdf_path, student_names=None):
@@ -737,7 +725,7 @@ def test_process_exam_names_auto_match_does_not_reuse_student(
 
   class FakeProcessor:
 
-    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
+    def __init__(self, name_rect=None, **kwargs):
       pass
 
     def extract_name(self, pdf_path, student_names=None):
@@ -838,7 +826,7 @@ def test_process_exam_splits_creates_problems_and_marks_session_ready(
 
   class FakeProcessor:
 
-    def __init__(self, name_rect=None, ai_provider="anthropic", **kwargs):
+    def __init__(self, name_rect=None, **kwargs):
       pass
 
     def process_exams(self, **kwargs):
@@ -887,7 +875,6 @@ def test_process_exam_splits_creates_problems_and_marks_session_ready(
       manual_split_points={0: [0.2]},
       skip_first_region=False,
       last_page_blank=False,
-      ai_provider="anthropic",
     ))
 
   problems = ProblemRepository().get_by_session_batch(session_id)

@@ -39,7 +39,8 @@ Compose files:
    Required values:
    - `CANVAS_API_KEY_PROD` - Your Canvas API key
    - `CANVAS_API_URL_PROD` - Your Canvas instance URL
-   - `ANTHROPIC_API_KEY` - Your Anthropic API key
+   - `BIFROST_BASE_URL` - Your Bifrost proxy URL
+   - `BIFROST_API_KEY` - Your Bifrost API key
 
    See [Getting API Keys](#getting-api-keys) below for details.
 
@@ -121,22 +122,10 @@ Equivalent Make targets from repo root:
 - Production usually: `https://[your-institution].instructure.com`
 - Beta/Test usually: `https://[your-institution].beta.instructure.com`
 
-### Anthropic API Key
+### Bifrost API
 
-1. Go to https://console.anthropic.com/
-2. Sign up or log in
-3. Navigate to **API Keys**
-4. Click **Create Key**
-5. Copy the key (starts with `sk-ant-...`)
-6. Paste into `.env` as `ANTHROPIC_API_KEY`
-
-### OpenAI API Key (Optional)
-
-1. Go to https://platform.openai.com/api-keys
-2. Sign up or log in
-3. Click **Create new secret key**
-4. Copy the key (starts with `sk-...`)
-5. Paste into `.env` as `OPENAI_API_KEY`
+Set `BIFROST_BASE_URL` and `BIFROST_API_KEY` in `.env`. The application uses
+the proxy's `/v1/models` catalog; choose the default model in AI Settings.
 
 ## Common Commands
 
@@ -258,7 +247,7 @@ docker-compose exec web ls -lh /data/
 **Verify environment variables are loaded:**
 ```bash
 docker-compose exec web env | grep CANVAS
-docker-compose exec web env | grep ANTHROPIC
+docker-compose exec web env | grep BIFROST
 docker-compose exec web env | grep QUIZGEN_ALLOW_GENERATOR
 ```
 
@@ -364,7 +353,7 @@ All Python dependencies are managed through `pyproject.toml` in the repository r
 
 - **Core dependencies**: FastAPI, uvicorn, PyMuPDF, Pillow, opencv-python
 - **LMS integration**: otterden-lms-interface (PyPI dependency)
-- **AI services**: anthropic, openai
+- **AI service**: Bifrost (OpenAI-compatible HTTP API)
 - **Database**: aiosqlite for async SQLite
 - **Image processing**: opencv-python, pyzbar, Pillow
 - **Text matching**: fuzzywuzzy with python-Levenshtein for performance
@@ -517,7 +506,7 @@ services:
          │                  │
          │                  │
          ▼                  ▼
-  Canvas API      Anthropic/OpenAI API
+  Canvas API          Bifrost API
   (external)         (external)
 ```
 

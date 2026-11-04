@@ -7,12 +7,12 @@ def test_handwriting_latency_summary_groups_model_and_server(tmp_path, monkeypat
   monkeypatch.setenv("GRADING_DB_CREATE_MIGRATION_BACKUP", "false")
   database.init_database()
   for duration in (100, 200, 300, 400, 500):
-    model_latency.record("handwriting", "ollama", "qwen:8b", duration,
+    model_latency.record("handwriting", "bifrost", "vision", duration,
                          "success", "GPU server")
-  model_latency.record("handwriting", "ollama", "qwen:8b", 50,
+  model_latency.record("handwriting", "bifrost", "vision", 50,
                        "error", "GPU server")
 
   assert model_latency.handwriting_summary() == [{
-    "provider": "ollama", "model_id": "qwen:8b", "server_name": "GPU server",
+    "provider": "bifrost", "model_id": "vision", "server_name": "GPU server",
     "samples": 5, "failures": 1, "p50_ms": 300.0, "p90_ms": 500.0,
   }]

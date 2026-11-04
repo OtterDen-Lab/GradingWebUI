@@ -439,7 +439,7 @@ Preflight safety checks:
 - Python >= 3.12
 - Docker (optional, for containerized runs)
 - Canvas API access
-- Optional: OpenAI/Anthropic for AI-powered features
+- Bifrost for AI-powered features
 
 ## Documentation
 
