@@ -84,6 +84,26 @@ header h1 {
     color: var(--gray-900);
 }
 
+/* Checkbox lists use a fixed control track so every item starts at the same
+ * text column, regardless of its label length or wrapping. */
+.checkbox-list-row {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr);
+    column-gap: 8px;
+    align-items: start;
+}
+
+.checkbox-list-row > input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 3px 0 0;
+    justify-self: center;
+}
+
+.checkbox-list-content {
+    min-width: 0;
+}
+
 /* Buttons */
 .btn {
     padding: 10px 20px;

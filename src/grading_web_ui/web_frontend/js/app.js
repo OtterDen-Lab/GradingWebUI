@@ -591,9 +591,7 @@ function renderCompareSessionsList() {
 
     sorted.forEach((session) => {
         const label = document.createElement('label');
-        label.style.display = 'flex';
-        label.style.alignItems = 'flex-start';
-        label.style.gap = '8px';
+        label.className = 'checkbox-list-row';
         label.style.padding = '6px 4px';
 
         const checkbox = document.createElement('input');
@@ -613,6 +611,7 @@ function renderCompareSessionsList() {
         const courseId = session.course_id !== undefined && session.course_id !== null ? session.course_id : 'unknown';
         const course = session.course_name || `Course ${courseId}`;
         const meta = document.createElement('div');
+        meta.className = 'checkbox-list-content';
         meta.innerHTML = `<strong>${name}</strong><div style="color: var(--gray-600); font-size: 12px;">${course} • ID ${session.id}</div>`;
 
         label.appendChild(checkbox);

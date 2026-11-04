@@ -4282,9 +4282,9 @@ function renderFinalizeUploadStudents() {
 
         row.innerHTML = `
             <div style="display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;">
-                <label style="display: flex; gap: 10px; align-items: flex-start; flex: 1; min-width: 260px;">
-                    <input class="finalize-student-checkbox" type="checkbox" ${student.selected ? 'checked' : ''} ${uploadable ? '' : 'disabled'} style="margin-top: 4px;">
-                    <span>
+                <label class="checkbox-list-row" style="flex: 1; min-width: 260px;">
+                    <input class="finalize-student-checkbox" type="checkbox" ${student.selected ? 'checked' : ''} ${uploadable ? '' : 'disabled'}>
+                    <span class="checkbox-list-content">
                         <strong>${student.display_name || student.student_name || student.approximate_name || `Submission ${student.submission_id}`}</strong>
                         <div style="font-size: 13px; color: var(--gray-700); margin-top: 4px;">
                             Score: ${formatFinalizeStudentScore(student)}<br>

@@ -29,7 +29,9 @@
     .response-image { max-width: 100%; max-height: 600px; border: 1px solid #cbd5e1; margin-top: .5rem; }
     .model-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-top: .5rem; }
     .model-list { border: 1px solid #dbe3ef; border-radius: 6px; padding: .5rem; max-height: 280px; overflow: auto; }
-    .model-option, .selected-model { display: flex; gap: .55rem; align-items: center; padding: .35rem; border-bottom: 1px solid #edf2f7; }
+    .model-option { display:grid; grid-template-columns:24px minmax(0,1fr); gap:.55rem; align-items:center; padding:.35rem; border-bottom:1px solid #edf2f7; }
+    .model-option input[type=checkbox] { width:16px; height:16px; margin:0; justify-self:center; }
+    .selected-model { display:flex; gap:.55rem; align-items:center; padding:.35rem; border-bottom:1px solid #edf2f7; }
     .selected-actions { margin-left: auto; display: flex; gap: .3rem; }
     .selected-actions button { margin: 0; padding: .2rem .45rem; }
     .filters { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0; }
