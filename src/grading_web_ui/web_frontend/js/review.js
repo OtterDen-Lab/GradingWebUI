@@ -114,25 +114,10 @@ async function reviewProblemFromStats(problemNumber) {
     }
 
     try {
-        // Avoid grading-section auto-init from the navigation hook; we are
-        // loading a specific problem via dropdown-equivalent flow below.
-        window.__skipNextGradingInitialize = true;
+        // Use the normal initialization so controls and session metadata are
+        // ready even when this is the first visit to the grading screen.
+        window.__requestedProblemNumber = targetProblemNumber;
         navigateToSection('grading-section');
-
-        const problemSelect = document.getElementById('problem-select');
-        if (problemSelect) {
-            problemSelect.value = String(targetProblemNumber);
-        }
-
-        currentProblemNumber = targetProblemNumber;
-        activeSubjectiveBucketFilter = '';
-        invalidateNextProblemPrefetch();
-        await loadSubjectiveSettings(targetProblemNumber, true);
-        applyGradingModeUI();
-        updateMaxPointsDropdown();
-        const progressPromise = updateOverallProgress();
-        await loadProblemOrMostRecent();
-        await progressPromise;
     } catch (error) {
         console.error('Failed to open problem from stats:', error);
         alert('Failed to open problem from stats: ' + error.message);

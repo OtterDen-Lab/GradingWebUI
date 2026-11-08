@@ -320,6 +320,7 @@ async function loadProblemMaxPoints() {
         const response = await fetch(`${API_BASE}/sessions/${currentSession.id}/problem-max-points-all`);
         const data = await response.json();
         problemMaxPoints = data.max_points || {};
+        if (currentProblemNumber) updateMaxPointsDropdown();
     } catch (error) {
         console.error('Failed to load max points metadata:', error);
         problemMaxPoints = {};
