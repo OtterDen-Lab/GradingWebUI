@@ -1232,7 +1232,8 @@ async function loadCourses(useProd = false) {
     try {
         const response = await fetch(`${API_BASE}/canvas/courses?use_prod=${useProd}`);
         if (!response.ok) {
-            throw new Error('Failed to load courses');
+            const error = await response.json().catch(() => ({}));
+            throw new Error(typeof error.detail === 'string' ? error.detail : 'Failed to load courses');
         }
 
         const data = await response.json();
@@ -1248,13 +1249,13 @@ async function loadCourses(useProd = false) {
         });
 
         courseSelect.disabled = false;
-        infoBox.textContent = `Loaded ${data.courses.length} courses from Canvas ${data.environment}`;
+        infoBox.textContent = `Loaded ${data.courses.length} courses from ${data.canvas_url}`;
         infoBox.className = 'info-box success';
 
     } catch (error) {
         console.error('Failed to load courses:', error);
         courseSelect.innerHTML = '<option value="">Failed to load courses</option>';
-        infoBox.textContent = 'Failed to load courses from Canvas';
+        infoBox.textContent = error.message;
         infoBox.className = 'info-box error';
     }
 }

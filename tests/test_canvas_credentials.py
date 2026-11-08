@@ -16,15 +16,15 @@ def test_canvas_key_is_encrypted_and_resolved_per_user(tmp_path, monkeypatch):
     user_id = conn.execute(
       "SELECT id FROM users WHERE username = 'canvas-user'").fetchone()["id"]
 
-  canvas_credentials.save_credential(user_id, "development", "secret-canvas-key")
+  canvas_credentials.save_credential(user_id, "production", "secret-canvas-key")
 
   with get_db_connection() as conn:
     stored = conn.execute("""
       SELECT encrypted_api_key FROM user_canvas_credentials
-      WHERE user_id = ? AND environment = 'development'
+      WHERE user_id = ? AND environment = 'production'
     """, (user_id,)).fetchone()["encrypted_api_key"]
   assert stored != "secret-canvas-key"
-  assert canvas_credentials.get_credential_status(user_id)["development"]["configured"]
+  assert canvas_credentials.get_credential_status(user_id)["production"]["configured"]
 
   captured = {}
 
@@ -37,5 +37,9 @@ def test_canvas_key_is_encrypted_and_resolved_per_user(tmp_path, monkeypatch):
 
   assert captured["canvas_url"] == "https://canvas.example.test"
   assert captured["canvas_key"] == "secret-canvas-key"
-  assert canvas_credentials.delete_credential(user_id, "development")
-  assert not canvas_credentials.get_credential_status(user_id)["development"]["configured"]
+  monkeypatch.setenv("CANVAS_API_URL_PROD", "https://wrong.example")
+  canvas_credentials.create_canvas_interface(user_id, use_prod=True)
+  assert captured["canvas_url"] == "https://canvas.example.test"
+  assert captured["canvas_key"] == "secret-canvas-key"
+  assert canvas_credentials.delete_credential(user_id, "production")
+  assert not canvas_credentials.get_credential_status(user_id)["production"]["configured"]

@@ -8,19 +8,21 @@ from ..services.canvas_credentials import (
   delete_credential,
   get_credential_status,
   save_credential,
+  configured_canvas_url,
 )
 
 router = APIRouter()
 
 
 class CanvasCredentialRequest(BaseModel):
-  environment: str = Field(pattern="^(development|production)$")
+  environment: str = Field(pattern="^production$")
   api_key: str = Field(min_length=1, max_length=10000)
 
 
 @router.get("")
 async def get_canvas_credentials(current_user: dict = Depends(get_current_user)):
-  return {"credentials": get_credential_status(current_user["user_id"])}
+  return {"credentials": get_credential_status(current_user["user_id"]),
+          "canvas_url": configured_canvas_url()}
 
 
 @router.put("")
@@ -40,6 +42,8 @@ async def remove_canvas_credential(
   environment: str,
   current_user: dict = Depends(get_current_user),
 ):
+  if environment != "production":
+    raise HTTPException(status_code=400, detail="Only the current Canvas key can be removed.")
   try:
     delete_credential(current_user["user_id"], environment)
   except CanvasCredentialsError as exc:

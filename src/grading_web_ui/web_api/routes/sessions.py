@@ -46,7 +46,7 @@ from ..domain.common import SessionStatus as DomainSessionStatus
 from ..domain.session import GradingSession
 from ..database import update_problem_stats
 from lms_interface.canvas_interface import CanvasInterface
-from ..services.canvas_credentials import create_canvas_interface
+from ..services.canvas_credentials import create_canvas_interface, configured_canvas_url
 from ..auth import get_current_user, require_instructor, require_session_access
 import os
 
@@ -495,6 +495,8 @@ async def create_session(
     QR_SCAN_MAX_DPI_KEY: int(session.qr_scan_max_dpi),
     LLM_BLANK_DETECTION_ENABLED_KEY: bool(session.llm_blank_detection_enabled),
   }
+  if not session.use_mock_roster:
+    metadata["canvas_target_url"] = configured_canvas_url()
   if session.use_mock_roster or not session.use_ai_name_extraction:
     metadata["mock_roster"] = bool(session.use_mock_roster)
     metadata["ai_name_extraction"] = bool(session.use_ai_name_extraction)
@@ -1070,14 +1072,11 @@ async def get_canvas_info(
   except Exception as exc:
     log.warning("Canvas target validation failed for session %s: %s",
                 session_id, exc, exc_info=True)
-    environment = "production" if use_prod else "development"
-    raise HTTPException(
-      status_code=502,
-      detail=(
-        f"Could not access this {environment} Canvas target. "
-        "Check that your Canvas API key is correct and has access to the course and assignment."
-      ),
-    ) from exc
+    if (session.metadata or {}).get("canvas_target_url") == configured_canvas_url():
+      raise HTTPException(status_code=502, detail=(
+        "Could not access this Canvas target. Check that your Canvas API key is correct and has access to the course and assignment."
+      )) from exc
+    canvas_url = ""
 
   return {
     "course_id": session.course_id,
@@ -1085,7 +1084,9 @@ async def get_canvas_info(
     "assignment_id": session.assignment_id,
     "assignment_name": session.assignment_name,
     "canvas_url": canvas_url,
-    "environment": "production" if use_prod else "development"
+    "environment": "configured",
+    "configured_canvas_url": configured_canvas_url(),
+    "target_confirmed": (session.metadata or {}).get("canvas_target_url") == configured_canvas_url(),
   }
 
 
@@ -1095,6 +1096,7 @@ async def update_canvas_config(
   course_id: int,
   assignment_id: int,
   use_prod: bool = False,
+  confirmed_canvas_url: str = "",
   current_user: dict = Depends(require_instructor)
 ):
   """Update Canvas configuration for a session (instructor only)"""
@@ -1107,6 +1109,9 @@ async def update_canvas_config(
       status_code=400,
       detail="Mock roster sessions cannot update Canvas configuration."
     )
+
+  if confirmed_canvas_url.rstrip("/") != configured_canvas_url():
+    raise HTTPException(status_code=409, detail="Confirm the current Canvas URL before saving the target.")
 
   try:
     # Get course and assignment details from Canvas
@@ -1125,6 +1130,8 @@ async def update_canvas_config(
     session.assignment_id = assignment_id
     session.assignment_name = assignment.name
     session.use_prod_canvas = use_prod
+    session.metadata = session.metadata or {}
+    session.metadata["canvas_target_url"] = configured_canvas_url()
     repo.update(session)
 
     return {
@@ -1133,7 +1140,7 @@ async def update_canvas_config(
       "course_name": course.name,
       "assignment_id": assignment_id,
       "assignment_name": assignment.name,
-      "environment": "production" if use_prod else "development"
+      "environment": "configured"
     }
 
   except HTTPException:

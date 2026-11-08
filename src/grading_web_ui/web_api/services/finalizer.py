@@ -24,7 +24,7 @@ from ..services.quiz_regeneration import (
 )
 from ..services.feedback_text import merge_general_feedback
 from lms_interface.canvas_interface import CanvasInterface
-from .canvas_credentials import create_canvas_interface
+from .canvas_credentials import create_canvas_interface, configured_canvas_url
 from .. import sse
 
 log = logging.getLogger(__name__)
@@ -174,6 +174,9 @@ class FinalizationService:
 
   def _init_canvas(self, session_info: Dict):
     """Initialize Canvas interface"""
+    session = SessionRepository().get_by_id(self.session_id)
+    if not session or (session.metadata or {}).get("canvas_target_url") != configured_canvas_url():
+      raise ValueError("Confirm this session's Canvas target before uploading.")
     use_prod = bool(session_info.get("use_prod_canvas", 0))
     log.info(
       f"Initializing Canvas interface: session_info['use_prod_canvas'] = {session_info.get('use_prod_canvas')} → use_prod = {use_prod}"

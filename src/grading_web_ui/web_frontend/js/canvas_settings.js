@@ -17,15 +17,16 @@ async function loadCanvasCredentialSettings() {
   try {
     const response = await fetch(`${API_BASE}/canvas/credentials`, {credentials: 'include'});
     if (!response.ok) throw new Error((await response.json()).detail || 'Could not load Canvas key status');
-    const {credentials} = await response.json();
-    form.innerHTML = ['development', 'production'].map((environment) => {
+    const {credentials, canvas_url} = await response.json();
+    form.innerHTML = ['production'].map((environment) => {
       const status = credentials[environment];
       const detail = status.configured
         ? `Configured${status.updated_at ? ` · last updated ${new Date(status.updated_at).toLocaleString()}` : ''}`
         : 'Not configured';
       return `
         <form data-canvas-environment="${environment}" style="background:white; border:1px solid var(--gray-300); border-radius:8px; padding:18px; margin-bottom:14px;">
-          <h3 style="margin:0 0 6px;">${canvasEnvironmentLabel(environment)}</h3>
+          <h3 style="margin:0 0 6px;">Canvas API key</h3>
+          <p>Canvas URL: <span id="canvas-settings-url"></span></p>
           <p style="margin:0 0 12px; color:${status.configured ? 'var(--success-color)' : 'var(--gray-700)'};">${detail}</p>
           <label style="display:block; margin-bottom:8px;">Canvas API key
             <textarea name="api_key" rows="2" autocomplete="off" autocapitalize="none" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="Paste a new key to save or replace it" style="display:block; width:100%; margin-top:4px; box-sizing:border-box; resize:vertical; font-family:monospace;" aria-label="Canvas API key"></textarea>
@@ -36,6 +37,7 @@ async function loadCanvasCredentialSettings() {
           </div>
         </form>`;
     }).join('');
+    document.getElementById('canvas-settings-url').textContent = canvas_url;
     form.querySelectorAll('form[data-canvas-environment]').forEach((keyForm) => {
       keyForm.addEventListener('submit', saveCanvasCredential);
       keyForm.querySelector('[data-remove-canvas-key]')?.addEventListener('click', removeCanvasCredential);
@@ -69,7 +71,7 @@ async function saveCanvasCredential(event) {
 
 async function removeCanvasCredential(event) {
   const form = event.currentTarget.closest('form');
-  if (!confirm(`Remove your ${canvasEnvironmentLabel(form.dataset.canvasEnvironment)} Canvas API key?`)) return;
+  if (!confirm('Remove your Canvas API key?')) return;
   const error = document.getElementById('canvas-settings-error');
   error.style.display = 'none';
   try {

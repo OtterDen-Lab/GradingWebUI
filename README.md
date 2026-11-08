@@ -269,20 +269,22 @@ Verify this before installation with `sudo -u grading-web touch
 
 - **Problem-first grading**: Grade all Q1, then Q2, etc. with intelligent ordering
 - **AI assistance**: Name extraction, blank detection, handwriting transcription
-- **Canvas integration**: Dev/prod environment switching with safe defaults
+- **Canvas integration**: One Canvas instance per deployment
 - **Persistent sessions**: Resume grading anytime with database-backed state
 - **Duplicate detection**: SHA256 hashing prevents re-processing the same files
 - **Local storage**: SQLite database for FERPA-friendly workflows
 
 ## Configuration
 
-The web UI reads Canvas credentials from `~/.env` by default. To use production Canvas, add:
+Set the Canvas URL in the deployment environment. Each user saves their Canvas API key in the web UI:
 
 ```bash
-USE_PROD_CANVAS=true
-CANVAS_API_KEY_PROD=your_prod_key
-CANVAS_API_URL_PROD=https://your-institution.instructure.com
+CANVAS_API_URL=https://your-institution.instructure.com
 ```
+
+Existing production keys are retained. Existing sessions require confirmation of
+their Canvas target before uploading. If the URL changes later, sessions must be
+confirmed again. Use a separate deployment and URL for development Canvas.
 
 Authentication cookie defaults can be controlled with:
 

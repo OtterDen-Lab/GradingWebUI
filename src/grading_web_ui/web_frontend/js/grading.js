@@ -4137,15 +4137,13 @@ function updateFinalizeCanvasTargetSummary() {
     const controls = getCanvasTargetControls('finalize');
     const courseText = controls.courseSelect.options[controls.courseSelect.selectedIndex]?.textContent || 'No course selected';
     const assignmentText = controls.assignmentSelect.options[controls.assignmentSelect.selectedIndex]?.textContent || 'No assignment selected';
-    const environment = controls.envSelect.value === 'true' ? 'Production' : 'Development';
     const savedTarget = finalizeUploadState.canvasInfo;
     const matchesSavedTarget = savedTarget
         && String(savedTarget.course_id) === controls.courseSelect.value
-        && String(savedTarget.assignment_id) === controls.assignmentSelect.value
-        && ((savedTarget.environment === 'production') === (controls.envSelect.value === 'true'));
+        && String(savedTarget.assignment_id) === controls.assignmentSelect.value;
     const url = matchesSavedTarget ? (savedTarget.canvas_url || '') : '';
     controls.summary.innerHTML = `
-        <div><strong>Environment:</strong> ${environment}</div>
+        <div><strong>Canvas instance:</strong> ${escapeHtml(savedTarget?.configured_canvas_url || '')}</div>
         <div><strong>Course:</strong> ${courseText}</div>
         <div><strong>Assignment:</strong> ${assignmentText}</div>
         <div><strong>Canvas URL:</strong> ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>` : 'Will update after target is saved'}</div>
@@ -4174,7 +4172,8 @@ function setFinalizeUploadStatus(message, tone = 'info') {
 
 async function populateCanvasTargetControls(kind, info) {
     const controls = getCanvasTargetControls(kind);
-    controls.envSelect.value = info.environment === 'production' ? 'true' : 'false';
+    if (kind === 'config') document.getElementById('canvas-target-instance').textContent = info.configured_canvas_url;
+    controls.envSelect.value = 'true';
     await loadCanvasCoursesFor(controls);
     controls.courseSelect.value = String(info.course_id);
     await loadCanvasAssignmentsFor(controls, info.course_id);
@@ -4200,8 +4199,14 @@ async function updateCanvasConfigFromControls(kind) {
         throw new Error('Please select both a course and an assignment');
     }
 
+    const canvasInfoResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}/canvas-info`);
+    const info = await readCanvasApiResponse(canvasInfoResponse, 'Failed to load Canvas target');
+    if (!info.target_confirmed && !confirm(`Confirm this session should use ${info.configured_canvas_url} for Canvas uploads? Check the selected course, assignment, and student matches before continuing.`)) {
+        throw new Error('Canvas target confirmation cancelled.');
+    }
+
     const response = await fetch(
-        `${API_BASE}/sessions/${currentSession.id}/canvas-config?course_id=${courseId}&assignment_id=${assignmentId}&use_prod=${useProd}`,
+        `${API_BASE}/sessions/${currentSession.id}/canvas-config?course_id=${courseId}&assignment_id=${assignmentId}&use_prod=${useProd}&confirmed_canvas_url=${encodeURIComponent(info.configured_canvas_url)}`,
         { method: 'PUT' }
     );
 
@@ -4209,9 +4214,9 @@ async function updateCanvasConfigFromControls(kind) {
 
     await refreshCurrentSession();
 
-    const canvasInfoResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}/canvas-info`);
+    const updatedCanvasInfoResponse = await fetch(`${API_BASE}/sessions/${currentSession.id}/canvas-info`);
     finalizeUploadState.canvasInfo = await readCanvasApiResponse(
-        canvasInfoResponse, 'Failed to load the updated Canvas target');
+        updatedCanvasInfoResponse, 'Failed to load the updated Canvas target');
     if (kind === 'finalize') {
         updateFinalizeCanvasTargetSummary();
     }
@@ -4441,7 +4446,7 @@ document.getElementById('cancel-canvas-target-btn').onclick = () => {
 document.getElementById('save-canvas-target-btn').onclick = async () => {
     try {
         const result = await updateCanvasConfigFromControls('config');
-        alert(`Canvas target updated!\n\nEnvironment: ${result.environment}\nCourse: ${result.course_name}\nAssignment: ${result.assignment_name}`);
+        alert(`Canvas target updated!\n\nCourse: ${result.course_name}\nAssignment: ${result.assignment_name}`);
         document.getElementById('canvas-target-dialog').style.display = 'none';
     } catch (error) {
         console.error('Failed to update Canvas config:', error);

@@ -85,6 +85,39 @@ def create_test_session(client, assignment_name: str = "Test Session") -> int:
   return response.json()["id"]
 
 
+def test_legacy_session_requires_canvas_target_confirmation(client, monkeypatch):
+  from grading_web_ui.web_api.routes import sessions as sessions_routes
+
+  session_id = create_test_session(client)
+  repo = SessionRepository()
+  metadata = repo.get_metadata(session_id)
+  assert metadata.pop("canvas_target_url") == "https://canvas.example.test"
+  repo.update_metadata(session_id, metadata)
+
+  response = client.post(f"/api/finalize/{session_id}/finalize")
+  assert response.status_code == 409
+  assert "confirm" in response.json()["detail"].lower()
+
+  class FakeCourse:
+    name = "Course"
+
+    def get_assignment(self, assignment_id):
+      return type("Assignment", (), {"name": "Exam"})()
+
+  class FakeCanvas:
+    def get_course(self, course_id):
+      return FakeCourse()
+
+  monkeypatch.setattr(sessions_routes, "_canvas_for_user", lambda *args, **kwargs: FakeCanvas())
+  path = f"/api/sessions/{session_id}/canvas-config?course_id=12345&assignment_id=67890"
+  assert client.put(path).status_code == 409
+  assert client.put(path + "&confirmed_canvas_url=https%3A%2F%2Fcanvas.example.test").status_code == 200
+  assert repo.get_metadata(session_id)["canvas_target_url"] == "https://canvas.example.test"
+
+  monkeypatch.setenv("CANVAS_API_URL", "https://other.example")
+  assert client.post(f"/api/finalize/{session_id}/finalize").status_code == 409
+
+
 def seed_submission_with_problem(session_id: int,
                                  *,
                                  document_id: int = 1,

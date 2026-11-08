@@ -90,18 +90,18 @@ def create_canvas_interface(user_id: int, *, use_prod: bool = False,
                             privacy_mode: str | None = None,
                             reveal_identity: bool = False) -> CanvasInterface:
   """Create a Canvas client using only the requesting user's saved key."""
-  environment = environment_name(use_prod)
-  url_var = "CANVAS_API_URL_PROD" if use_prod else "CANVAS_API_URL"
-  canvas_url = os.getenv(url_var, "").strip()
-  if not canvas_url and use_prod:
-    canvas_url = os.getenv("CANVAS_API_URL_prod", "").strip()
-  if not canvas_url:
-    raise CanvasCredentialsError(
-      f"Canvas {environment} URL is not configured on the server ({url_var}).")
+  canvas_url = configured_canvas_url()
   return CanvasInterface(
-    prod=use_prod,
+    prod=True,
     canvas_url=canvas_url,
-    canvas_key=_get_api_key(user_id, environment),
+    canvas_key=_get_api_key(user_id, "production"),
     privacy_mode=privacy_mode,
     reveal_identity=reveal_identity,
   )
+
+
+def configured_canvas_url() -> str:
+  url = os.getenv("CANVAS_API_URL", "").strip().rstrip("/")
+  if not url:
+    raise CanvasCredentialsError("Canvas URL is not configured on the server (CANVAS_API_URL).")
+  return url

@@ -18,6 +18,7 @@ from ..repositories import (SessionRepository, SubmissionRepository,
                             ProblemRepository, ProblemMetadataRepository)
 from ..domain.common import SessionStatus
 from ..services.finalizer import FinalizationService
+from ..services.canvas_credentials import configured_canvas_url
 from .. import sse
 from ..auth import require_instructor, require_session_access
 from .. import workflow_locks
@@ -76,6 +77,8 @@ async def finalize_session(
       status_code=400,
       detail="Mock roster sessions cannot be finalized to Canvas."
     )
+  if (session.metadata or {}).get("canvas_target_url") != configured_canvas_url():
+    raise HTTPException(status_code=409, detail="Confirm this session's Canvas target before uploading.")
 
   # Check if all problems are graded
   ungraded_count = problem_repo.count_ungraded(session_id)

@@ -24,10 +24,6 @@ async def list_courses(use_prod: bool = False,
       include=['term', 'favorites']  # Include term and favorites information
     )
 
-    # Determine environment label
-    is_dev = "beta" in canvas_interface.canvas_url or "test" in canvas_interface.canvas_url
-    env_label = "DEV" if is_dev else "PROD"
-
     # Convert to list with metadata for sorting
     course_list = []
     for course in courses:
@@ -59,7 +55,7 @@ async def list_courses(use_prod: bool = False,
       ),
       reverse=True)
 
-    return {"courses": course_list, "environment": env_label}
+    return {"courses": course_list, "canvas_url": canvas_interface.canvas_url}
 
   except CanvasCredentialsError as e:
     raise HTTPException(status_code=422, detail=str(e)) from e
@@ -134,16 +130,11 @@ async def get_course_info(course_id: int,
     # Use the existing get_course method
     course = canvas_interface.get_course(course_id)
 
-    # Determine environment label
-    # Check for beta/test in URL to detect dev, otherwise assume prod
-    is_dev = "beta" in canvas_interface.canvas_url or "test" in canvas_interface.canvas_url
-    env_label = "DEV" if is_dev else "PROD"
-
     return {
       "id": course_id,
       "name": course.name,
       "canvas_url": canvas_interface.canvas_url,
-      "environment": env_label,  # Explicitly send environment
+      "environment": "configured",
     }
 
   except CanvasCredentialsError as e:
@@ -179,17 +170,12 @@ async def get_assignment_info(course_id: int, assignment_id: int,
         status_code=404,
         detail=f"Assignment {assignment_id} not found in course {course_id}")
 
-    # Determine environment label
-    # Check for beta/test in URL to detect dev, otherwise assume prod
-    is_dev = "beta" in canvas_interface.canvas_url or "test" in canvas_interface.canvas_url
-    env_label = "DEV" if is_dev else "PROD"
-
     return {
       "id": assignment_id,
       "name": assignment.name,
       "points_possible": assignment.points_possible,
       "canvas_url": canvas_interface.canvas_url,
-      "environment": env_label,  # Explicitly send environment
+      "environment": "configured",
     }
 
   except CanvasCredentialsError as e:

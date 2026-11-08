@@ -35,38 +35,12 @@ def _is_truthy(value: str) -> bool:
   return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _get_canvas_pairs(values: dict[str, str]) -> tuple[tuple[str, str], tuple[str, str]]:
-  dev = (values.get("CANVAS_API_URL", "").strip(),
-         values.get("CANVAS_API_KEY", "").strip())
-  prod = (values.get("CANVAS_API_URL_PROD", "").strip()
-          or values.get("CANVAS_API_URL_prod", "").strip(),
-          values.get("CANVAS_API_KEY_PROD", "").strip()
-          or values.get("CANVAS_API_KEY_prod", "").strip())
-  return dev, prod
-
-
 def _validate(values: dict[str, str], *, require_prod_pair: bool) -> tuple[list[str], list[str]]:
   errors: list[str] = []
   warnings: list[str] = []
 
-  (dev_url, dev_key), (prod_url, prod_key) = _get_canvas_pairs(values)
-
-  if bool(dev_url) != bool(dev_key):
-    errors.append(
-      "Set both CANVAS_API_URL and CANVAS_API_KEY together (or leave both empty).")
-  if bool(prod_url) != bool(prod_key):
-    errors.append(
-      "Set both CANVAS_API_URL_PROD and CANVAS_API_KEY_PROD together (or leave both empty)."
-    )
-
-  if require_prod_pair:
-    if not (prod_url and prod_key):
-      errors.append(
-        "Production deploy requires CANVAS_API_URL_PROD and CANVAS_API_KEY_PROD."
-      )
-  elif not ((dev_url and dev_key) or (prod_url and prod_key)):
-    errors.append(
-      "Canvas credentials missing: provide dev pair or prod pair.")
+  if not values.get("CANVAS_API_URL", "").strip():
+    errors.append("Set CANVAS_API_URL for this deployment.")
 
   if not _is_truthy(values.get("GRADING_STRICT_STARTUP_CONFIG", "true")):
     warnings.append(
@@ -89,7 +63,7 @@ def main() -> int:
   parser.add_argument("env_file", help="Path to .env-style file")
   parser.add_argument("--require-prod-pair",
                       action="store_true",
-                      help="Require CANVAS_API_URL_PROD and CANVAS_API_KEY_PROD")
+                      help="Deprecated compatibility option; CANVAS_API_URL is always required")
   args = parser.parse_args()
 
   env_path = Path(args.env_file)

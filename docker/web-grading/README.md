@@ -37,8 +37,8 @@ Compose files:
    ```
 
    Required values:
-   - `CANVAS_API_KEY_PROD` - Your Canvas API key
-   - `CANVAS_API_URL_PROD` - Your Canvas instance URL
+   - `CANVAS_API_URL` - This deployment's Canvas instance URL
+   - `CANVAS_CREDENTIAL_ENCRYPTION_KEY` - Stable key for encrypting user credentials
    - `BIFROST_BASE_URL` - Your Bifrost proxy URL
    - `BIFROST_API_KEY` - Your Bifrost API key
 
@@ -116,7 +116,7 @@ Equivalent Make targets from repo root:
 5. Enter a purpose (e.g., "Web Grading Interface")
 6. Click **Generate Token**
 7. **Copy the token immediately** (you won't see it again!)
-8. Paste into `.env` as `CANVAS_API_KEY_PROD`
+8. Save the token in Canvas API Key settings in the web UI
 
 **Canvas URL:**
 - Production usually: `https://[your-institution].instructure.com`
@@ -326,7 +326,7 @@ volumes:
 
 - **Never commit `.env` files** to version control
 - Keep API keys secure and rotate them periodically
-- Use **development Canvas** (`CANVAS_API_URL_DEV`) for testing
+- Use a separate deployment with its own `CANVAS_API_URL` for testing
 - Only use production Canvas when you're ready to submit real grades
 - The database contains student data - ensure it's backed up and secured
 - Keep production secrets on the server (e.g. `/etc/grading-web/web.env`) instead of in the repository

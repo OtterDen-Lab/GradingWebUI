@@ -100,13 +100,7 @@
         </div>
 
         <div id="canvas-session-fields">
-          <label>
-            Canvas Environment:
-            <select id="canvas-env-new" required>
-              <option value="false">Development (Beta/Test)</option>
-              <option value="true">Production</option>
-            </select>
-          </label>
+          <input type="hidden" id="canvas-env-new" value="true">
 
           <label>
             Course:
@@ -479,8 +473,8 @@
             </section>
 
             <section id="canvas-settings-section" class="section">
-                <h2>Canvas API Keys</h2>
-                <p style="color: var(--gray-700);">Your API keys are encrypted before they are stored. They are never shown again after saving.</p>
+                <h2>Canvas API Key</h2>
+                <p style="color: var(--gray-700);">Your API key is encrypted before it is stored. It is never shown again after saving.</p>
                 <div id="canvas-settings-error" style="display:none; color: var(--danger-color); margin-bottom: 12px;"></div>
                 <div id="canvas-settings-form"></div>
                 <div style="display:flex; gap:10px; margin-top:18px;">
@@ -1030,18 +1024,11 @@
         <div style="background: white; border-radius: 8px; padding: 30px; max-width: 600px; width: 90%;">
             <h2 style="margin-top: 0;">Change Canvas Target</h2>
             <p style="color: var(--gray-700); margin-bottom: 20px;">
-                Update the Canvas environment and assignment for this grading session. Useful for testing in dev before uploading to production.
+                Confirm the Canvas course and assignment for this grading session.
             </p>
+            <p>Canvas URL: <span id="canvas-target-instance"></span></p>
 
-            <div style="margin-bottom: 20px;">
-                <label style="display: block; margin-bottom: 10px;">
-                    <strong>Environment:</strong>
-                    <select id="canvas-env-select" style="display: block; width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--gray-200); border-radius: 4px;">
-                        <option value="false">Development (Beta/Test)</option>
-                        <option value="true">Production</option>
-                    </select>
-                </label>
-            </div>
+            <input type="hidden" id="canvas-env-select" value="true">
 
             <div style="margin-bottom: 20px;">
                 <label style="display: block; margin-bottom: 10px;">
@@ -1086,13 +1073,7 @@
             <div style="display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.4fr); gap: 20px; align-items: start;">
                 <div style="border: 1px solid var(--gray-200); border-radius: 10px; padding: 16px; background: #f8fafc;">
                     <h3 style="margin: 0 0 12px;">Canvas Target</h3>
-                    <label style="display: block; margin-bottom: 12px;">
-                        <strong>Environment:</strong>
-                        <select id="finalize-canvas-env-select" style="display: block; width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--gray-200); border-radius: 4px;">
-                            <option value="false">Development (Beta/Test)</option>
-                            <option value="true">Production</option>
-                        </select>
-                    </label>
+                    <input type="hidden" id="finalize-canvas-env-select" value="true">
                     <label style="display: block; margin-bottom: 12px;">
                         <strong>Course:</strong>
                         <select id="finalize-canvas-course-select" style="display: block; width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--gray-200); border-radius: 4px;">

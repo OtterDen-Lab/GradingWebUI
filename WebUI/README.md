@@ -14,7 +14,7 @@ A modern web-based interface for grading exams, replacing the CSV-based manual g
 - 🔁 **Duplicate detection**: SHA256 hashing prevents re-processing same files
 - ⚡ **Keyboard shortcuts**: Fast grading with 0-9, Enter, Shift+Tab, and Back navigation
 - 🎚️ **Max points management**: Set once per problem, remembers across all students
-- 🔀 **Canvas environment switching**: Test in dev, upload to prod
+- **Canvas target**: One Canvas instance per deployment
 
 ## Architecture
 
@@ -53,22 +53,18 @@ python -m grading_web_ui.web_api.main
 http://localhost:8765
 ```
 
-**Note:** The web interface uses the same `~/.env` file as the main grading flow. It defaults to non-prod Canvas credentials (`CANVAS_API_KEY` and `CANVAS_API_URL`) for safety during development.
-
-**Switching to Production Canvas:**
-To use production Canvas, add this to your `~/.env`:
+Configure one Canvas instance per deployment:
 ```bash
-USE_PROD_CANVAS=true
-CANVAS_API_KEY_PROD=your_prod_key
-CANVAS_API_URL_PROD=https://csumb.instructure.com
+CANVAS_API_URL=https://your-institution.instructure.com
 ```
+Each user saves their Canvas API key in the web UI. Use a separate deployment for a development instance.
 
 ## Usage
 
 ### 1. Create Session
 
 - Click "+ Create New Session"
-- Select Canvas environment (Development or Production)
+- Check the displayed Canvas URL
 - Choose course from dropdown
 - Select assignment from dropdown
 - **Optional**: Override Canvas points for assignment
@@ -133,7 +129,7 @@ CANVAS_API_URL_PROD=https://csumb.instructure.com
 **Session Management**:
 - **Export Session**: Download JSON checkpoint for backup
 - **Import Session**: Resume from exported checkpoint
-- **Change Canvas Target**: Switch from dev to prod before finalizing
+- **Change Canvas Target**: Confirm or change the course and assignment before finalizing
 
 **Finalization**:
 - Click "Finalize & Upload to Canvas"
