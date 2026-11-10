@@ -2000,6 +2000,9 @@ function displayCurrentProblem() {
 
     // Set explanation UI state (avoid eager regeneration fetch on every navigation)
     loadExplanation({ eager: false });
+    if (document.getElementById('explanation-dialog')?.style.display === 'flex') {
+        void showExplanationDialog();
+    }
 }
 
 function renderHandwritingAnalysisIndicator() {
@@ -6149,18 +6152,25 @@ async function showExplanationDialog() {
         return;
     }
 
-    if (!explanationCache[currentProblem.id]) {
+    const problemId = currentProblem.id;
+    if (!currentProblem.has_qr_data) {
+        content.textContent = 'Explanation not available for this problem.';
+        dialog.style.display = 'flex';
+        return;
+    }
+
+    if (!explanationCache[problemId]) {
         content.innerHTML = '<div style="padding: 20px; text-align: center;">Loading explanation...</div>';
         dialog.style.display = 'flex';
-        const loaded = await ensureExplanationLoaded(currentProblem.id);
+        const loaded = await ensureExplanationLoaded(problemId);
+        if (currentProblem?.id !== problemId || dialog.style.display !== 'flex') return;
         if (!loaded) {
-            dialog.style.display = 'none';
-            showNotification('Explanation not available for this problem.');
+            content.textContent = 'Explanation not available for this problem.';
             return;
         }
     }
 
-    const explanation = explanationCache[currentProblem.id];
+    const explanation = explanationCache[problemId];
     const htmlContent = explanation.html
         ? explanation.html
         : marked.parse(explanation.markdown || '');
